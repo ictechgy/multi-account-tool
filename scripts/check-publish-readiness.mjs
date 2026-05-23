@@ -10,13 +10,13 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
-// PUBLISHING.md 는 fork 가이드용으로 placeholder 예시가 살아있어야 하고
-// publish 패키지(package.json files)에 포함되지도 않으므로 의도적으로 제외.
+// PUBLISHING.md 는 fork 가이드용 placeholder 예시 유지, Formula/mat.rb 는
+// 별도 tap 저장소에서 npm publish 직후 sha256 을 채워 관리한다.
+// 둘 다 npm publish 패키지(package.json files)에 포함되지 않으므로 의도적으로 제외.
 const TARGET_FILES = [
   'package.json',
   'README.md',
-  'LICENSE',
-  'Formula/mat.rb'
+  'LICENSE'
 ];
 
 const FORBIDDEN_TOKENS = [
