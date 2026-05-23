@@ -5,18 +5,18 @@
  * 보관되므로 readSource / writeSource 는 모든 source 종류에 대해 string 만 다룬다.
  *
  * 안전 원칙:
- * - 파일 쓰기는 .tmp → rename 으로 원자적, 권한 0600, O_EXCL + O_NOFOLLOW.
+ * - 파일 쓰기는 io-atomic 의 writeFileAtomic 사용 (O_EXCL + O_NOFOLLOW + 0600).
  * - Keychain 쓰기는 기존 값을 메모리에 백업 → 정확한 acct 매칭 delete → add.
  *   add 실패 시 백업으로 자동 롤백 (자격증명 영구 손실 방지).
  * - 외부 명령은 절대경로 `/usr/bin/security` 만, 인자 배열 spawn (셸 미경유).
- * - 에러 메시지는 30자+ base64-like 시퀀스와 JWT 를 redact (토큰 누설 방지).
+ * - 에러 메시지는 errors.ts 의 redactMessage 로 토큰 누설 방지.
  */
 
 import { spawn } from 'node:child_process';
-import { constants, promises as fs } from 'node:fs';
-import type { FileHandle } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
+import { redactMessage } from './errors.js';
+import { writeFileAtomic } from './io-atomic.js';
 import type { KeychainSource, KeychainStored, Source } from './types.js';
 
 /** macOS 의 `security` CLI 절대경로. PATH shim 공격을 방지. */
@@ -56,19 +56,8 @@ function runCommand(cmd: string, args: string[]): Promise<CmdResult> {
   });
 }
 
-/**
- * 에러 메시지에서 자격증명/토큰 후보 문자열을 가린다.
- * JWT 패턴과 30자 이상 base64-like 시퀀스를 [redacted] 로 대체하고 200자로 절단.
- */
-function redact(s: string): string {
-  return s
-    .replace(/eyJ[A-Za-z0-9+/=._-]{20,}/g, '[redacted-jwt]')
-    .replace(/[A-Za-z0-9+/=_-]{30,}/g, '[redacted]')
-    .slice(0, 200);
-}
-
 function keychainErr(stage: string, r: CmdResult): Error {
-  return new Error(`keychain ${stage} 실패 (code=${r.code}): ${redact(r.stderr || r.stdout)}`);
+  return new Error(`keychain ${stage} 실패 (code=${r.code}): ${redactMessage(r.stderr || r.stdout)}`);
 }
 
 /**
@@ -94,8 +83,9 @@ async function keychainGetValue(service: string): Promise<string | null> {
 /**
  * Keychain 항목을 안전하게 쓴다.
  *  1) 기존 값/account 메모리 백업
- *  2) 백업 acct 와 정확히 매칭되는 항목만 삭제 (-a 명시)
- *  3) 새 값 추가. 실패 시 백업으로 롤백
+ *  2) 백업 acct 와 정확히 매칭되는 항목만 삭제 (-a 명시).
+ *     백업이 있는데 acct 를 모를 때는 console.warn 만 출력하고 service-only 삭제 (옛 동작 유지).
+ *  3) 새 값 추가. 실패 시 백업으로 롤백 (롤백 결과도 확인해 실패 시 에러에 첨부).
  *
  * `-A` 로 동일 사용자 모든 앱이 접근 가능한 ACL 사용 (Claude 가 토큰을 못 읽는 회귀 방지).
  * argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
@@ -106,7 +96,11 @@ async function keychainSet(service: string, account: string, value: string): Pro
 
   if (backupValue != null) {
     const delArgs = ['delete-generic-password', '-s', service];
-    if (backupAccount) delArgs.push('-a', backupAccount);
+    if (backupAccount) {
+      delArgs.push('-a', backupAccount);
+    } else {
+      console.warn(`경고: keychain service '${service}' 의 account 를 파악할 수 없어 service-only 삭제를 수행합니다. 동일 service 의 다른 항목이 영향받을 수 있습니다.`);
+    }
     const delRes = await runCommand(SECURITY_BIN, delArgs);
     if (delRes.code !== 0) {
       throw keychainErr('백업 항목 삭제', delRes);
@@ -122,17 +116,20 @@ async function keychainSet(service: string, account: string, value: string): Pro
   ]);
 
   if (addRes.code !== 0) {
+    let rollbackNote = '';
     if (backupValue != null) {
-      // best-effort 롤백: 실패하더라도 원본 에러를 사용자에게 전달
-      await runCommand(SECURITY_BIN, [
+      const rb = await runCommand(SECURITY_BIN, [
         'add-generic-password',
         '-s', service,
         '-a', backupAccount || account,
         '-w', backupValue,
         '-A'
       ]);
+      if (rb.code !== 0) {
+        rollbackNote = ` / 백업 복구도 실패 (code=${rb.code}): ${redactMessage(rb.stderr)}`;
+      }
     }
-    throw keychainErr('쓰기', addRes);
+    throw new Error(`keychain 쓰기 실패 (code=${addRes.code}): ${redactMessage(addRes.stderr || addRes.stdout)}${rollbackNote}`);
   }
 }
 
@@ -164,38 +161,6 @@ async function writeKeychainSerialized(src: KeychainSource, serialized: string):
   await keychainSet(src.service, account, stored.value);
 }
 
-/**
- * 파일을 원자적으로 쓴다 (.tmp → rename), 권한 0600, 부모 디렉토리 자동 생성.
- *
- * 보안 플래그:
- * - O_EXCL: tmp 가 이미 존재하면 fail (실수/race 방지)
- * - O_NOFOLLOW: tmp 가 symlink 라면 fail (attacker symlink 추적 차단, TOCTOU 완화)
- *
- * 실패 시 tmp 잔존물 정리 (best-effort).
- */
-async function writeFileAtomic(path: string, value: string): Promise<void> {
-  const abs = expandTilde(path);
-  await fs.mkdir(dirname(abs), { recursive: true });
-  const tmp = `${abs}.tmp`;
-  const FLAGS =
-    constants.O_WRONLY |
-    constants.O_CREAT |
-    constants.O_EXCL |
-    constants.O_NOFOLLOW;
-  let handle: FileHandle | undefined;
-  try {
-    handle = await fs.open(tmp, FLAGS, 0o600);
-    await handle.writeFile(value);
-    await handle.close();
-    handle = undefined;
-    await fs.rename(tmp, abs);
-  } catch (err) {
-    if (handle) await handle.close().catch(() => { /* best-effort */ });
-    await fs.rm(tmp, { force: true }).catch(() => { /* best-effort */ });
-    throw err;
-  }
-}
-
 /** 파일을 읽어 문자열 반환. 없으면 null. */
 async function readFileOrNull(path: string): Promise<string | null> {
   try {
@@ -224,7 +189,7 @@ export async function readSource(src: Source): Promise<string | null> {
 
 /** 임의 source 에 저장된 문자열을 라이브 위치로 복원. */
 export async function writeSource(src: Source, value: string): Promise<void> {
-  if (src.type === 'file') return writeFileAtomic(src.path, value);
+  if (src.type === 'file') return writeFileAtomic(expandTilde(src.path), value);
   return writeKeychainSerialized(src, value);
 }
 

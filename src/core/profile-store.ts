@@ -2,9 +2,12 @@
  * 프로필 CRUD: 디스크 디렉토리/메타 파일 관리.
  * 자격증명 데이터 자체는 source 별 saveAs 파일에 저장되며,
  * 본 모듈은 read/write 헬퍼만 제공한다 (값의 해석은 source 모듈이 담당).
+ *
+ * 모든 파일 쓰기는 io-atomic 의 writeFileAtomic (O_EXCL + O_NOFOLLOW + 0600) 으로 통일.
  */
 
 import { promises as fs } from 'node:fs';
+import { writeFileAtomic } from './io-atomic.js';
 import {
   cliProfilesDir,
   profileDir,
@@ -64,8 +67,7 @@ export async function profileExists(cliId: string, name: string): Promise<boolea
 }
 
 async function writeMeta(meta: Profile): Promise<void> {
-  const p = profileMetaPath(meta.cli, meta.name);
-  await fs.writeFile(p, JSON.stringify(meta, null, 2), { mode: 0o600 });
+  await writeFileAtomic(profileMetaPath(meta.cli, meta.name), JSON.stringify(meta, null, 2));
 }
 
 /** 프로필 생성 (디렉토리 + meta.json). 이미 존재하면 에러. */
@@ -153,7 +155,10 @@ export async function readProfileFile(
   }
 }
 
-/** 프로필 내 임의 파일 쓰기 (0600). 디렉토리는 필요 시 생성. */
+/**
+ * 프로필 내 임의 파일 쓰기 (atomic + 0600 + O_NOFOLLOW).
+ * 디렉토리는 필요 시 생성.
+ */
 export async function writeProfileFile(
   cliId: string,
   name: string,
@@ -161,6 +166,5 @@ export async function writeProfileFile(
   value: string
 ): Promise<void> {
   await fs.mkdir(profileDir(cliId, name), { recursive: true, mode: 0o700 });
-  const p = profileFilePath(cliId, name, fileName);
-  await fs.writeFile(p, value, { mode: 0o600 });
+  await writeFileAtomic(profileFilePath(cliId, name, fileName), value);
 }
