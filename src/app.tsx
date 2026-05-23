@@ -7,6 +7,9 @@
  *  - pop: 스택 최상단 제거. 스택이 비게 될 경우 home 으로 fallback.
  *  - home: 명시적 home navigation (스택 전체 리셋).
  *
+ * 액션 DRY: 모든 async 핸들러는 runBusyAction 헬퍼를 통해
+ * busy → work → refresh → success/error message 흐름을 일관 처리.
+ *
  * 초기 부트:
  *  1) .tmp 잔존물 정리 (cleanupTmpFiles)
  *  2) 데이터 병렬 로드 (loadAllData → Promise.all)
@@ -14,7 +17,7 @@
  *     있으면 firstImport 화면 (사용자가 결정한 뒤 markFirstImportPromptShown).
  */
 
-import React, { useEffect, useReducer } from 'react';
+import React, { useEffect, useReducer, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
 import { BUILTIN_CLI_DEFS, findCliDef } from './core/cli-defs.js';
@@ -46,6 +49,8 @@ import { HomeScreen, ProfilesScreen, type CliRow, type ProfileItem } from './ui/
 
 // --- 화면 타입 ---
 
+type MessageTone = 'info' | 'success' | 'error' | 'warning';
+
 type Screen =
   | { kind: 'loading' }
   | { kind: 'home' }
@@ -66,7 +71,7 @@ type Screen =
   | { kind: 'busy'; message: string }
   | {
       kind: 'message';
-      tone: 'info' | 'success' | 'error' | 'warning';
+      tone: MessageTone;
       title: string;
       body?: string;
       onDismiss?: () => void;
@@ -136,6 +141,7 @@ function topOf(state: State): Screen {
 export default function App() {
   const { exit } = useApp();
   const [state, dispatch] = useReducer(reducer, initialState);
+  const initializedRef = useRef(false);
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') exit();
@@ -144,7 +150,8 @@ export default function App() {
   const screen = topOf(state);
 
   useEffect(() => {
-    if (screen.kind !== 'loading') return;
+    if (screen.kind !== 'loading' || initializedRef.current) return;
+    initializedRef.current = true;
     void initialize(dispatch);
   }, [screen.kind]);
 
@@ -313,7 +320,7 @@ function renderProfiles(
         dispatch({ type: 'push', screen: { kind: 'rename', cliId: cli.id, oldName: name } })
       }
       onDelete={(name) => onDeleteAction(cli, name, active, dispatch, refresh)}
-      onCapture={(name) => onCaptureAction(cli, name, dispatch, refresh)}
+      onCapture={(name) => onCaptureAction(cli, name, active, dispatch, refresh)}
       onBack={() => dispatch({ type: 'pop' })}
     />
   );
@@ -422,6 +429,21 @@ function formatSwitchResult(r: SwitchResult, to: string): string {
   return lines.join('\n');
 }
 
+function formatCaptureWarning(name: string, active: string | undefined): string {
+  if (name === active) {
+    return (
+      `'${name}' 프로필의 저장된 자격증명을 현재 라이브 값으로 덮어씁니다.\n` +
+      `방금 새 계정으로 로그인을 마쳤다면 이 동작을 사용하세요.`
+    );
+  }
+  return (
+    `'${name}' 프로필의 저장된 자격증명을 현재 라이브 값으로 덮어씁니다.\n\n` +
+    `⚠ 주의: 현재 활성 프로필은 '${active ?? '없음'}' 입니다.\n` +
+    `라이브 자격증명은 활성 프로필의 것이므로, 캡처 시 '${name}' 프로필이\n` +
+    `활성 프로필의 자격증명으로 덮어써집니다 (의도한 동작이 맞는지 확인하세요).`
+  );
+}
+
 // --- 입력 검증 (UI 즉시 피드백) ---
 
 function validateNewName(v: string, existing: Set<string>): string | null {
@@ -447,6 +469,39 @@ function validateRenameTo(v: string, oldName: string, existing: Set<string>): st
   }
 }
 
+// --- 공용 액션 헬퍼 (busy → work → refresh → success/error message) ---
+
+interface BusyActionConfig<T> {
+  dispatch: React.Dispatch<Action>;
+  refresh: () => Promise<void>;
+  busyMessage: string;
+  work: () => Promise<T>;
+  buildSuccess: (result: T) => { title: string; body?: string; tone?: MessageTone };
+  errorTitle: string;
+}
+
+/**
+ * busy → work → refresh → success/error message 흐름을 일관 처리.
+ * doSwitch / doDelete / doCapture / onAddSubmit / onRenameSubmit 모두 이 헬퍼 사용.
+ */
+async function runBusyAction<T>(cfg: BusyActionConfig<T>): Promise<void> {
+  cfg.dispatch({ type: 'replace', screen: { kind: 'busy', message: cfg.busyMessage } });
+  try {
+    const result = await cfg.work();
+    await cfg.refresh();
+    const { title, body, tone } = cfg.buildSuccess(result);
+    cfg.dispatch({
+      type: 'replace',
+      screen: { kind: 'message', tone: tone ?? 'success', title, body }
+    });
+  } catch (err) {
+    cfg.dispatch({
+      type: 'replace',
+      screen: { kind: 'message', tone: 'error', title: cfg.errorTitle, body: errorMessage(err) }
+    });
+  }
+}
+
 // --- 액션 핸들러 ---
 
 async function declineFirstImport(dispatch: React.Dispatch<Action>): Promise<void> {
@@ -458,46 +513,66 @@ async function declineFirstImport(dispatch: React.Dispatch<Action>): Promise<voi
   dispatch({ type: 'replace', screen: { kind: 'home' } });
 }
 
+interface FirstImportSummary {
+  successes: { cliId: string; captured: string[] }[];
+  failures: { cliId: string; err: string }[];
+}
+
 async function onFirstImport(
   targets: string[],
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
   dispatch({ type: 'replace', screen: { kind: 'busy', message: '자격증명 가져오는 중...' } });
-  try {
-    const results: SnapshotResult[] = [];
-    for (const cliId of targets) {
+  const summary: FirstImportSummary = { successes: [], failures: [] };
+  for (const cliId of targets) {
+    try {
       const snap = await snapshotLiveToProfile(cliId, 'default');
-      results.push(snap);
       await setActiveProfile(cliId, 'default');
+      summary.successes.push({ cliId, captured: snap.captured });
+    } catch (err) {
+      summary.failures.push({ cliId, err: errorMessage(err) });
     }
-    await markFirstImportPromptShown();
-    await refresh();
-    const body = results
-      .map((r) => `  ${r.cliId}: ${r.captured.length}개 파일 캡처 (${r.captured.join(', ')})`)
-      .join('\n');
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'success',
-        title: '가져오기 완료',
-        body,
-        onDismiss: () => dispatch({ type: 'home' })
-      }
-    });
-  } catch (err) {
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'error',
-        title: '가져오기 실패',
-        body: errorMessage(err),
-        onDismiss: () => dispatch({ type: 'home' })
-      }
-    });
   }
+  try {
+    await markFirstImportPromptShown();
+  } catch (err) {
+    console.error('markFirstImportPromptShown 실패:', errorMessage(err));
+  }
+  await refresh();
+  dispatch({
+    type: 'replace',
+    screen: {
+      kind: 'message',
+      tone: importTone(summary),
+      title: importTitle(summary),
+      body: formatFirstImportSummary(summary),
+      onDismiss: () => dispatch({ type: 'home' })
+    }
+  });
+}
+
+function importTone(s: FirstImportSummary): MessageTone {
+  if (s.failures.length === 0) return 'success';
+  if (s.successes.length === 0) return 'error';
+  return 'warning';
+}
+
+function importTitle(s: FirstImportSummary): string {
+  if (s.failures.length === 0) return '가져오기 완료';
+  if (s.successes.length === 0) return '가져오기 실패';
+  return '가져오기 부분 완료';
+}
+
+function formatFirstImportSummary(s: FirstImportSummary): string {
+  const lines: string[] = [];
+  for (const ok of s.successes) {
+    lines.push(`✓ ${ok.cliId}: ${ok.captured.length}개 파일 캡처 (${ok.captured.join(', ')})`);
+  }
+  for (const fail of s.failures) {
+    lines.push(`✗ ${fail.cliId}: ${fail.err}`);
+  }
+  return lines.join('\n');
 }
 
 function onSwitchAction(
@@ -536,25 +611,17 @@ async function doSwitch(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  dispatch({ type: 'replace', screen: { kind: 'busy', message: '전환 중...' } });
-  try {
-    const result = await switchProfile(cli.id, to);
-    await refresh();
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'success',
-        title: '전환 완료',
-        body: formatSwitchResult(result, to)
-      }
-    });
-  } catch (err) {
-    dispatch({
-      type: 'replace',
-      screen: { kind: 'message', tone: 'error', title: '전환 실패', body: errorMessage(err) }
-    });
-  }
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '전환 중...',
+    work: () => switchProfile(cli.id, to),
+    buildSuccess: (result) => ({
+      title: '전환 완료',
+      body: formatSwitchResult(result, to)
+    }),
+    errorTitle: '전환 실패'
+  });
 }
 
 async function onAddSubmit(
@@ -563,29 +630,21 @@ async function onAddSubmit(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  dispatch({ type: 'replace', screen: { kind: 'busy', message: '프로필 생성 중...' } });
-  try {
-    const snap = await snapshotLiveToProfile(cliId, name);
-    await refresh();
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'success',
-        title: '프로필 생성 완료',
-        body:
-          `'${name}' 프로필이 생성되었습니다.\n` +
-          (snap.captured.length > 0
-            ? `라이브 자격증명을 캡처했습니다: ${snap.captured.join(', ')}`
-            : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)
-      }
-    });
-  } catch (err) {
-    dispatch({
-      type: 'replace',
-      screen: { kind: 'message', tone: 'error', title: '프로필 생성 실패', body: errorMessage(err) }
-    });
-  }
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '프로필 생성 중...',
+    work: () => snapshotLiveToProfile(cliId, name),
+    buildSuccess: (snap) => ({
+      title: '프로필 생성 완료',
+      body:
+        `'${name}' 프로필이 생성되었습니다.\n` +
+        (snap.captured.length > 0
+          ? `라이브 자격증명을 캡처했습니다: ${snap.captured.join(', ')}`
+          : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)
+    }),
+    errorTitle: '프로필 생성 실패'
+  });
 }
 
 async function onRenameSubmit(
@@ -595,27 +654,21 @@ async function onRenameSubmit(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  dispatch({ type: 'replace', screen: { kind: 'busy', message: '이름 변경 중...' } });
-  try {
-    await renameProfile(cliId, oldName, newName);
-    const cur = await getActiveProfile(cliId);
-    if (cur === oldName) await setActiveProfile(cliId, newName);
-    await refresh();
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'success',
-        title: '이름 변경 완료',
-        body: `${oldName} → ${newName}`
-      }
-    });
-  } catch (err) {
-    dispatch({
-      type: 'replace',
-      screen: { kind: 'message', tone: 'error', title: '이름 변경 실패', body: errorMessage(err) }
-    });
-  }
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '이름 변경 중...',
+    work: async () => {
+      await renameProfile(cliId, oldName, newName);
+      const cur = await getActiveProfile(cliId);
+      if (cur === oldName) await setActiveProfile(cliId, newName);
+    },
+    buildSuccess: () => ({
+      title: '이름 변경 완료',
+      body: `${oldName} → ${newName}`
+    }),
+    errorTitle: '이름 변경 실패'
+  });
 }
 
 function onDeleteAction(
@@ -655,30 +708,23 @@ async function doDelete(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  dispatch({ type: 'replace', screen: { kind: 'busy', message: '삭제 중...' } });
-  try {
-    await deleteProfile(cliId, name);
-    await refresh();
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'success',
-        title: '삭제 완료',
-        body: `'${name}' 프로필이 삭제되었습니다.`
-      }
-    });
-  } catch (err) {
-    dispatch({
-      type: 'replace',
-      screen: { kind: 'message', tone: 'error', title: '삭제 실패', body: errorMessage(err) }
-    });
-  }
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '삭제 중...',
+    work: () => deleteProfile(cliId, name),
+    buildSuccess: () => ({
+      title: '삭제 완료',
+      body: `'${name}' 프로필이 삭제되었습니다.`
+    }),
+    errorTitle: '삭제 실패'
+  });
 }
 
 function onCaptureAction(
   cli: CliDef,
   name: string,
+  active: string | undefined,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): void {
@@ -687,9 +733,8 @@ function onCaptureAction(
     screen: {
       kind: 'confirm',
       title: '현재 라이브 자격증명을 캡처',
-      body:
-        `'${name}' 프로필의 저장된 자격증명을 현재 라이브 값으로 덮어씁니다.\n` +
-        `방금 새 계정으로 로그인을 마쳤다면 이 동작을 사용하세요.`,
+      body: formatCaptureWarning(name, active),
+      dangerous: name !== active,
       onYes: () => void doCapture(cli.id, name, dispatch, refresh)
     }
   });
@@ -701,26 +746,18 @@ async function doCapture(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  dispatch({ type: 'replace', screen: { kind: 'busy', message: '캡처 중...' } });
-  try {
-    const snap = await snapshotLiveToProfile(cliId, name);
-    await refresh();
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'success',
-        title: '캡처 완료',
-        body:
-          snap.captured.length > 0
-            ? `저장됨: ${snap.captured.join(', ')}`
-            : '캡처할 라이브 자격증명이 없습니다.'
-      }
-    });
-  } catch (err) {
-    dispatch({
-      type: 'replace',
-      screen: { kind: 'message', tone: 'error', title: '캡처 실패', body: errorMessage(err) }
-    });
-  }
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '캡처 중...',
+    work: () => snapshotLiveToProfile(cliId, name),
+    buildSuccess: (snap) => ({
+      title: '캡처 완료',
+      body:
+        snap.captured.length > 0
+          ? `저장됨: ${snap.captured.join(', ')}`
+          : '캡처할 라이브 자격증명이 없습니다.'
+    }),
+    errorTitle: '캡처 실패'
+  });
 }
