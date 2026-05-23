@@ -16,7 +16,8 @@
     "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "check-publish": "node scripts/check-publish-readiness.mjs",
+    "prepublishOnly": "node scripts/check-publish-readiness.mjs && npm run build"
   },
   "keywords": [
     "tui",

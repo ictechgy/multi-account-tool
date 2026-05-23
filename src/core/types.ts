@@ -56,8 +56,11 @@ export interface Profile {
   label?: string;
 }
 
-/** CLI 별 활성 프로필 매핑 */
-export type ActiveMap = Record<string, string>;
+/**
+ * CLI 별 활성 프로필 매핑.
+ * 값이 없는 CLI 는 키가 부재하므로 lookup 시 `string | undefined` 로 다뤄야 한다.
+ */
+export type ActiveMap = Partial<Record<string, string>>;
 
 /** 전역 설정 파일 (config.json) 스키마 */
 export interface Config {

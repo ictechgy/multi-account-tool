@@ -5,6 +5,7 @@
  *  - push: 새 화면을 스택에 쌓는다 (profile 화면 → confirm 등).
  *  - replace: 마지막 화면을 새 화면으로 교체 (confirm → busy → message).
  *  - pop: 스택 최상단 제거. 스택이 비게 될 경우 home 으로 fallback.
+ *  - home: 명시적 home navigation (스택 전체 리셋).
  *
  * 초기 부트:
  *  1) .tmp 잔존물 정리 (cleanupTmpFiles)
@@ -25,6 +26,7 @@ import {
   setActiveProfile
 } from './core/config.js';
 import { detectAll, type DetectionResult } from './core/detector.js';
+import { errorMessage } from './core/errors.js';
 import {
   deleteProfile,
   listProfiles,
@@ -115,15 +117,18 @@ function reducer(state: State, action: Action): State {
       if (state.stack.length === 0) return { ...state, stack: [action.screen] };
       return { ...state, stack: [...state.stack.slice(0, -1), action.screen] };
     case 'pop':
+      // 스택이 비게 되면 home 으로 fallback (root level 화면이 pop 됐을 때 안전).
       if (state.stack.length <= 1) return { ...state, stack: [{ kind: 'home' }] };
       return { ...state, stack: state.stack.slice(0, -1) };
     case 'home':
+      // 명시적 home navigation (firstImport 완료 후 등). 스택 전체를 리셋.
       return { ...state, stack: [{ kind: 'home' }] };
   }
 }
 
 function topOf(state: State): Screen {
-  return state.stack[state.stack.length - 1];
+  // reducer 가 invariant (stack.length >= 1) 를 유지하지만 안전망으로 fallback.
+  return state.stack[state.stack.length - 1] ?? { kind: 'home' };
 }
 
 // --- 앱 컴포넌트 ---
@@ -327,16 +332,7 @@ function renderAdd(
     <TextPrompt
       label={`${cli.name} — 새 프로필 이름 (현재 라이브 자격증명이 캡처되어 시작 상태가 됩니다)`}
       placeholder="personal / work / ..."
-      validate={(v) => {
-        if (!v) return '이름을 입력하세요.';
-        try {
-          const normalized = validateProfileName(v);
-          if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
-          return null;
-        } catch (err) {
-          return err instanceof Error ? err.message : '잘못된 이름입니다.';
-        }
-      }}
+      validate={(v) => validateNewName(v, existing)}
       onSubmit={(name) => onAddSubmit(cli.id, name, dispatch, refresh)}
       onCancel={() => dispatch({ type: 'pop' })}
     />
@@ -356,17 +352,7 @@ function renderRename(
     <TextPrompt
       label={`${cli.name} / ${screen.oldName} → 새 이름`}
       initial={screen.oldName}
-      validate={(v) => {
-        if (!v) return '이름을 입력하세요.';
-        try {
-          const normalized = validateProfileName(v);
-          if (normalized === screen.oldName) return '같은 이름입니다.';
-          if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
-          return null;
-        } catch (err) {
-          return err instanceof Error ? err.message : '잘못된 이름입니다.';
-        }
-      }}
+      validate={(v) => validateRenameTo(v, screen.oldName, existing)}
       onSubmit={(newName) => onRenameSubmit(cli.id, screen.oldName, newName, dispatch, refresh)}
       onCancel={() => dispatch({ type: 'pop' })}
     />
@@ -381,22 +367,84 @@ function renderFirstImport(
   const targets = screen.targets
     .map((id) => findCliDef(id))
     .filter((c): c is CliDef => !!c);
-  const body =
-    `다음 CLI 에 이미 로그인된 자격증명이 감지되었습니다:\n` +
-    targets.map((c) => `  - ${c.name}`).join('\n') +
-    `\n\n각 CLI 마다 'default' 프로필로 가져올까요?\n` +
-    `라이브 자격증명은 그대로 유지되며 백업만 생성됩니다.\n` +
-    `(이 프롬프트는 어떤 답을 선택하든 다음 실행부터 자동으로 뜨지 않습니다.)`;
   return (
     <Confirm
       title="초기 자격증명 가져오기"
-      body={body}
+      body={formatFirstImportBody(targets)}
       yesLabel="모두 가져오기"
       noLabel="건너뛰기"
       onYes={() => void onFirstImport(screen.targets, dispatch, refresh)}
       onNo={() => void declineFirstImport(dispatch)}
     />
   );
+}
+
+// --- 메시지 / 라벨 포매터 ---
+
+function formatFirstImportBody(targets: CliDef[]): string {
+  return (
+    `다음 CLI 에 이미 로그인된 자격증명이 감지되었습니다:\n` +
+    targets.map((c) => `  - ${c.name}`).join('\n') +
+    `\n\n각 CLI 마다 'default' 프로필로 가져올까요?\n` +
+    `라이브 자격증명은 그대로 유지되며 백업만 생성됩니다.\n` +
+    `(이 프롬프트는 어떤 답을 선택하든 다음 실행부터 자동으로 뜨지 않습니다.)`
+  );
+}
+
+function formatSwitchConfirmBody(currentActive: string | undefined, to: string): string {
+  const header = `${currentActive ?? '(없음)'}  →  ${to}\n\n`;
+  if (!currentActive) {
+    return (
+      header +
+      `현재 활성 프로필이 없어 별도 백업 없이 '${to}' 프로필을 복원합니다.\n` +
+      `(주의: 현재 라이브 자격증명은 덮어써집니다)`
+    );
+  }
+  return (
+    header +
+    `현재 라이브 자격증명은 '${currentActive}' 프로필로 자동 백업된 뒤,\n` +
+    `'${to}' 프로필의 자격증명이 복원됩니다.`
+  );
+}
+
+function formatSwitchResult(r: SwitchResult, to: string): string {
+  const lines: string[] = [];
+  if (r.fromSnapshot) {
+    lines.push(`백업 → ${r.fromSnapshot.profileName} : ${r.fromSnapshot.captured.length}개 파일`);
+    if (r.fromSnapshot.empty.length) {
+      lines.push(`  (비어있어 캡처 안 됨: ${r.fromSnapshot.empty.join(', ')})`);
+    }
+  }
+  lines.push(`복원 → ${to} : ${r.restore.restored.length}개 파일`);
+  if (r.restore.missing.length) {
+    lines.push(`  (프로필에 없어 건너뜀: ${r.restore.missing.join(', ')})`);
+  }
+  return lines.join('\n');
+}
+
+// --- 입력 검증 (UI 즉시 피드백) ---
+
+function validateNewName(v: string, existing: Set<string>): string | null {
+  if (!v) return '이름을 입력하세요.';
+  try {
+    const normalized = validateProfileName(v);
+    if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : '잘못된 이름입니다.';
+  }
+}
+
+function validateRenameTo(v: string, oldName: string, existing: Set<string>): string | null {
+  if (!v) return '이름을 입력하세요.';
+  try {
+    const normalized = validateProfileName(v);
+    if (normalized === oldName) return '같은 이름입니다.';
+    if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : '잘못된 이름입니다.';
+  }
 }
 
 // --- 액션 핸들러 ---
@@ -467,17 +515,12 @@ function onSwitchAction(
     });
     return;
   }
-  const body =
-    `${currentActive ?? '(없음)'}  →  ${to}\n\n` +
-    (currentActive
-      ? `현재 라이브 자격증명은 '${currentActive}' 프로필로 자동 백업된 뒤,\n'${to}' 프로필의 자격증명이 복원됩니다.`
-      : `현재 활성 프로필이 없어 별도 백업 없이 '${to}' 프로필을 복원합니다.\n(주의: 현재 라이브 자격증명은 덮어써집니다)`);
   dispatch({
     type: 'push',
     screen: {
       kind: 'confirm',
       title: `${cli.name} 프로필 전환`,
-      body,
+      body: formatSwitchConfirmBody(currentActive, to),
       onYes: () => void doSwitch(cli, to, dispatch, refresh)
     }
   });
@@ -508,21 +551,6 @@ async function doSwitch(
       screen: { kind: 'message', tone: 'error', title: '전환 실패', body: errorMessage(err) }
     });
   }
-}
-
-function formatSwitchResult(r: SwitchResult, to: string): string {
-  const lines: string[] = [];
-  if (r.fromSnapshot) {
-    lines.push(`백업 → ${r.fromSnapshot.profileName} : ${r.fromSnapshot.captured.length}개 파일`);
-    if (r.fromSnapshot.empty.length) {
-      lines.push(`  (비어있어 캡처 안 됨: ${r.fromSnapshot.empty.join(', ')})`);
-    }
-  }
-  lines.push(`복원 → ${to} : ${r.restore.restored.length}개 파일`);
-  if (r.restore.missing.length) {
-    lines.push(`  (프로필에 없어 건너뜀: ${r.restore.missing.join(', ')})`);
-  }
-  return lines.join('\n');
 }
 
 async function onAddSubmit(
@@ -691,9 +719,4 @@ async function doCapture(
       screen: { kind: 'message', tone: 'error', title: '캡처 실패', body: errorMessage(err) }
     });
   }
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
