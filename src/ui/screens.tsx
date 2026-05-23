@@ -3,7 +3,7 @@
  * 입력 처리는 자기 자신만 하고, 액션은 콜백으로 위임한다.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 
@@ -75,6 +75,9 @@ interface ProfilesScreenProps {
 /**
  * 프로필 화면: 프로필 목록 + 액션 키.
  * - ↵: 전환  c: 캡처  a: 새 프로필  r: 이름변경  d: 삭제  esc: 뒤로
+ *
+ * focusIndex 는 useEffect 로 profiles 길이가 변경될 때 자동 clamp 되어
+ * out-of-range 가 되지 않도록 보장한다 (삭제/이름변경 후 안정성).
  */
 export function ProfilesScreen({
   cli,
@@ -88,6 +91,14 @@ export function ProfilesScreen({
   onBack
 }: ProfilesScreenProps) {
   const [focusIndex, setFocusIndex] = useState(0);
+
+  useEffect(() => {
+    if (profiles.length === 0) {
+      if (focusIndex !== 0) setFocusIndex(0);
+    } else if (focusIndex >= profiles.length) {
+      setFocusIndex(profiles.length - 1);
+    }
+  }, [profiles.length, focusIndex]);
 
   useInput((input, key) => {
     if (key.escape) { onBack(); return; }

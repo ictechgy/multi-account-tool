@@ -5,19 +5,32 @@
  *  - push: 새 화면을 스택에 쌓는다 (profile 화면 → confirm 등).
  *  - replace: 마지막 화면을 새 화면으로 교체 (confirm → busy → message).
  *  - pop: 스택 최상단 제거. 스택이 비게 될 경우 home 으로 fallback.
+ *
+ * 초기 부트:
+ *  1) .tmp 잔존물 정리 (cleanupTmpFiles)
+ *  2) 데이터 병렬 로드 (loadAllData → Promise.all)
+ *  3) firstImportPromptShown=false 이고 hasAnyLiveCredential 가 있는 CLI 가
+ *     있으면 firstImport 화면 (사용자가 결정한 뒤 markFirstImportPromptShown).
  */
 
 import React, { useEffect, useReducer } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
 import { BUILTIN_CLI_DEFS, findCliDef } from './core/cli-defs.js';
-import { getActiveProfile, loadConfig, setActiveProfile } from './core/config.js';
+import {
+  cleanupTmpFiles,
+  getActiveProfile,
+  loadConfig,
+  markFirstImportPromptShown,
+  setActiveProfile
+} from './core/config.js';
 import { detectAll, type DetectionResult } from './core/detector.js';
 import {
   deleteProfile,
   listProfiles,
   readMeta,
-  renameProfile
+  renameProfile,
+  validateProfileName
 } from './core/profile-store.js';
 import {
   snapshotLiveToProfile,
@@ -44,6 +57,7 @@ type Screen =
       body?: string;
       dangerous?: boolean;
       onYes: () => void;
+      onNo?: () => void;
       yesLabel?: string;
       noLabel?: string;
     }
@@ -62,9 +76,15 @@ interface AppData {
   detection: DetectionResult[];
   activeByCli: Record<string, string | undefined>;
   profilesByCli: Record<string, { name: string; meta?: Profile }[]>;
+  firstImportPromptShown: boolean;
 }
 
-const EMPTY_DATA: AppData = { detection: [], activeByCli: {}, profilesByCli: {} };
+const EMPTY_DATA: AppData = {
+  detection: [],
+  activeByCli: {},
+  profilesByCli: {},
+  firstImportPromptShown: false
+};
 
 // --- 액션 / 리듀서 ---
 
@@ -142,16 +162,16 @@ export default function App() {
 // --- 초기 로딩 ---
 
 async function initialize(dispatch: React.Dispatch<Action>): Promise<void> {
+  await cleanupTmpFiles();
   const data = await loadAllData();
   dispatch({ type: 'set-data', data });
 
-  const anyProfile = Object.values(data.profilesByCli).some((arr) => arr.length > 0);
   const importable = data.detection
-    .filter((d) => d.hasLiveCredentials)
+    .filter((d) => d.hasAnyLiveCredential)
     .map((d) => d.cli.id)
     .filter((id) => (data.profilesByCli[id] ?? []).length === 0);
 
-  if (!anyProfile && importable.length > 0) {
+  if (!data.firstImportPromptShown && importable.length > 0) {
     dispatch({ type: 'replace', screen: { kind: 'firstImport', targets: importable } });
   } else {
     dispatch({ type: 'replace', screen: { kind: 'home' } });
@@ -159,19 +179,34 @@ async function initialize(dispatch: React.Dispatch<Action>): Promise<void> {
 }
 
 async function loadAllData(): Promise<AppData> {
-  const detection = await detectAll();
-  const config = await loadConfig();
-  const profilesByCli: AppData['profilesByCli'] = {};
-  for (const cli of BUILTIN_CLI_DEFS) {
-    const names = await listProfiles(cli.id);
-    const items: { name: string; meta?: Profile }[] = [];
-    for (const name of names) {
-      const meta = await readMeta(cli.id, name);
-      items.push({ name, meta: meta ?? undefined });
-    }
-    profilesByCli[cli.id] = items;
-  }
-  return { detection, activeByCli: config.active, profilesByCli };
+  const [detection, config, profilesByCli] = await Promise.all([
+    detectAll(),
+    loadConfig(),
+    loadProfilesByCli()
+  ]);
+  return {
+    detection,
+    activeByCli: config.active,
+    profilesByCli,
+    firstImportPromptShown: !!config.firstImportPromptShown
+  };
+}
+
+async function loadProfilesByCli(): Promise<AppData['profilesByCli']> {
+  const result: AppData['profilesByCli'] = {};
+  await Promise.all(
+    BUILTIN_CLI_DEFS.map(async (cli) => {
+      const names = await listProfiles(cli.id);
+      const items = await Promise.all(
+        names.map(async (name) => ({
+          name,
+          meta: (await readMeta(cli.id, name)) ?? undefined
+        }))
+      );
+      result[cli.id] = items;
+    })
+  );
+  return result;
 }
 
 // --- 화면 렌더링 ---
@@ -205,7 +240,7 @@ function renderScreen(
           yesLabel={screen.yesLabel}
           noLabel={screen.noLabel}
           onYes={screen.onYes}
-          onNo={() => dispatch({ type: 'pop' })}
+          onNo={screen.onNo ?? (() => dispatch({ type: 'pop' }))}
         />
       );
     case 'busy':
@@ -294,8 +329,13 @@ function renderAdd(
       placeholder="personal / work / ..."
       validate={(v) => {
         if (!v) return '이름을 입력하세요.';
-        if (existing.has(v)) return '같은 이름의 프로필이 이미 존재합니다.';
-        return null;
+        try {
+          const normalized = validateProfileName(v);
+          if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
+          return null;
+        } catch (err) {
+          return err instanceof Error ? err.message : '잘못된 이름입니다.';
+        }
       }}
       onSubmit={(name) => onAddSubmit(cli.id, name, dispatch, refresh)}
       onCancel={() => dispatch({ type: 'pop' })}
@@ -318,9 +358,14 @@ function renderRename(
       initial={screen.oldName}
       validate={(v) => {
         if (!v) return '이름을 입력하세요.';
-        if (v === screen.oldName) return '같은 이름입니다.';
-        if (existing.has(v)) return '같은 이름의 프로필이 이미 존재합니다.';
-        return null;
+        try {
+          const normalized = validateProfileName(v);
+          if (normalized === screen.oldName) return '같은 이름입니다.';
+          if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
+          return null;
+        } catch (err) {
+          return err instanceof Error ? err.message : '잘못된 이름입니다.';
+        }
       }}
       onSubmit={(newName) => onRenameSubmit(cli.id, screen.oldName, newName, dispatch, refresh)}
       onCancel={() => dispatch({ type: 'pop' })}
@@ -340,7 +385,8 @@ function renderFirstImport(
     `다음 CLI 에 이미 로그인된 자격증명이 감지되었습니다:\n` +
     targets.map((c) => `  - ${c.name}`).join('\n') +
     `\n\n각 CLI 마다 'default' 프로필로 가져올까요?\n` +
-    `라이브 자격증명은 그대로 유지되며 백업만 생성됩니다.`;
+    `라이브 자격증명은 그대로 유지되며 백업만 생성됩니다.\n` +
+    `(이 프롬프트는 어떤 답을 선택하든 다음 실행부터 자동으로 뜨지 않습니다.)`;
   return (
     <Confirm
       title="초기 자격증명 가져오기"
@@ -348,12 +394,17 @@ function renderFirstImport(
       yesLabel="모두 가져오기"
       noLabel="건너뛰기"
       onYes={() => void onFirstImport(screen.targets, dispatch, refresh)}
-      onNo={() => dispatch({ type: 'replace', screen: { kind: 'home' } })}
+      onNo={() => void declineFirstImport(dispatch)}
     />
   );
 }
 
 // --- 액션 핸들러 ---
+
+async function declineFirstImport(dispatch: React.Dispatch<Action>): Promise<void> {
+  await markFirstImportPromptShown().catch(() => { /* best-effort */ });
+  dispatch({ type: 'replace', screen: { kind: 'home' } });
+}
 
 async function onFirstImport(
   targets: string[],
@@ -368,6 +419,7 @@ async function onFirstImport(
       results.push(snap);
       await setActiveProfile(cliId, 'default');
     }
+    await markFirstImportPromptShown();
     await refresh();
     const body = results
       .map((r) => `  ${r.cliId}: ${r.captured.length}개 파일 캡처 (${r.captured.join(', ')})`)

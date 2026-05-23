@@ -63,6 +63,11 @@ export type ActiveMap = Record<string, string>;
 export interface Config {
   version: 1;
   active: ActiveMap;
+  /**
+   * 첫 실행 시 자동 가져오기 프롬프트를 이미 표시했는지.
+   * true 가 되면 다음 실행부터 자동 프롬프트를 띄우지 않는다 (수동 캡처는 항상 가능).
+   */
+  firstImportPromptShown?: boolean;
 }
 
 /**

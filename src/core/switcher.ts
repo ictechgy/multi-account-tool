@@ -113,7 +113,9 @@ export async function switchProfile(
 ): Promise<SwitchResult> {
   const current = await getActiveProfile(cliId);
   let fromSnapshot: SnapshotResult | undefined;
-  if (current && current !== toProfile) {
+  // 활성 포인터가 가리키는 프로필 디렉토리가 외부에서 삭제됐을 경우 좀비 부활 방지:
+  // snapshotLiveToProfile 의 auto-create 를 건너뛰고 restore 만 진행한다.
+  if (current && current !== toProfile && (await profileExists(cliId, current))) {
     fromSnapshot = await snapshotLiveToProfile(cliId, current);
   }
   const restore = await restoreProfileToLive(cliId, toProfile);

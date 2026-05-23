@@ -5,7 +5,7 @@
  * 보관되므로 readSource / writeSource 는 모든 source 종류에 대해 string 만 다룬다.
  *
  * 안전 원칙:
- * - 파일 쓰기는 .tmp → rename 으로 원자적, 권한 0600. 실패 시 tmp 자동 정리.
+ * - 파일 쓰기는 .tmp → rename 으로 원자적, 권한 0600, O_EXCL + O_NOFOLLOW.
  * - Keychain 쓰기는 기존 값을 메모리에 백업 → 정확한 acct 매칭 delete → add.
  *   add 실패 시 백업으로 자동 롤백 (자격증명 영구 손실 방지).
  * - 외부 명령은 절대경로 `/usr/bin/security` 만, 인자 배열 spawn (셸 미경유).
@@ -13,7 +13,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { expandTilde } from './paths.js';
 import type { KeychainSource, KeychainStored, Source } from './types.js';
@@ -165,16 +166,31 @@ async function writeKeychainSerialized(src: KeychainSource, serialized: string):
 
 /**
  * 파일을 원자적으로 쓴다 (.tmp → rename), 권한 0600, 부모 디렉토리 자동 생성.
+ *
+ * 보안 플래그:
+ * - O_EXCL: tmp 가 이미 존재하면 fail (실수/race 방지)
+ * - O_NOFOLLOW: tmp 가 symlink 라면 fail (attacker symlink 추적 차단, TOCTOU 완화)
+ *
  * 실패 시 tmp 잔존물 정리 (best-effort).
  */
 async function writeFileAtomic(path: string, value: string): Promise<void> {
   const abs = expandTilde(path);
   await fs.mkdir(dirname(abs), { recursive: true });
   const tmp = `${abs}.tmp`;
+  const FLAGS =
+    constants.O_WRONLY |
+    constants.O_CREAT |
+    constants.O_EXCL |
+    constants.O_NOFOLLOW;
+  let handle: FileHandle | undefined;
   try {
-    await fs.writeFile(tmp, value, { mode: 0o600 });
+    handle = await fs.open(tmp, FLAGS, 0o600);
+    await handle.writeFile(value);
+    await handle.close();
+    handle = undefined;
     await fs.rename(tmp, abs);
   } catch (err) {
+    if (handle) await handle.close().catch(() => { /* best-effort */ });
     await fs.rm(tmp, { force: true }).catch(() => { /* best-effort */ });
     throw err;
   }
