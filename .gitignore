@@ -59,3 +59,6 @@ coverage/
 
 # 패키지 매니저 잠금파일은 유지 (npm)
 # package-lock.json 은 추적함
+
+# 개인 작업 메모 (핸드오프용, 로컬 전용 — 다음 세션이 fresh context 로 이어받기 위함)
+/HANDOFF.md
