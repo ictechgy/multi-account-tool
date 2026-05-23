@@ -1,0 +1,134 @@
+/**
+ * 프로필 전환의 핵심 로직.
+ *
+ * 안전 시퀀스 (switchProfile):
+ *   1) 현재 활성 프로필로 라이브 자격증명 자동 스냅샷 (데이터 손실 방지)
+ *   2) 새 프로필을 라이브 위치로 복원
+ *   3) 활성 포인터 갱신 + updatedAt
+ */
+
+import { findCliDef } from './cli-defs.js';
+import {
+  clearActiveProfile,
+  getActiveProfile,
+  setActiveProfile
+} from './config.js';
+import {
+  createProfile,
+  profileExists,
+  readProfileFile,
+  touchProfile,
+  writeProfileFile
+} from './profile-store.js';
+import { readSource, writeSource } from './sources.js';
+import type { CliDef } from './types.js';
+
+export interface SnapshotResult {
+  cliId: string;
+  profileName: string;
+  /** 캡처되어 프로필 디렉토리에 저장된 source 의 saveAs 명 */
+  captured: string[];
+  /** 라이브 값이 없어 캡처되지 않은 source 의 saveAs 명 */
+  empty: string[];
+}
+
+/**
+ * 라이브 자격증명을 특정 프로필로 캡처 (덮어쓰기).
+ * 프로필이 없으면 자동 생성한다.
+ */
+export async function snapshotLiveToProfile(
+  cliId: string,
+  profileName: string
+): Promise<SnapshotResult> {
+  const def = mustFindCli(cliId);
+  if (!(await profileExists(cliId, profileName))) {
+    await createProfile(cliId, profileName);
+  }
+  const captured: string[] = [];
+  const empty: string[] = [];
+  for (const src of def.sources) {
+    const value = await readSource(src);
+    if (value == null) {
+      empty.push(src.saveAs);
+      continue;
+    }
+    await writeProfileFile(cliId, profileName, src.saveAs, value);
+    captured.push(src.saveAs);
+  }
+  await touchProfile(cliId, profileName);
+  return { cliId, profileName, captured, empty };
+}
+
+export interface RestoreResult {
+  cliId: string;
+  profileName: string;
+  /** 라이브 위치로 복원된 source 의 saveAs 명 */
+  restored: string[];
+  /** 프로필에 저장된 파일이 없어 건너뛴 source 의 saveAs 명 */
+  missing: string[];
+}
+
+/**
+ * 프로필에 저장된 자격증명을 라이브 위치로 복원.
+ * 프로필이 비어있어도 (missing 만 있어도) 에러는 던지지 않는다.
+ */
+export async function restoreProfileToLive(
+  cliId: string,
+  profileName: string
+): Promise<RestoreResult> {
+  const def = mustFindCli(cliId);
+  if (!(await profileExists(cliId, profileName))) {
+    throw new Error(`프로필을 찾을 수 없습니다: ${cliId}/${profileName}`);
+  }
+  const restored: string[] = [];
+  const missing: string[] = [];
+  for (const src of def.sources) {
+    const stored = await readProfileFile(cliId, profileName, src.saveAs);
+    if (stored == null) {
+      missing.push(src.saveAs);
+      continue;
+    }
+    await writeSource(src, stored);
+    restored.push(src.saveAs);
+  }
+  return { cliId, profileName, restored, missing };
+}
+
+export interface SwitchResult {
+  /** 전환 직전 현재 활성 프로필로 자동 백업한 결과 (없을 수 있음) */
+  fromSnapshot?: SnapshotResult;
+  /** 새 프로필로의 복원 결과 */
+  restore: RestoreResult;
+}
+
+/**
+ * 안전한 프로필 전환:
+ *  1) 기존 활성 프로필이 있다면 라이브 → 그 프로필로 캡처
+ *  2) 대상 프로필을 라이브 위치로 복원
+ *  3) 활성 포인터 업데이트
+ */
+export async function switchProfile(
+  cliId: string,
+  toProfile: string
+): Promise<SwitchResult> {
+  const current = await getActiveProfile(cliId);
+  let fromSnapshot: SnapshotResult | undefined;
+  if (current && current !== toProfile) {
+    fromSnapshot = await snapshotLiveToProfile(cliId, current);
+  }
+  const restore = await restoreProfileToLive(cliId, toProfile);
+  await setActiveProfile(cliId, toProfile);
+  await touchProfile(cliId, toProfile);
+  return { fromSnapshot, restore };
+}
+
+/** 활성 포인터만 제거 (라이브 자격증명은 건드리지 않음). */
+export async function clearActive(cliId: string): Promise<void> {
+  await clearActiveProfile(cliId);
+}
+
+function mustFindCli(cliId: string): CliDef {
+  const def = findCliDef(cliId);
+  if (!def) throw new Error(`알 수 없는 CLI: ${cliId}`);
+  return def;
+}

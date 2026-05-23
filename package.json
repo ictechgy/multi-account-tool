@@ -1,0 +1,65 @@
+{
+  "name": "multi-subscription-terminal",
+  "version": "0.1.0",
+  "description": "여러 AI CLI(Claude Code, Codex, Gemini/Antigravity) 계정을 하나의 TUI에서 전환해 사용하는 도구",
+  "type": "module",
+  "bin": {
+    "mat": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx src/cli.tsx",
+    "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "tui",
+    "ink",
+    "cli",
+    "ai",
+    "claude",
+    "codex",
+    "gemini",
+    "antigravity",
+    "account",
+    "switcher",
+    "profile",
+    "credentials"
+  ],
+  "author": "YOUR-NAME <you@example.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/YOUR-USERNAME/multi-subscription-terminal#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR-USERNAME/multi-subscription-terminal.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR-USERNAME/multi-subscription-terminal/issues"
+  },
+  "dependencies": {
+    "ink": "^5.0.1",
+    "ink-select-input": "^6.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.11",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}

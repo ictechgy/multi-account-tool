@@ -1,0 +1,43 @@
+# 의존성
+node_modules/
+.pnp.*
+.yarn/
+
+# 빌드 결과물
+dist/
+build/
+*.tsbuildinfo
+
+# 로그
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 에디터 / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 환경 변수 / 시크릿 — 절대로 커밋하지 않는다
+.env
+.env.*
+!.env.example
+
+# 런타임 / 캐시
+.cache/
+.tmp/
+
+# OMC 작업 산출물 (이 저장소에서는 추적하지 않음)
+.omc/
+
+# 테스트 커버리지
+coverage/
+.nyc_output/
+
+# 패키지 매니저 잠금파일은 유지 (npm)
+# package-lock.json 은 추적함
