@@ -1,5 +1,5 @@
 {
-  "name": "multi-subscription-terminal",
+  "name": "multi-account-tool",
   "version": "0.1.0",
   "description": "여러 AI CLI(Claude Code, Codex, Gemini/Antigravity) 계정을 하나의 TUI에서 전환해 사용하는 도구",
   "type": "module",
@@ -35,13 +35,13 @@
   ],
   "author": "ictechgy <ictechgy@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/ictechgy/multi-subscription-terminal#readme",
+  "homepage": "https://github.com/ictechgy/multi-account-tool#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ictechgy/multi-subscription-terminal.git"
+    "url": "git+https://github.com/ictechgy/multi-account-tool.git"
   },
   "bugs": {
-    "url": "https://github.com/ictechgy/multi-subscription-terminal/issues"
+    "url": "https://github.com/ictechgy/multi-account-tool/issues"
   },
   "dependencies": {
     "ink": "^5.0.1",

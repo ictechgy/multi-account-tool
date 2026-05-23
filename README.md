@@ -1,10 +1,10 @@
-# multi-subscription-terminal (`mat`)
+# multi-account-tool (`mat`)
 
 여러 AI CLI 계정(Claude Code, Codex, Gemini / Antigravity)을 **하나의 TUI에서 빠르게 전환**해 사용하는 도구.
 매번 `logout` → `login` 반복할 필요 없이 프로필 단위로 자격증명을 보관하고 한 번에 갈아끼울 수 있다.
 
 ```
-╭ Multi-Subscription Terminal ────────────────────────╮
+╭ Multi-Account Tool ────────────────────────╮
 │  AI CLI 계정 스위처                                  │
 ╰──────────────────────────────────────────────────────╯
 
@@ -47,7 +47,7 @@
 ### npm (권장)
 
 ```bash
-npm install -g multi-subscription-terminal
+npm install -g multi-account-tool
 ```
 
 ### Homebrew
@@ -64,8 +64,8 @@ brew install mat
 ### 소스에서 빌드
 
 ```bash
-git clone https://github.com/ictechgy/multi-subscription-terminal.git
-cd multi-subscription-terminal
+git clone https://github.com/ictechgy/multi-account-tool.git
+cd multi-account-tool
 npm install
 npm run build
 npm link
@@ -109,7 +109,7 @@ TUI가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
 ## 데이터 저장 위치
 
 ```
-~/.multi-sub-terminal/
+~/.multi-account-tool/
 ├── config.json                   # 활성 프로필 매핑
 └── profiles/
     ├── claude/
@@ -135,12 +135,12 @@ TUI가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
   결과: 같은 UID 로 실행되는 임의 프로세스(악성 npm postinstall 포함)가 토큰을 침묵 읽기 가능.
   완화 옵션은 v0.2 (opt-in restrictive 모드 / `-T` 화이트리스트) 로 도입 예정.
 
-- **OAuth 토큰 평문 백업**: `~/.multi-sub-terminal/profiles/` 아래 평문 JSON 으로 저장된다.
+- **OAuth 토큰 평문 백업**: `~/.multi-account-tool/profiles/` 아래 평문 JSON 으로 저장된다.
   파일 0600 / 디렉토리 0700 권한이지만 디스크 백업/스냅샷에 포함될 수 있다.
   **Time Machine / iCloud / 클라우드 동기화 폴더에서 제외 권장**:
 
   ```bash
-  xattr -w com.apple.metadata:com_apple_backup_excludeItem true ~/.multi-sub-terminal
+  xattr -w com.apple.metadata:com_apple_backup_excludeItem true ~/.multi-account-tool
   ```
 
 - **명령행 인자 노출**: `security add-generic-password -w <value>` 가 평문 토큰을 `argv` 로 받는다

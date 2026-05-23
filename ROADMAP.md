@@ -28,7 +28,7 @@
 
 1. **각 CLI 의 credential 위치 조사** — file path, env var, keychain entry. PR 별 1 CLI.
 2. **`BUILTIN_CLI_DEFS` 에 항목 추가** — 기존 `Source` 추상화 (`file` / `keychain`) 로 충분한지 확인.
-3. **plugin 확장 메커니즘** — `~/.multi-sub-terminal/cli-defs/*.json` 으로 사용자 정의 CLI. JSON schema + 런타임 validator (`validateProfileName` 같이).
+3. **plugin 확장 메커니즘** — `~/.multi-account-tool/cli-defs/*.json` 으로 사용자 정의 CLI. JSON schema + 런타임 validator (`validateProfileName` 같이).
 4. **shell-export 기반 CLI** (env var 만 지원하는 도구) — `mat exec` (아래 #3 참고) 흐름으로 표현.
 
 ### 알려진 어려움
@@ -66,8 +66,8 @@
 
 #### A. env var 지원 CLI (file path override)
 - `mat session start <session-name> --profile <profile>` 명령
-- mat 가 임시 디렉토리 `~/.multi-sub-terminal/sessions/<session>/codex/` 에 자격증명 복사
-- 새 shell 을 `CODEX_HOME=~/.multi-sub-terminal/sessions/<session>/codex` env 로 spawn
+- mat 가 임시 디렉토리 `~/.multi-account-tool/sessions/<session>/codex/` 에 자격증명 복사
+- 새 shell 을 `CODEX_HOME=~/.multi-account-tool/sessions/<session>/codex` env 로 spawn
 - 그 shell 안에서 실행되는 CLI 는 격리된 자격증명 사용
 - 세션 종료 시 임시 디렉토리 정리
 
@@ -140,7 +140,7 @@ lterm send-keys "mat exec work-acc -- claude" Enter
 | 순서 | 작업 | 사유 |
 | --- | --- | --- |
 | 1 | `mat exec <profile> -- <cmd>` 도입 | lterm 즉시 통합 가능, 격리 한계 인정 |
-| 2 | `~/.multi-sub-terminal/cli-defs/*.json` plugin | 사용자가 mat 코드 변경 없이 새 CLI 추가 |
+| 2 | `~/.multi-account-tool/cli-defs/*.json` plugin | 사용자가 mat 코드 변경 없이 새 CLI 추가 |
 | 3 | Aider 내장 지원 | text-based config 라 가장 단순 |
 | 4 | 다른 CLI 조사 + 내장 추가 | Cursor / Goose / Copilot 등 |
 | 5 | 세션 격리 (#2) | env var override 지원 CLI 부터. Keychain CLI 는 별도 R&D |
@@ -154,5 +154,5 @@ quad-review (2026-05-23) 에서 수용된 trade-off:
 
 - **`security` CLI `-w <value>` argv 노출** — argv 가 `ps -ef`/audit 로그에 노출. CLI 자체 한계. native Keychain API binding (Rust/Swift) 로 대체 시 해결 가능하나 큰 변경.
 - **`-A` ACL 완화** — Claude 가 자기 토큰 못 읽는 회귀 회피용. opt-in `-T <path>` whitelist 모드로 v0.2 검토.
-- **평문 backup** — `~/.multi-sub-terminal/profiles/` 의 자격증명이 평문 JSON. native Keychain 으로만 보관하거나 (위와 동일 dependency) age/passphrase 기반 암호화 옵션.
+- **평문 backup** — `~/.multi-account-tool/profiles/` 의 자격증명이 평문 JSON. native Keychain 으로만 보관하거나 (위와 동일 dependency) age/passphrase 기반 암호화 옵션.
 - **용어 일관성** — snapshot (내부 API) / 캡처 (UI 액션) / 백업 (switch 부수효과) / 가져오기 (초기 import) 가 의도된 차별화. UI 사용자 피드백 받으면 통일 검토.

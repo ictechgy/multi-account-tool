@@ -1,14 +1,14 @@
 /**
  * 데이터 디렉토리 및 경로 헬퍼.
- * 모든 프로필은 ~/.multi-sub-terminal 아래에 보관된다.
+ * 모든 프로필은 ~/.multi-account-tool 아래에 보관된다.
  */
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const DATA_DIR_NAME = '.multi-sub-terminal';
+const DATA_DIR_NAME = '.multi-account-tool';
 
-/** ~/.multi-sub-terminal 의 절대 경로 */
+/** ~/.multi-account-tool 의 절대 경로 */
 export function dataDir(): string {
   return join(homedir(), DATA_DIR_NAME);
 }

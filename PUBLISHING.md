@@ -1,12 +1,12 @@
 # 배포 가이드 (npm + Homebrew)
 
-> 이 문서는 `multi-subscription-terminal` (`mat`) 을 npm 과 Homebrew 두 채널로 배포하는 절차를 정리한다.
+> 이 문서는 `multi-account-tool` (`mat`) 을 npm 과 Homebrew 두 채널로 배포하는 절차를 정리한다.
 
 ---
 
 ## 사전 준비
 
-- [ ] GitHub 저장소: `ictechgy/multi-subscription-terminal` 생성 후 push
+- [ ] GitHub 저장소: `ictechgy/multi-account-tool` 생성 후 push
 - [ ] Homebrew tap 저장소: `ictechgy/homebrew-mat` 생성 (이름은 반드시 `homebrew-<탭명>` 형식)
 - [ ] npm 계정 로그인: `npm login`
 - [ ] (fork 한 경우만) `package.json` 의 `YOUR-USERNAME`, `YOUR-NAME` 자리표시자를 실제 값으로 일괄 치환
@@ -39,17 +39,17 @@ npm version patch   # 또는 minor / major
 npm publish --access public
 ```
 
-성공하면 `https://www.npmjs.com/package/multi-subscription-terminal` 에 노출된다.
+성공하면 `https://www.npmjs.com/package/multi-account-tool` 에 노출된다.
 
 사용자는 이제 다음 명령으로 설치 가능:
 
 ```bash
-npm install -g multi-subscription-terminal
+npm install -g multi-account-tool
 mat
 ```
 
-> **패키지 이름 충돌 시**: `npm view multi-subscription-terminal` 으로 점유 여부를 미리 확인.
-> 이미 사용 중이면 `package.json` 의 `name` 을 (`@your-scope/multi-subscription-terminal` 같은) scoped name 으로 변경.
+> **패키지 이름 충돌 시**: `npm view multi-account-tool` 으로 점유 여부를 미리 확인.
+> 이미 사용 중이면 `package.json` 의 `name` 을 (`@your-scope/multi-account-tool` 같은) scoped name 으로 변경.
 
 ---
 
@@ -71,7 +71,7 @@ mkdir -p Formula
 ```bash
 # 1) sha256 계산
 VERSION=$(node -p "require('./package.json').version")
-curl -sL "https://registry.npmjs.org/multi-subscription-terminal/-/multi-subscription-terminal-${VERSION}.tgz" \
+curl -sL "https://registry.npmjs.org/multi-account-tool/-/multi-account-tool-${VERSION}.tgz" \
   | shasum -a 256
 
 # 2) Formula/mat.rb 의 url / sha256 갱신
@@ -79,7 +79,7 @@ curl -sL "https://registry.npmjs.org/multi-subscription-terminal/-/multi-subscri
 
 # 3) tap 저장소에 push
 cd ../homebrew-mat
-cp ../multi-subscription-terminal/Formula/mat.rb Formula/mat.rb
+cp ../multi-account-tool/Formula/mat.rb Formula/mat.rb
 # (Formula/mat.rb 의 url 과 sha256 을 실제 값으로 갱신)
 git add Formula/mat.rb
 git commit -m "Update mat to v${VERSION}"

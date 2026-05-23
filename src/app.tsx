@@ -163,7 +163,7 @@ export default function App() {
   return (
     <Box flexDirection="column" padding={1}>
       <Header
-        title="Multi-Subscription Terminal (mat)"
+        title="Multi-Account Tool (mat)"
         subtitle="여러 AI CLI 계정을 하나의 TUI 에서 전환"
       />
       {renderScreen(screen, state.data, dispatch, refresh, exit)}
