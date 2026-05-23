@@ -450,7 +450,11 @@ function validateRenameTo(v: string, oldName: string, existing: Set<string>): st
 // --- 액션 핸들러 ---
 
 async function declineFirstImport(dispatch: React.Dispatch<Action>): Promise<void> {
-  await markFirstImportPromptShown().catch(() => { /* best-effort */ });
+  try {
+    await markFirstImportPromptShown();
+  } catch (err) {
+    console.error('markFirstImportPromptShown 실패:', errorMessage(err));
+  }
   dispatch({ type: 'replace', screen: { kind: 'home' } });
 }
 

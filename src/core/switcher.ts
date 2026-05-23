@@ -3,8 +3,13 @@
  *
  * 안전 시퀀스 (switchProfile):
  *   1) 현재 활성 프로필로 라이브 자격증명 자동 스냅샷 (데이터 손실 방지)
- *   2) 새 프로필을 라이브 위치로 복원
+ *   2) 새 프로필을 라이브 위치로 복원 (부분 실패 시 백업으로 롤백)
  *   3) 활성 포인터 갱신 + updatedAt
+ *
+ * Multi-source CLI 의 부분 실패 보호 (restoreProfileToLive):
+ *  - preflight 로 모든 source 의 stored + 현재 라이브를 메모리에 수집
+ *  - 순차 적용 중 한 source 실패 시 이미 적용된 source 들을 라이브 백업으로 원복
+ *  - 결과: 라이브가 "절반은 새 프로필 / 절반은 옛 프로필" 인 split-state 방지
  */
 
 import { findCliDef } from './cli-defs.js';
@@ -21,7 +26,7 @@ import {
   writeProfileFile
 } from './profile-store.js';
 import { readSource, writeSource } from './sources.js';
-import type { CliDef } from './types.js';
+import type { CliDef, Source } from './types.js';
 
 export interface SnapshotResult {
   cliId: string;
@@ -68,9 +73,16 @@ export interface RestoreResult {
   missing: string[];
 }
 
+/** 복원 plan: source 별 stored (프로필) + liveBackup (롤백용 라이브 백업) */
+interface RestorePlan {
+  src: Source;
+  stored: string | null;
+  liveBackup: string | null;
+}
+
 /**
  * 프로필에 저장된 자격증명을 라이브 위치로 복원.
- * 프로필이 비어있어도 (missing 만 있어도) 에러는 던지지 않는다.
+ * 부분 실패 시 이미 적용된 source 들을 라이브 백업으로 원복 (best-effort).
  */
 export async function restoreProfileToLive(
   cliId: string,
@@ -82,16 +94,53 @@ export async function restoreProfileToLive(
   }
   const restored: string[] = [];
   const missing: string[] = [];
+
+  const plan = await collectRestorePlan(def, cliId, profileName, missing);
+  await applyRestorePlan(plan, restored);
+
+  return { cliId, profileName, restored, missing };
+}
+
+/** 복원 전 preflight: 모든 source 의 stored + 현재 라이브 값을 메모리에 수집. */
+async function collectRestorePlan(
+  def: CliDef,
+  cliId: string,
+  profileName: string,
+  missing: string[]
+): Promise<RestorePlan[]> {
+  const plan: RestorePlan[] = [];
   for (const src of def.sources) {
     const stored = await readProfileFile(cliId, profileName, src.saveAs);
     if (stored == null) {
       missing.push(src.saveAs);
+      plan.push({ src, stored: null, liveBackup: null });
       continue;
     }
-    await writeSource(src, stored);
-    restored.push(src.saveAs);
+    const liveBackup = await readSource(src);
+    plan.push({ src, stored, liveBackup });
   }
-  return { cliId, profileName, restored, missing };
+  return plan;
+}
+
+/** plan 을 순차 적용. 한 source 실패 시 이미 적용된 source 롤백 후 원본 에러 throw. */
+async function applyRestorePlan(plan: RestorePlan[], restored: string[]): Promise<void> {
+  const appliedIdx: number[] = [];
+  try {
+    for (let i = 0; i < plan.length; i++) {
+      const { src, stored } = plan[i];
+      if (stored == null) continue;
+      await writeSource(src, stored);
+      restored.push(src.saveAs);
+      appliedIdx.push(i);
+    }
+  } catch (err) {
+    for (const i of appliedIdx.reverse()) {
+      const { src, liveBackup } = plan[i];
+      if (liveBackup == null) continue;
+      await writeSource(src, liveBackup).catch(() => { /* best-effort */ });
+    }
+    throw err;
+  }
 }
 
 export interface SwitchResult {
@@ -104,7 +153,7 @@ export interface SwitchResult {
 /**
  * 안전한 프로필 전환:
  *  1) 기존 활성 프로필이 있다면 라이브 → 그 프로필로 캡처
- *  2) 대상 프로필을 라이브 위치로 복원
+ *  2) 대상 프로필을 라이브 위치로 복원 (부분 실패 롤백 포함)
  *  3) 활성 포인터 업데이트
  */
 export async function switchProfile(
