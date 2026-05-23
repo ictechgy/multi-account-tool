@@ -10,10 +10,11 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
+// PUBLISHING.md 는 fork 가이드용으로 placeholder 예시가 살아있어야 하고
+// publish 패키지(package.json files)에 포함되지도 않으므로 의도적으로 제외.
 const TARGET_FILES = [
   'package.json',
   'README.md',
-  'PUBLISHING.md',
   'LICENSE',
   'Formula/mat.rb'
 ];

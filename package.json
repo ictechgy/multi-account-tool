@@ -33,15 +33,15 @@
     "profile",
     "credentials"
   ],
-  "author": "YOUR-NAME <you@example.com>",
+  "author": "ictechgy <ictechgy@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/YOUR-USERNAME/multi-subscription-terminal#readme",
+  "homepage": "https://github.com/ictechgy/multi-subscription-terminal#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOUR-USERNAME/multi-subscription-terminal.git"
+    "url": "git+https://github.com/ictechgy/multi-subscription-terminal.git"
   },
   "bugs": {
-    "url": "https://github.com/YOUR-USERNAME/multi-subscription-terminal/issues"
+    "url": "https://github.com/ictechgy/multi-subscription-terminal/issues"
   },
   "dependencies": {
     "ink": "^5.0.1",

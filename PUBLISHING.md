@@ -6,12 +6,12 @@
 
 ## 사전 준비
 
-- [ ] GitHub 저장소: `YOUR-USERNAME/multi-subscription-terminal` 생성 후 push
-- [ ] Homebrew tap 저장소: `YOUR-USERNAME/homebrew-mat` 생성 (이름은 반드시 `homebrew-<탭명>` 형식)
+- [ ] GitHub 저장소: `ictechgy/multi-subscription-terminal` 생성 후 push
+- [ ] Homebrew tap 저장소: `ictechgy/homebrew-mat` 생성 (이름은 반드시 `homebrew-<탭명>` 형식)
 - [ ] npm 계정 로그인: `npm login`
-- [ ] `package.json` 의 `YOUR-USERNAME`, `YOUR-NAME` 자리표시자를 실제 값으로 일괄 치환
-- [ ] `LICENSE` 의 `YOUR-NAME` 도 치환
-- [ ] `README.md` 의 `YOUR-USERNAME` 도 치환
+- [ ] (fork 한 경우만) `package.json` 의 `YOUR-USERNAME`, `YOUR-NAME` 자리표시자를 실제 값으로 일괄 치환
+- [ ] (fork 한 경우만) `LICENSE` 의 `YOUR-NAME` 도 치환
+- [ ] (fork 한 경우만) `README.md` 의 `YOUR-USERNAME` 도 치환
 
 전체 일괄 치환 예시 (macOS):
 
@@ -58,8 +58,8 @@ mat
 ### 2.1 tap 저장소 준비 (최초 1회)
 
 ```bash
-gh repo create YOUR-USERNAME/homebrew-mat --public --description "Homebrew tap for mat"
-git clone https://github.com/YOUR-USERNAME/homebrew-mat.git
+gh repo create ictechgy/homebrew-mat --public --description "Homebrew tap for mat"
+git clone https://github.com/ictechgy/homebrew-mat.git
 cd homebrew-mat
 mkdir -p Formula
 ```
@@ -89,7 +89,7 @@ git push
 ### 2.3 사용자 설치
 
 ```bash
-brew tap YOUR-USERNAME/mat
+brew tap ictechgy/mat
 brew install mat
 mat
 ```

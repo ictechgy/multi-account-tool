@@ -55,7 +55,7 @@ npm install -g multi-subscription-terminal
 > 본 저장소를 GitHub에 올린 뒤 별도 tap 저장소(`homebrew-mat`)에 formula를 추가하면 사용 가능.
 
 ```bash
-brew tap YOUR-USERNAME/mat
+brew tap ictechgy/mat
 brew install mat
 ```
 
@@ -64,7 +64,7 @@ brew install mat
 ### 소스에서 빌드
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/multi-subscription-terminal.git
+git clone https://github.com/ictechgy/multi-subscription-terminal.git
 cd multi-subscription-terminal
 npm install
 npm run build
