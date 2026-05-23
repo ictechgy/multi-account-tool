@@ -2,7 +2,7 @@
  * 라이브 자격증명 감지: 각 CLI 의 source 들이 실제로 존재하는지 점검.
  * 첫 실행 시 "기존 자격증명을 default 프로필로 가져올까요?" UX 에 사용된다.
  *
- * 모든 source 확인은 Promise.all 로 병렬 처리한다 (read-only).
+ * CLI 사이와 같은 CLI 의 source 들 모두 Promise.all 로 병렬 점검한다 (read-only).
  */
 
 import { BUILTIN_CLI_DEFS } from './cli-defs.js';
@@ -27,11 +27,13 @@ export async function detectAll(): Promise<DetectionResult[]> {
 }
 
 async function detect(cli: CliDef): Promise<DetectionResult> {
+  const results = await Promise.all(
+    cli.sources.map(async (src) => ({ saveAs: src.saveAs, exists: await sourceExists(src) }))
+  );
   const present: string[] = [];
   const missing: string[] = [];
-  for (const src of cli.sources) {
-    const exists = await sourceExists(src);
-    (exists ? present : missing).push(src.saveAs);
+  for (const { saveAs, exists } of results) {
+    (exists ? present : missing).push(saveAs);
   }
   return {
     cli,

@@ -9,10 +9,16 @@ import SelectInput from 'ink-select-input';
 
 import type { CliDef, Profile } from '../core/types.js';
 
+/**
+ * HomeScreen 의 한 줄 항목. 한 CLI 의 상태 요약.
+ */
 export interface CliRow {
   cli: CliDef;
+  /** 활성 프로필 이름. 없으면 undefined. */
   active?: string;
+  /** 해당 CLI 의 저장된 프로필 개수. */
   profileCount: number;
+  /** 모든 source 가 라이브 위치에 존재하는가 (완전 자격증명). */
   hasLive: boolean;
 }
 
@@ -54,9 +60,14 @@ function formatCliLabel(it: CliRow): string {
   return `${it.cli.name.padEnd(22)}  ${active.padEnd(20)}  ${liveMark.padEnd(12)}  ${profMark}`;
 }
 
+/**
+ * ProfilesScreen 의 한 줄 프로필 항목.
+ */
 export interface ProfileItem {
   name: string;
+  /** profile-store 의 meta.json 내용. 없거나 손상 시 undefined. */
   meta?: Profile;
+  /** 활성 프로필 여부 (라벨/색상에 사용). */
   isActive: boolean;
 }
 

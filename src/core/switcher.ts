@@ -13,11 +13,7 @@
  */
 
 import { findCliDef } from './cli-defs.js';
-import {
-  clearActiveProfile,
-  getActiveProfile,
-  setActiveProfile
-} from './config.js';
+import { getActiveProfile, setActiveProfile } from './config.js';
 import {
   createProfile,
   profileExists,
@@ -171,11 +167,6 @@ export async function switchProfile(
   await setActiveProfile(cliId, toProfile);
   await touchProfile(cliId, toProfile);
   return { fromSnapshot, restore };
-}
-
-/** 활성 포인터만 제거 (라이브 자격증명은 건드리지 않음). */
-export async function clearActive(cliId: string): Promise<void> {
-  await clearActiveProfile(cliId);
 }
 
 function mustFindCli(cliId: string): CliDef {
