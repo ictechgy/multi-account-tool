@@ -16,7 +16,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": false,
-    "sourceMap": true,
+    "sourceMap": false,
     "types": ["node"]
   },
   "include": ["src/**/*"],
