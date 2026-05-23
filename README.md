@@ -127,10 +127,43 @@ TUI가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
 
 ## 보안
 
-- Claude 자격증명은 원래 macOS Keychain에 보관된다. 본 도구는 Keychain 항목을 읽고/쓸 때 시스템의 `security` CLI를 사용한다.
-- Keychain 항목을 새로 쓸 때 `-A` 플래그(모든 앱 허용)를 사용한다. 이는 같은 사용자로 실행되는 다른 앱이 해당 항목에 접근할 수 있음을 의미한다. (Claude Code의 기본 ACL은 Claude 바이너리에 한정.)
-- 자격증명 백업 파일은 `~/.multi-sub-terminal/profiles/` 아래 평문으로 저장된다 (OAuth 토큰).
-- **공용/공유 기기에서는 사용을 권장하지 않는다.**
+### 본질적 trade-off (수용 가능 범위)
+
+- **Keychain ACL 완화**: Claude 자격증명은 본래 macOS Keychain 에 Claude 바이너리만 접근 가능한 ACL 로 보관된다.
+  `mat` 은 swap 시 `security add-generic-password -A` 로 **동일 사용자의 모든 앱이 접근 가능**한
+  ACL 로 재생성한다 (그렇지 않으면 Claude 가 토큰을 못 읽는 회귀 발생).
+  결과: 같은 UID 로 실행되는 임의 프로세스(악성 npm postinstall 포함)가 토큰을 침묵 읽기 가능.
+  완화 옵션은 v0.2 (opt-in restrictive 모드 / `-T` 화이트리스트) 로 도입 예정.
+
+- **OAuth 토큰 평문 백업**: `~/.multi-sub-terminal/profiles/` 아래 평문 JSON 으로 저장된다.
+  파일 0600 / 디렉토리 0700 권한이지만 디스크 백업/스냅샷에 포함될 수 있다.
+  **Time Machine / iCloud / 클라우드 동기화 폴더에서 제외 권장**:
+
+  ```bash
+  xattr -w com.apple.metadata:com_apple_backup_excludeItem true ~/.multi-sub-terminal
+  ```
+
+- **명령행 인자 노출**: `security add-generic-password -w <value>` 가 평문 토큰을 `argv` 로 받는다
+  (`security` CLI 의 한계). `ps -ef` / BSM audit / EDR 로그에 일시적으로 노출된다.
+  **audit / EDR 활성 기업 환경에서는 사용 비권장.**
+
+### 기본 보호 장치
+
+- 모든 외부 명령은 `spawn(argv)` 만 사용 (셸 미경유 → injection 차단)
+- `security` 는 절대경로 `/usr/bin/security` 만 호출 (PATH shim 공격 방지)
+- 모든 파일 쓰기는 `.tmp → rename` (원자적), 실패 시 tmp 자동 정리
+- 모든 파일 `0600`, 디렉토리 `0700` 권한
+- 프로필 이름 검증: `[a-zA-Z0-9가-힣_.-]{1,40}` + NFC 정규화 + `.` / `..` / `/` / `\` / NUL 명시 차단 (경로 traversal 방지)
+- Keychain swap: 백업 → 정확 acct 매칭 delete → add. add 실패 시 자동 롤백 (자격증명 영구 손실 방지)
+- 에러 메시지는 JWT 패턴 및 30자+ base64-like 시퀀스를 redact (토큰 누설 방지)
+- 의존성: `npm audit` clean
+
+### 사용 비권장 환경
+
+- 공용 / 공유 워크스테이션
+- 다중 사용자 호스트
+- 관리형 / audit·EDR 활성 기업 기기
+- 클라우드 동기화 폴더 안의 home 디렉토리
 
 ---
 

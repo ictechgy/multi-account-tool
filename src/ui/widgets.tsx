@@ -1,9 +1,13 @@
 /**
  * 재사용 가능한 작은 UI 위젯들: Header, TextPrompt, Confirm, Busy, Message.
  * 모두 자기 자신의 키 입력만 처리하고, 외부에는 콜백만 노출한다.
+ *
+ * 멱등성: TextPrompt / Confirm / Message 는 useRef 가드로 onSubmit / onYes /
+ * onNo / onDismiss 가 정확히 한 번만 호출됨을 보장 (사용자가 Enter / Y 를
+ * 연속으로 두 번 누르더라도 액션이 중복 디스패치되지 않음).
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
@@ -39,7 +43,10 @@ interface TextPromptProps {
   validate?: (value: string) => string | null;
 }
 
-/** 한 줄 텍스트 입력 + 검증 + 도움말. Enter 제출, Esc 취소. */
+/**
+ * 한 줄 텍스트 입력 + 검증 + 도움말. Enter 제출, Esc 취소.
+ * submittedRef 가드로 onSubmit / onCancel 이 한 번만 호출됨을 보장.
+ */
 export function TextPrompt({
   label,
   placeholder,
@@ -50,18 +57,23 @@ export function TextPrompt({
 }: TextPromptProps) {
   const [value, setValue] = useState(initial);
   const [error, setError] = useState<string | null>(null);
+  const submittedRef = useRef(false);
 
   useInput((_input, key) => {
-    if (key.escape) onCancel();
+    if (!key.escape || submittedRef.current) return;
+    submittedRef.current = true;
+    onCancel();
   });
 
   function handleSubmit(v: string): void {
+    if (submittedRef.current) return;
     const trimmed = v.trim();
     const err = validate ? validate(trimmed) : null;
     if (err) {
       setError(err);
       return;
     }
+    submittedRef.current = true;
     onSubmit(trimmed);
   }
 
@@ -95,7 +107,10 @@ interface ConfirmProps {
   dangerous?: boolean;
 }
 
-/** Y/N 확인 다이얼로그. Enter = Y, Esc = N. */
+/**
+ * Y/N 확인 다이얼로그. Enter = Y, Esc = N.
+ * submittedRef 가드로 onYes / onNo 가 한 번만 호출됨을 보장 (race 방지).
+ */
 export function Confirm({
   title,
   body,
@@ -105,18 +120,18 @@ export function Confirm({
   noLabel = '아니오',
   dangerous = false
 }: ConfirmProps) {
+  const submittedRef = useRef(false);
+
+  function fire(fn: () => void): void {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    fn();
+  }
+
   useInput((input, key) => {
-    if (key.escape) {
-      onNo();
-      return;
-    }
-    if (input === 'y' || input === 'Y' || key.return) {
-      onYes();
-      return;
-    }
-    if (input === 'n' || input === 'N') {
-      onNo();
-    }
+    if (key.escape) { fire(onNo); return; }
+    if (input === 'y' || input === 'Y' || key.return) { fire(onYes); return; }
+    if (input === 'n' || input === 'N') { fire(onNo); }
   });
 
   return (
@@ -174,10 +189,16 @@ const TONE_ICON: Record<MessageProps['tone'], string> = {
   warning: '⚠'
 };
 
-/** 결과/에러 메시지 화면. Enter / Esc 로 해제. */
+/**
+ * 결과/에러 메시지 화면. Enter / Esc 로 해제.
+ * dismissedRef 가드로 onDismiss 가 한 번만 호출됨을 보장.
+ */
 export function Message({ tone, title, body, onDismiss }: MessageProps) {
+  const dismissedRef = useRef(false);
   useInput((_input, key) => {
-    if (key.return || key.escape) onDismiss();
+    if (!(key.return || key.escape) || dismissedRef.current) return;
+    dismissedRef.current = true;
+    onDismiss();
   });
   const color = TONE_COLOR[tone];
   const icon = TONE_ICON[tone];

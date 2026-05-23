@@ -13,13 +13,33 @@ import {
 } from './paths.js';
 import type { Profile } from './types.js';
 
-/** 프로필 이름 검증 규칙: 한글/영문/숫자/_-. 만 허용, 1~40자. */
+/** 한글/영문/숫자 + _-. 만, 1~40자. */
 const PROFILE_NAME_RE = /^[a-zA-Z0-9가-힣_.-]{1,40}$/;
 
-function validateProfileName(name: string): void {
+/** 디렉토리 traversal 위험으로 예약된 이름. */
+const PROFILE_NAME_RESERVED = new Set<string>(['.', '..']);
+
+/**
+ * 프로필 이름을 검증하고 NFC 정규화된 형태로 반환.
+ * 잘못된 입력은 throw.
+ *
+ * - NFC 정규화 (한글 NFD/NFC 우회로 동일 표기 두 프로필 생성 방지)
+ * - `.`, `..` 명시 차단 (경로 traversal)
+ * - `/`, `\`, NUL 명시 차단
+ * - PROFILE_NAME_RE 매칭
+ */
+export function validateProfileName(rawName: string): string {
+  const name = rawName.normalize('NFC');
+  if (PROFILE_NAME_RESERVED.has(name)) {
+    throw new Error('"." 또는 ".." 는 프로필 이름으로 사용할 수 없습니다.');
+  }
+  if (/[/\\\x00]/.test(name)) {
+    throw new Error('프로필 이름에 / \\ NUL 은 포함될 수 없습니다.');
+  }
   if (!PROFILE_NAME_RE.test(name)) {
     throw new Error('프로필 이름은 한글/영문/숫자/_-. 만 사용 가능하며 1~40자 이내여야 합니다.');
   }
+  return name;
 }
 
 /** 특정 CLI 의 프로필 이름 목록 (디렉토리 기반, 알파벳 순). */
@@ -49,8 +69,12 @@ async function writeMeta(meta: Profile): Promise<void> {
 }
 
 /** 프로필 생성 (디렉토리 + meta.json). 이미 존재하면 에러. */
-export async function createProfile(cliId: string, name: string, label?: string): Promise<Profile> {
-  validateProfileName(name);
+export async function createProfile(
+  cliId: string,
+  rawName: string,
+  label?: string
+): Promise<Profile> {
+  const name = validateProfileName(rawName);
   if (await profileExists(cliId, name)) {
     throw new Error(`이미 존재하는 프로필입니다: ${name}`);
   }
@@ -80,19 +104,33 @@ export async function touchProfile(cliId: string, name: string): Promise<void> {
   await writeMeta(meta);
 }
 
-/** 프로필 이름 변경 (디렉토리 rename + 메타 업데이트). */
-export async function renameProfile(cliId: string, oldName: string, newName: string): Promise<void> {
-  validateProfileName(newName);
+/**
+ * 프로필 이름 변경 (디렉토리 rename + 메타 업데이트).
+ * meta 업데이트 실패 시 디렉토리 rename 을 원래대로 롤백 (best-effort).
+ */
+export async function renameProfile(
+  cliId: string,
+  oldName: string,
+  rawNewName: string
+): Promise<void> {
+  const newName = validateProfileName(rawNewName);
   if (oldName === newName) return;
   if (await profileExists(cliId, newName)) {
     throw new Error(`이미 존재하는 프로필 이름입니다: ${newName}`);
   }
   await fs.rename(profileDir(cliId, oldName), profileDir(cliId, newName));
-  const meta = await readMeta(cliId, newName);
-  if (meta) {
-    meta.name = newName;
-    meta.updatedAt = new Date().toISOString();
-    await writeMeta(meta);
+  try {
+    const meta = await readMeta(cliId, newName);
+    if (meta) {
+      meta.name = newName;
+      meta.updatedAt = new Date().toISOString();
+      await writeMeta(meta);
+    }
+  } catch (err) {
+    await fs.rename(profileDir(cliId, newName), profileDir(cliId, oldName)).catch(() => {
+      /* 롤백 실패는 무시 — 원본 에러를 호출자에게 전파 */
+    });
+    throw err;
   }
 }
 
