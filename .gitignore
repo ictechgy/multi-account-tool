@@ -38,6 +38,20 @@ Thumbs.db
 .om*/
 .serena/
 .claude/
+.cursor/
+.copilot/
+.aider*
+.goose/
+.crush/
+.amp/
+
+# lterm 세션/runtime (ROADMAP #3 통합 시 발생 가능)
+.lterm/
+.lterm-*
+
+# mat 자체 dev fixture (ROADMAP #2 세션 격리 테스트용)
+.mat-sessions/
+fixtures/profiles/
 
 # 테스트 커버리지
 coverage/
