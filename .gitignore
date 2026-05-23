@@ -27,13 +27,17 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+.npmrc
 
-# 런타임 / 캐시
+# 런타임 / 캐시 / atomic write 임시 파일
 .cache/
 .tmp/
+*.tmp
 
-# OMC 작업 산출물 (이 저장소에서는 추적하지 않음)
-.omc/
+# AI / IDE 로컬 산출물 (이 저장소에서는 추적하지 않음)
+.om*/
+.serena/
+.claude/
 
 # 테스트 커버리지
 coverage/
