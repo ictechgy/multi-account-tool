@@ -155,16 +155,28 @@ describe('profile-store', () => {
     it('meta 없으면 null', async () => {
       expect(await readMeta('codex', 'no-such')).toBeNull();
     });
+
+    it('corrupt JSON 은 throw (ENOENT 외 에러 전파, runtime validation 부재 명시)', async () => {
+      // production readMeta 의 catch 는 ENOENT 만 swallow → SyntaxError 가 그대로 전파.
+      // 또한 runtime validation 없이 JSON.parse 결과를 `as Profile` 로 cast — 잘못된 shape
+      // 는 type-level 에서만 차단되고 디스크가 망가지면 caller 가 unsafe object 받음.
+      await fs.mkdir(profileDir('codex', 'corrupt'), { recursive: true, mode: 0o700 });
+      await fs.writeFile(profileMetaPath('codex', 'corrupt'), 'not-json{{{');
+      await expect(readMeta('codex', 'corrupt')).rejects.toThrow();
+    });
   });
 
   describe('touchProfile', () => {
-    it('정상: updatedAt 만 갱신 (createdAt 보존)', async () => {
+    it('정상: updatedAt 만 갱신 (createdAt 보존, strict-greater 시간 검증)', async () => {
       const created = await createProfile('codex', 'work');
-      await new Promise((r) => setTimeout(r, 5));  // ISO 초 단위 변경 위해 잠시 대기
+      // ISO 8601 millisecond 정밀도. 20ms 대기로 OS scheduling 변동 흡수.
+      await new Promise((r) => setTimeout(r, 20));
       await touchProfile('codex', 'work');
       const meta = await readMeta('codex', 'work');
       expect(meta?.createdAt).toBe(created.createdAt);
-      expect(meta!.updatedAt >= created.updatedAt).toBe(true);
+      // strict-greater: `>=` 면 동일 timestamp 도 통과해 "갱신됐다" 의도가 약함.
+      expect(new Date(meta!.updatedAt).getTime())
+        .toBeGreaterThan(new Date(created.updatedAt).getTime());
     });
 
     it('meta 없으면 no-op (throw 안 함)', async () => {
@@ -173,18 +185,19 @@ describe('profile-store', () => {
   });
 
   describe('renameProfile', () => {
-    it('정상: 디렉토리 rename + meta.name + updatedAt 갱신', async () => {
-      const created = await createProfile('codex', 'old', 'L');
-      await new Promise((r) => setTimeout(r, 5));
-      await renameProfile('codex', 'old', 'new');
+    it('정상: 디렉토리 rename + meta.name + updatedAt 갱신 (strict-greater 시간 검증)', async () => {
+      const created = await createProfile('codex', 'old-profile', 'Legacy Label');
+      await new Promise((r) => setTimeout(r, 20));
+      await renameProfile('codex', 'old-profile', 'new-profile');
 
-      expect(existsSync(profileDir('codex', 'old'))).toBe(false);
-      expect(existsSync(profileDir('codex', 'new'))).toBe(true);
-      const meta = await readMeta('codex', 'new');
-      expect(meta?.name).toBe('new');
+      expect(existsSync(profileDir('codex', 'old-profile'))).toBe(false);
+      expect(existsSync(profileDir('codex', 'new-profile'))).toBe(true);
+      const meta = await readMeta('codex', 'new-profile');
+      expect(meta?.name).toBe('new-profile');
       expect(meta?.createdAt).toBe(created.createdAt);
-      expect(meta!.updatedAt >= created.updatedAt).toBe(true);
-      expect(meta?.label).toBe('L');
+      expect(new Date(meta!.updatedAt).getTime())
+        .toBeGreaterThan(new Date(created.updatedAt).getTime());
+      expect(meta?.label).toBe('Legacy Label');
     });
 
     it('같은 이름 → no-op (rename 안 함, 디스크 무변경)', async () => {
@@ -222,6 +235,21 @@ describe('profile-store', () => {
     it('없는 프로필 삭제 → 에러 없음 (force: true)', async () => {
       await expect(deleteProfile('codex', 'never-existed')).resolves.toBeUndefined();
     });
+
+    it('중첩 디렉토리 + 다수 파일이 있어도 recursive 로 모두 삭제', async () => {
+      // production fs.rm(recursive: true) 동작 검증 — 단순 single file 보다 강한 보장.
+      const target = profileDir('codex', 'multi');
+      await fs.mkdir(target, { recursive: true, mode: 0o700 });
+      await fs.writeFile(join(target, 'auth.json'), '{}');
+      await fs.writeFile(join(target, 'meta.json'), '{}');
+      const subdir = join(target, 'sub');
+      await fs.mkdir(subdir);
+      await fs.writeFile(join(subdir, 'nested-data.json'), '{}');
+      await fs.writeFile(join(subdir, 'other.json'), '{}');
+
+      await deleteProfile('codex', 'multi');
+      expect(existsSync(target)).toBe(false);
+    });
   });
 
   describe('readProfileFile / writeProfileFile', () => {
@@ -231,11 +259,14 @@ describe('profile-store', () => {
       expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('{"token":"abc"}');
     });
 
-    it('writeProfileFile: 프로필 디렉토리 없어도 자동 생성', async () => {
+    it('writeProfileFile: 프로필 디렉토리 없어도 자동 생성 (권한 0o700)', async () => {
       // createProfile 미호출 — writeProfileFile 가 디렉토리 만들어야.
       await writeProfileFile('codex', 'auto-created', 'data.json', '{}');
       expect(existsSync(profileDir('codex', 'auto-created'))).toBe(true);
       expect(await readProfileFile('codex', 'auto-created', 'data.json')).toBe('{}');
+      // auto-create 분기도 createProfile 과 동일하게 0o700 보안 권한 보장.
+      const dirStat = await fs.stat(profileDir('codex', 'auto-created'));
+      expect(dirStat.mode & 0o777).toBe(0o700);
     });
 
     it('writeProfileFile: 파일 권한 0o600 (atomic write 위임)', async () => {
