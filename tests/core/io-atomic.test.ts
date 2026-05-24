@@ -78,4 +78,56 @@ describe('writeFileAtomic', () => {
     await writeFileAtomic(target, 'C');
     expect(await fs.readFile(target, 'utf8')).toBe('C');
   });
+
+  it('target 이 디렉토리여서 쓰기가 실패해도 .tmp 가 정리된다', async () => {
+    // target=dir 이면 fs.rename(tmp, target) 가 EISDIR/ENOTDIR/ENOTEMPTY 등으로 실패.
+    // platform/filesystem 마다 정확한 errno 가 다를 수 있어 화이트리스트로 검증한다.
+    // 핵심 invariant 는 "어느 단계든 실패하면 .tmp 가 dir 에 남지 않음" — 후속 atomic
+    // 호출이 잔존 .tmp 의 EEXIST 로 깨지지 않게 보장.
+    const target = join(dir, 'isdir');
+    await fs.mkdir(target);
+
+    let caughtCode: string | undefined;
+    try {
+      await writeFileAtomic(target, 'data');
+      expect.fail('write 가 실패했어야 함');
+    } catch (err) {
+      caughtCode = (err as NodeJS.ErrnoException).code;
+    }
+    expect(['EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'EPERM']).toContain(caughtCode);
+
+    const entries = await fs.readdir(dir);
+    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('동시 쓰기는 race 결과와 무관하게 .tmp 잔존 없음 (intentional all-rejected 도 수용)', async () => {
+    // io-atomic.ts contract (모듈 상단 주석): 호출자가 같은 path 에 동시 호출하지 않도록
+    // 보장해야 한다. 본 테스트는 그 contract 를 위배했을 때의 안전망 검증:
+    //   - 호출 A 가 open(tmp) 성공 후 호출 B 가 open(tmp) → EEXIST → B 가 catch 에서 rm(tmp)
+    //   - 호출 A 의 rename 이 ENOENT 로 실패. 모든 호출이 실패할 수 있음 (intentional contract 위배 결과).
+    //
+    // 의도된 invariant 두 가지를 모두 명시 assert (silent pass 차단):
+    //  1) settled 결과의 모든 rejection 은 알려진 EEXIST/ENOENT 계열 — unexpected 에러 없음
+    //  2) 결과와 무관하게 .tmp 는 dir 에 남지 않음
+    const target = join(dir, 'concurrent.json');
+    const settled = await Promise.allSettled([
+      writeFileAtomic(target, 'longer-payload-A'),
+      writeFileAtomic(target, 'longer-payload-B'),
+      writeFileAtomic(target, 'longer-payload-C')
+    ]);
+
+    for (const r of settled) {
+      if (r.status === 'rejected') {
+        const code = (r.reason as NodeJS.ErrnoException).code;
+        expect(['EEXIST', 'ENOENT', 'EPERM']).toContain(code);
+      }
+    }
+    const fileExists = await fs.access(target).then(() => true).catch(() => false);
+    if (fileExists) {
+      const content = await fs.readFile(target, 'utf8');
+      expect(['longer-payload-A', 'longer-payload-B', 'longer-payload-C']).toContain(content);
+    }
+    const entries = await fs.readdir(dir);
+    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+  });
 });

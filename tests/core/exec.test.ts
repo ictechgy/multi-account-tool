@@ -21,6 +21,8 @@ import { EventEmitter } from 'node:events';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { CliDef } from '../../src/core/types.js';
+
 vi.mock('../../src/core/cli-defs.js', () => ({
   findCliDef: vi.fn()
 }));
@@ -72,6 +74,19 @@ const mockSpawn = vi.mocked(spawn);
 type FakeSwitch = SwitchResult;
 const FAKE_SWITCH = undefined as unknown as FakeSwitch;
 
+/**
+ * findCliDef fixture — CliDef contract 의 모든 필드 채움 + `satisfies` 로 type-check.
+ * CliDef 에 필수 필드가 추가되면 컴파일 단계에서 즉시 감지.
+ * runExec 가 실제로는 .id 만 읽지만, contract drift 차단 목적.
+ * sources: [] 는 의도적 — runExec 가 sources 를 직접 참조하지 않으므로 빈 배열로 충분
+ * (source-level 검증은 switcher/sources 모듈의 별도 테스트에서 다룬다).
+ */
+const FAKE_CLI_DEF = {
+  id: 'codex',
+  name: 'Codex (fixture)',
+  sources: []
+} satisfies CliDef;
+
 /** runExec 가 사용하는 ChildProcess 필드만 흉내내는 fake. 다른 필드는 의도적으로 없음. */
 type FakeChildProcess = EventEmitter & {
   exitCode: number | null;
@@ -79,7 +94,13 @@ type FakeChildProcess = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
 };
 
-/** child_process.spawn 결과 흉내. exit/error 를 비동기로 emit. opts 비면 emit 없음 (수동 제어용). */
+/**
+ * child_process.spawn 결과 흉내. exit/error 를 비동기로 emit. opts 비면 emit 없음 (수동 제어용).
+ * 실제 Node ChildProcess 는 exit 직후 close 도 emit 하므로 fake 도 동일하게 emit —
+ * runExec 가 향후 close 를 듣게 되어도 hang 없이 동작.
+ * 한계: 같은 setImmediate 안에서 exit/close 둘 다 emit 하므로 두 이벤트 사이의 microtask
+ * 간격은 모방하지 못한다 (production 은 stdio 정리 후 close 가 더 늦게 emit).
+ */
 function fakeChild(opts: {
   exit?: { code: number | null; signal: NodeJS.Signals | null };
   error?: Error;
@@ -91,7 +112,12 @@ function fakeChild(opts: {
   if (opts.exit || opts.error) {
     setImmediate(() => {
       if (opts.error) ee.emit('error', opts.error);
-      else if (opts.exit) ee.emit('exit', opts.exit.code, opts.exit.signal);
+      else if (opts.exit) {
+        ee.emit('exit', opts.exit.code, opts.exit.signal);
+        // 실제 ChildProcess lifecycle: exit → close (stdio 닫힘 후).
+        // 같은 tick 에 emit 해도 runExec 의 listener (exit only) 가 먼저 settle 한다.
+        ee.emit('close', opts.exit.code, opts.exit.signal);
+      }
     });
   }
   return ee;
@@ -111,7 +137,7 @@ describe('runExec', () => {
     vi.clearAllMocks();
     release = vi.fn().mockResolvedValue(undefined);
     mockAcquire.mockResolvedValue(release as () => Promise<void>);
-    mockFindCliDef.mockReturnValue({ id: 'codex' } as ReturnType<typeof findCliDef>);
+    mockFindCliDef.mockReturnValue(FAKE_CLI_DEF);
     mockGetActive.mockResolvedValue('default');
     mockProfileExists.mockResolvedValue(true);
     mockSwitch.mockResolvedValue(FAKE_SWITCH);
@@ -262,25 +288,52 @@ describe('runExec', () => {
     expect(release).not.toHaveBeenCalled();
   });
 
-  it('lock release 는 restore 이후 실행된다 (call ordering)', async () => {
+  it('lock release 완료 이후, forwarder dispose 가 호출된다 (listener identity + async timing)', async () => {
+    // 두 가지 false-positive 위험을 모두 차단:
+    //  1) 'removeListener' meta-event 가 다른 코드의 SIGINT listener 제거에 반응할 위험 →
+    //     'newListener' 로 runExec 가 등록한 함수를 capture, removeListener 시 identity 비교.
+    //  2) release 가 sync push 만 하면 production 의 await 누락 회귀를 못 잡을 위험 →
+    //     release 가 'release:start' → setImmediate yield → 'release:done' 마커 push.
+    //     await release() 가 정확히 동작해야만 dispose 가 release:done 다음에 온다.
     const callOrder: string[] = [];
     mockSwitch.mockImplementation(async (_cli, profile) => {
       callOrder.push(`switch:${profile}`);
       return FAKE_SWITCH;
     });
     release.mockImplementation(async () => {
-      callOrder.push('release');
+      callOrder.push('release:start');
+      await new Promise((r) => setImmediate(r));
+      callOrder.push('release:done');
     });
     mockSpawn.mockImplementation((() => {
       callOrder.push('spawn');
       return fakeChild({ exit: { code: 0, signal: null } });
     }) as never);
 
-    await runExec({
-      cliId: 'codex', profileName: 'work', command: 'echo', args: []
-    });
+    // runExec 가 SIGINT 에 등록한 정확한 forwarder handler 만 capture (identity check).
+    let forwarder: ((...args: unknown[]) => void) | undefined;
+    const onAdd = (event: string | symbol, handler: (...args: unknown[]) => void) => {
+      if (event === 'SIGINT' && !forwarder) forwarder = handler;
+    };
+    const onRemove = (event: string | symbol, handler: (...args: unknown[]) => void) => {
+      if (event === 'SIGINT' && handler === forwarder) callOrder.push('dispose:SIGINT');
+    };
+    process.on('newListener', onAdd);
+    process.on('removeListener', onRemove);
 
-    expect(callOrder).toEqual(['switch:work', 'spawn', 'switch:default', 'release']);
+    try {
+      await runExec({
+        cliId: 'codex', profileName: 'work', command: 'echo', args: []
+      });
+      expect(callOrder).toEqual([
+        'switch:work', 'spawn', 'switch:default',
+        'release:start', 'release:done',
+        'dispose:SIGINT'
+      ]);
+    } finally {
+      process.removeListener('newListener', onAdd);
+      process.removeListener('removeListener', onRemove);
+    }
   });
 
   // ---- Quad-review 합의 후 보강된 케이스들 ----

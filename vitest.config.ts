@@ -5,8 +5,11 @@ import { defineConfig } from 'vitest/config';
 // - pool 'forks': tests/helpers/tmp-home.ts 가 process.env.HOME 을 전역 변경하므로
 //   각 테스트 파일을 별도 자식 프로세스에 격리해 동시 worker 의 HOME race 를 회피한다.
 //   threads pool 로 바뀌면 같은 process 내 worker 가 HOME 을 덮어써 침묵 회귀 위험.
-// - testTimeout 10s: lockfile 의 in-flight write wait (200ms) + 동시 acquire / fs 작업의
-//   최악 사례에 충분한 margin. CI 부하 환경까지 고려한 값으로 200ms 의 약 50배는 의도된 여유.
+// - testTimeout 10s: lockfile.acquireCliLock 의 INFLIGHT_WRITE_WAIT_MS=200ms 가
+//   동시 N=5 race + corrupt info.json recovery + stale lock 회수까지 차례로 발생하면
+//   실측 최악 약 1.5s. CI 의 부하 변동(특히 ubuntu-latest runner 의 디스크 I/O 변동) 을
+//   고려한 보수치. 200ms 단일 wait 의 50배 마진이라 일견 과하지만, race+timer+fs 결합
+//   시나리오 누적 + GHA runner 의 cold-start 캐싱 미스를 감안한 의도된 안전 마진.
 // - coverage v8: src/core 만 측정 (cli.tsx 의 ink UI 렌더 경로는 별도 e2e/smoke 영역).
 export default defineConfig({
   test: {
