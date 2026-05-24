@@ -13,7 +13,8 @@ import {
   profileDir,
   profileFilePath,
   profileMetaPath,
-  profilesDir
+  profilesDir,
+  validateCliId
 } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
@@ -43,6 +44,35 @@ describe('paths', () => {
 
     it('locksDir 는 dataDir/locks 이다', () => {
       expect(locksDir()).toBe(join(tmp.home, '.multi-account-tool', 'locks'));
+    });
+  });
+
+  describe('validateCliId — 공용 cliId path-safety 가드 (cliLockPath 와 동일 규칙)', () => {
+    // validateCliId 는 cliLockPath 의 SAFE_CLI_ID_RE 가드를 공개 헬퍼로 export 한 것.
+    // profile-store 등 다른 호출자가 동일 가드를 재사용하기 위함.
+    // cliLockPath 의 it.each 와 같은 케이스를 통과/거부해야 한다 (회귀 일치 보장).
+    it.each([
+      ['codex', '기본 cli'],
+      ['claude', '하이픈 없는 영문'],
+      ['my-cli', '하이픈 포함'],
+      ['cli_2', '언더스코어 + 숫자'],
+      ['a', '1글자 최소 경계'],
+      ['a'.repeat(32), '32자 상한 경계']
+    ])('정상 cliId 통과 → 동일 값 반환: %s (%s)', (id, _reason) => {
+      expect(validateCliId(id)).toBe(id);
+    });
+
+    it.each([
+      ['../etc/passwd', 'path traversal'],
+      ['foo/bar', 'subdirectory separator'],
+      ['', '빈 문자열'],
+      ['1cli', '숫자 시작'],
+      ['cli.id', '점 포함'],
+      ['cli space', '공백'],
+      ['cli\x00null', 'NUL 바이트'],
+      ['a'.repeat(33), '33자 (상한 +1)']
+    ])('위험한 cliId throw: %s (%s)', (id, _reason) => {
+      expect(() => validateCliId(id)).toThrow(/path segment/);
     });
   });
 

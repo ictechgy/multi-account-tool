@@ -51,18 +51,30 @@ export function locksDir(): string {
 /**
  * filesystem 의 path segment 로 안전한 cli id 형식.
  * 첫 글자는 영문, 이후 영문/숫자/`_`/`-` 만, 1~32자.
- * `cliLockPath` 의 defense-in-depth 검증에 사용 (호출자가 `findCliDef` 로 이미 검증해도 한번 더).
+ * 모든 cli 경로 생성 헬퍼의 defense-in-depth 검증에 사용.
  */
 const SAFE_CLI_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
+
+/**
+ * cliId 가 path segment 로 안전한지 검증.
+ * traversal 가능 형식 (`..`, `/`, `\`, NUL) 또는 regex 미매치면 throw.
+ *
+ * profile-store / locks / 그 외 cli 별 디렉토리 생성 호출자가 공통으로 사용 —
+ * findCliDef 결과를 신뢰할 수 있을 때도 defense-in-depth 로 한 번 더 검증한다.
+ */
+export function validateCliId(cliId: string): string {
+  if (!SAFE_CLI_ID_RE.test(cliId)) {
+    throw new Error(`cliId 가 path segment 로 사용 불가한 형식입니다: ${cliId}`);
+  }
+  return cliId;
+}
 
 /**
  * 특정 CLI 의 lock 디렉토리 경로 (mkdir-lock 패턴).
  * cliId 가 path traversal 가능 형식이면 throw — `locks/` 바깥으로 escape 방지.
  */
 export function cliLockPath(cliId: string): string {
-  if (!SAFE_CLI_ID_RE.test(cliId)) {
-    throw new Error(`cliId 가 path segment 로 사용 불가한 형식입니다: ${cliId}`);
-  }
+  validateCliId(cliId);
   return join(locksDir(), `${cliId}.lock`);
 }
 

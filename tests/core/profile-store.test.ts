@@ -23,6 +23,7 @@ import {
   readProfileFile,
   renameProfile,
   touchProfile,
+  validateProfileFileName,
   validateProfileName,
   writeProfileFile
 } from '../../src/core/profile-store.js';
@@ -277,6 +278,153 @@ describe('profile-store', () => {
 
     it('readProfileFile: 없으면 null (ENOENT swallow)', async () => {
       expect(await readProfileFile('codex', 'work', 'never.json')).toBeNull();
+    });
+  });
+
+  describe('validateProfileFileName', () => {
+    it.each([
+      ['auth.json', '기본 saveAs'],
+      ['credentials.json', 'claude saveAs'],
+      ['oauth_creds.json', 'gemini saveAs'],
+      ['file-1.json', '하이픈 + 숫자'],
+      ['a', '1자 최소 경계'],
+      ['a'.repeat(64), '64자 상한 경계'],
+      ['.hiddenfile', '선행 점 (Unix dotfile, 화이트리스트 매치)'],
+      ['file.tar.gz', '복수 점']
+    ])('정상 파일명 통과 → 동일 값 반환: %s (%s)', (fileName, _reason) => {
+      expect(validateProfileFileName(fileName)).toBe(fileName);
+    });
+
+    it.each([
+      ['.', '예약된 단일 점'],
+      ['..', '예약된 더블 점'],
+      ['../escape.json', 'parent traversal'],
+      ['../../etc/passwd', '다중 traversal'],
+      ['sub/file.json', 'forward slash (subdirectory)'],
+      ['sub\\file.json', 'backslash'],
+      ['file\x00.json', 'NUL 바이트'],
+      ['', '빈 문자열'],
+      ['a'.repeat(65), '65자 (상한 +1)'],
+      ['file name.json', '공백'],
+      ['file*.json', 'glob 별표'],
+      ['file?.json', 'glob 물음표'],
+      ['한글파일.json', '한글 (saveAs 는 영문/숫자만 — profile name 보다 엄격)'],
+      [':file.json', '콜론']
+    ])('위험한 파일명 throw: %s (%s)', (fileName, _reason) => {
+      expect(() => validateProfileFileName(fileName)).toThrow();
+    });
+  });
+
+  describe('cliId 검증 (defense-in-depth: 모든 public 함수)', () => {
+    // 모든 public 함수가 validateCliId 를 내부 호출 — 호출자의 신뢰성과 무관하게
+    // path traversal cliId (`../escape`) 가 들어와도 절대 파일시스템 mutation 발생 안 함.
+    const BAD_CLI = '../escape';
+
+    it('listProfiles: cliId traversal → throw, fs 접근 안 함', async () => {
+      await expect(listProfiles(BAD_CLI)).rejects.toThrow(/path segment/);
+    });
+
+    it('profileExists: cliId traversal → throw', async () => {
+      await expect(profileExists(BAD_CLI, 'work')).rejects.toThrow(/path segment/);
+    });
+
+    it('createProfile: cliId traversal → throw, 디렉토리 미생성', async () => {
+      await expect(createProfile(BAD_CLI, 'work')).rejects.toThrow(/path segment/);
+      expect(existsSync(join(tmp.home, '.multi-account-tool', 'profiles', '..', 'escape'))).toBe(false);
+    });
+
+    it('readMeta: cliId traversal → throw', async () => {
+      await expect(readMeta(BAD_CLI, 'work')).rejects.toThrow(/path segment/);
+    });
+
+    it('touchProfile: cliId traversal → throw', async () => {
+      await expect(touchProfile(BAD_CLI, 'work')).rejects.toThrow(/path segment/);
+    });
+
+    it('renameProfile: cliId traversal → throw, 원본 보존', async () => {
+      await createProfile('codex', 'src');
+      await expect(renameProfile(BAD_CLI, 'src', 'dst')).rejects.toThrow(/path segment/);
+      expect(existsSync(profileDir('codex', 'src'))).toBe(true);
+    });
+
+    it('deleteProfile: cliId traversal → throw, fs.rm 호출 안 함', async () => {
+      await expect(deleteProfile(BAD_CLI, 'work')).rejects.toThrow(/path segment/);
+    });
+
+    it('readProfileFile: cliId traversal → throw', async () => {
+      await expect(readProfileFile(BAD_CLI, 'work', 'auth.json')).rejects.toThrow(/path segment/);
+    });
+
+    it('writeProfileFile: cliId traversal → throw, 파일 미생성', async () => {
+      await expect(writeProfileFile(BAD_CLI, 'work', 'auth.json', '{}')).rejects.toThrow(/path segment/);
+    });
+  });
+
+  describe('profile name 검증 강제 (회귀 가드: 모든 public 함수가 validateProfileName 호출)', () => {
+    // 이전 버전: createProfile/renameProfile 만 new name 검증, 나머지는 무방비.
+    // 새 버전: 모든 함수가 input name 을 검증 → traversal name 으로 escape 불가.
+    const BAD_NAMES = ['../escape', '../../etc/passwd', 'foo/bar', 'foo\\bar', '.', '..', 'foo\x00bar', ''];
+
+    it.each(BAD_NAMES)('profileExists("%s") → throw (디렉토리 escape 안 함)', async (badName) => {
+      await expect(profileExists('codex', badName)).rejects.toThrow();
+    });
+
+    it.each(BAD_NAMES)('readMeta("%s") → throw', async (badName) => {
+      await expect(readMeta('codex', badName)).rejects.toThrow();
+    });
+
+    it.each(BAD_NAMES)('touchProfile("%s") → throw', async (badName) => {
+      await expect(touchProfile('codex', badName)).rejects.toThrow();
+    });
+
+    it.each(BAD_NAMES)('deleteProfile("%s") → throw (catastrophic fs.rm 차단)', async (badName) => {
+      // 가장 위험한 경로: deleteProfile 은 { recursive: true, force: true } 이므로
+      // 검증 없이 `../../etc` 가 들어오면 사용자 데이터 영구 손실. 절대 mutation 발생 안 함.
+      await expect(deleteProfile('codex', badName)).rejects.toThrow();
+    });
+
+    it.each(BAD_NAMES)('renameProfile(oldName="%s") → throw, 디스크 무변경', async (badName) => {
+      await expect(renameProfile('codex', badName, 'valid')).rejects.toThrow();
+    });
+
+    it.each(BAD_NAMES)('readProfileFile("%s") → throw', async (badName) => {
+      await expect(readProfileFile('codex', badName, 'auth.json')).rejects.toThrow();
+    });
+
+    it.each(BAD_NAMES)('writeProfileFile("%s") → throw, 파일 미생성', async (badName) => {
+      await expect(writeProfileFile('codex', badName, 'auth.json', '{}')).rejects.toThrow();
+    });
+
+    it('catastrophic 시나리오: deleteProfile("../codex") 로 형제 cli 디렉토리 삭제 시도 — 차단되어야', async () => {
+      await createProfile('codex', 'sibling');
+      const sibling = profileDir('codex', 'sibling');
+      expect(existsSync(sibling)).toBe(true);
+      // claude/sibling 디렉토리는 없지만, name='../codex/sibling' 이 통과하면 codex/sibling 이 삭제됨.
+      await expect(deleteProfile('claude', '../codex/sibling')).rejects.toThrow();
+      // 형제 cli 의 프로필이 보존되었는지 확인 (회귀 시 false 가 됨).
+      expect(existsSync(sibling)).toBe(true);
+    });
+  });
+
+  describe('fileName 검증 강제 (회귀 가드: readProfileFile / writeProfileFile)', () => {
+    const BAD_FILES = ['../escape.json', '../../etc/passwd', 'sub/file.json', '.', '..', 'file\x00.json', ''];
+
+    it.each(BAD_FILES)('readProfileFile fileName="%s" → throw', async (badFile) => {
+      await createProfile('codex', 'work');
+      await expect(readProfileFile('codex', 'work', badFile)).rejects.toThrow();
+    });
+
+    it.each(BAD_FILES)('writeProfileFile fileName="%s" → throw, 파일 미생성', async (badFile) => {
+      await createProfile('codex', 'work');
+      await expect(writeProfileFile('codex', 'work', badFile, 'leaked')).rejects.toThrow();
+      // 프로필 디렉토리 외부에 파일이 생성되지 않았는지 확인 (escape 차단 검증).
+      expect(existsSync(join(profileDir('codex', 'work'), '..', 'escape.json'))).toBe(false);
+    });
+
+    it('catastrophic 시나리오: writeProfileFile fileName="../../../tmp/leaked" 차단', async () => {
+      await createProfile('codex', 'work');
+      await expect(writeProfileFile('codex', 'work', '../../../tmp/leaked', 'secret'))
+        .rejects.toThrow();
     });
   });
 });

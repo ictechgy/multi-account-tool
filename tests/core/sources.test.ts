@@ -274,27 +274,21 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(deleteCall[1]).toContain('bob');
     });
 
-    it('기존 있음 but account 못 잡음: console.warn + service-only delete', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* 캡처 */ });
-      try {
-        mockSpawn
-          .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }) as never)
-          // account 조회 실패 (코드 0 인데 acct 파싱 안 됨)
-          .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct line here' }) as never)
-          // delete (service-only)
-          .mockReturnValueOnce(fakeProc({ code: 0 }) as never)
-          // add
-          .mockReturnValueOnce(fakeProc({ code: 0 }) as never);
+    it('기존 있음 but account 못 잡음: throw (data loss 방지) — 어떤 mutation 도 발생 안 함', async () => {
+      // 회귀 가드: 이전 버전은 console.warn 후 service-only delete 를 수행해
+      // 동일 service 의 타 항목까지 영구 삭제될 위험이 있었다. 새 정책은 throw 로
+      // swap 자체를 거부 — Keychain 의 acct 메타가 비정상이면 사용자가 수동 정리해야 함.
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }) as never)
+        // account 조회: code 0 이지만 acct 라인 없음 → keychainGetAccount = null
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct line here' }) as never);
 
-        const stored: KeychainStored = { value: 'new', account: 'alice' };
-        await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
+      const stored: KeychainStored = { value: 'new', account: 'alice' };
+      await expect(writeSource(KEYCHAIN_SRC, JSON.stringify(stored)))
+        .rejects.toThrow(/account 를 파악할 수 없어 안전 swap 을 거부/);
 
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/account 를 파악할 수 없어/));
-        const deleteCall = mockSpawn.mock.calls[2];
-        expect(deleteCall[1]).not.toContain('-a');
-      } finally {
-        warnSpy.mockRestore();
-      }
+      // delete / add 가 호출되지 않았어야 한다 (정확히 2번 = value 조회 + account 조회).
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
     });
 
     it('add 실패 시 backup 으로 롤백 + 원본 에러 throw', async () => {
