@@ -2,7 +2,7 @@
  * cli-defs 단위 테스트.
  *
  * 두 가지 영역 검증:
- *  1) BUILTIN_CLI_DEFS 의 구성 (3 CLI, source 정확성, saveAs invariant) +
+ *  1) BUILTIN_CLI_DEFS 의 구성 (4 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
  *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
@@ -14,14 +14,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
-  it('claude/codex/gemini 3개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini']);
+  it('claude/codex/gemini/aider 4개 정의를 정확히 포함', () => {
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider']);
   });
 
   it.each([
     ['claude', 'Claude Code'],
     ['codex', 'Codex CLI'],
-    ['gemini', 'Gemini / Antigravity']
+    ['gemini', 'Gemini / Antigravity'],
+    ['aider', 'Aider']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
@@ -47,6 +48,13 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
+  it('aider source 는 1개 file (~/.aider.conf.yml)', () => {
+    const aider = BUILTIN_CLI_DEFS.find((c) => c.id === 'aider');
+    expect(aider?.sources).toEqual([
+      { type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }
+    ]);
+  });
+
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
     for (const cli of BUILTIN_CLI_DEFS) {
       for (const src of cli.sources) {
@@ -57,7 +65,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(['claude', 'codex', 'gemini', 'aider'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);

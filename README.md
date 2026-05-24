@@ -31,6 +31,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | Claude Code | macOS Keychain (`Claude Code-credentials`) | Keychain entry swap |
 | Codex CLI | `~/.codex/auth.json` | File swap |
 | Gemini / Antigravity | `~/.gemini/oauth_creds.json`, `google_accounts.json` | File swap |
+| Aider | `~/.aider.conf.yml` | File swap |
 
 ### Switch flow (lossless)
 
@@ -189,19 +190,19 @@ Two options.
 
 ### 1. User plugin — no code change required (recommended for personal use)
 
-Drop a JSON file at `~/.multi-account-tool/cli-defs/<id>.json`:
+Drop a JSON file at `~/.multi-account-tool/cli-defs/<id>.json`. Example template for an arbitrary CLI:
 
 ```json
 {
-  "id": "aider",
-  "name": "Aider",
+  "id": "my-cli",
+  "name": "My CLI",
   "sources": [
-    { "type": "file", "path": "~/.aider.conf.yml", "saveAs": "aider.yml" }
+    { "type": "file", "path": "~/.config/my-cli/credentials.json", "saveAs": "credentials.json" }
   ]
 }
 ```
 
-mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`) cannot be overridden — id collision is rejected.
+mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`) cannot be overridden — id collision is rejected.
 
 Field rules:
 - `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).
@@ -238,8 +239,9 @@ See [CHANGELOG.md](./CHANGELOG.md) for release history and notable changes (Keep
 See [ROADMAP.md](./ROADMAP.md) for v0.2+ plans:
 
 - ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3: see *Adding a new CLI* above)
+- ~~Aider built-in support~~ ✅ (v0.3: built-in alongside claude/codex/gemini)
 - Session-scoped credential isolation (different account per `lterm` session)
-- More built-in CLIs (Aider, Cursor Agent, Goose, Copilot CLI, …)
+- More built-in CLIs (Cursor Agent, Goose, Copilot CLI, …)
 - `lterm claude --profile <name>` shim wrapper
 
 ---

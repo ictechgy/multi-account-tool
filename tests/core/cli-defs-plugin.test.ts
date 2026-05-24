@@ -49,13 +49,14 @@ async function writePluginRaw(name: string, raw: string): Promise<void> {
 
 describe('validateCliDefRaw (순수 validator)', () => {
   it('정상 입력 → def 반환, error 없음', () => {
+    // 비-builtin id 로 plugin 예시 검증 (aider 는 v0.3 부터 builtin).
     const r = validateCliDefRaw({
-      id: 'aider',
-      name: 'Aider',
-      sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }]
+      id: 'my-cli',
+      name: 'My CLI',
+      sources: [{ type: 'file', path: '~/.config/my-cli/credentials.json', saveAs: 'credentials.json' }]
     });
     expect(r.error).toBeUndefined();
-    expect(r.def?.id).toBe('aider');
+    expect(r.def?.id).toBe('my-cli');
     expect(r.def?.sources).toHaveLength(1);
   });
 
@@ -124,14 +125,15 @@ describe('loadUserCliDefs — fs 통합', () => {
   });
 
   it('정상 plugin 1개 → defs 에 포함', async () => {
-    await writePlugin('aider.json', {
-      id: 'aider',
-      name: 'Aider',
-      sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }]
+    // 비-builtin id 사용 (aider 는 v0.3 부터 builtin — getAllCliDefs 단계에서 충돌 처리).
+    await writePlugin('my-cli.json', {
+      id: 'my-cli',
+      name: 'My CLI',
+      sources: [{ type: 'file', path: '~/.config/my-cli/credentials.json', saveAs: 'credentials.json' }]
     });
     const r = loadUserCliDefs();
     expect(r.defs).toHaveLength(1);
-    expect(r.defs[0].id).toBe('aider');
+    expect(r.defs[0].id).toBe('my-cli');
     expect(r.warnings).toEqual([]);
   });
 
@@ -201,12 +203,25 @@ describe('getAllCliDefs / findCliDef — builtin + plugin 통합', () => {
   });
 
   it('plugin 추가 시 builtin 뒤에 append', async () => {
-    await writePlugin('aider.json', {
-      id: 'aider', name: 'Aider', sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }]
+    // 비-builtin id 사용 (aider 는 v0.3 부터 builtin — 본 테스트는 plugin append 동작 검증).
+    await writePlugin('my-cli.json', {
+      id: 'my-cli', name: 'My CLI', sources: [{ type: 'file', path: '~/.config/my-cli/cred.json', saveAs: 'cred.json' }]
     });
     const defs = getAllCliDefs();
-    expect(defs.map(d => d.id)).toEqual([...BUILTIN_CLI_DEFS.map(d => d.id), 'aider']);
-    expect(findCliDef('aider')?.name).toBe('Aider');
+    expect(defs.map(d => d.id)).toEqual([...BUILTIN_CLI_DEFS.map(d => d.id), 'my-cli']);
+    expect(findCliDef('my-cli')?.name).toBe('My CLI');
+  });
+
+  it('aider plugin 도 builtin 과 충돌 → 무시 + warning (v0.3 회귀 가드)', async () => {
+    // v0.3 부터 aider 는 builtin. plugin 의 동일 id 는 skip 되어야 (builtin 우선).
+    await writePlugin('aider.json', {
+      id: 'aider', name: 'Custom Aider', sources: [{ type: 'file', path: '/custom-aider', saveAs: 'c.yml' }]
+    });
+    const defs = getAllCliDefs();
+    expect(defs.filter(d => d.id === 'aider')).toHaveLength(1);  // builtin 만
+    expect(findCliDef('aider')?.name).toBe('Aider');  // builtin name 유지 (Custom Aider 가 아니어야)
+    const warnings = getCliDefsWarnings();
+    expect(warnings.some(w => w.includes('aider') && w.includes('builtin'))).toBe(true);
   });
 
   it('id 가 builtin 과 충돌 → plugin 무시 + warning', async () => {
@@ -224,17 +239,17 @@ describe('getAllCliDefs / findCliDef — builtin + plugin 통합', () => {
   it('module-level 캐시: 두 번째 호출은 fs 재읽지 않음 (resetCliDefCache 로만 갱신)', async () => {
     // 1) 처음 호출: plugin 없음 → builtin 만
     const first = getAllCliDefs();
-    expect(first.map(d => d.id)).toEqual(['claude', 'codex', 'gemini']);
+    expect(first.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider']);
 
     // 2) 캐시 후 plugin 추가 → getAllCliDefs 는 여전히 캐시 반환
     await writePlugin('late.json', { id: 'late', name: 'Late', sources: [{ type: 'file', path: '/l', saveAs: 'l.json' }] });
     const second = getAllCliDefs();
-    expect(second.map(d => d.id)).toEqual(['claude', 'codex', 'gemini']);  // 캐시
+    expect(second.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider']);  // 캐시
 
     // 3) resetCliDefCache 후 호출 → 새로 로드
     resetCliDefCache();
     const third = getAllCliDefs();
-    expect(third.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'late']);
+    expect(third.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'late']);
   });
 
   it('잘못된 plugin warning 이 getCliDefsWarnings 에 surface 됨', async () => {

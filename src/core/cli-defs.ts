@@ -49,6 +49,15 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
       { type: 'file', path: '~/.gemini/oauth_creds.json', saveAs: 'oauth_creds.json' },
       { type: 'file', path: '~/.gemini/google_accounts.json', saveAs: 'google_accounts.json' }
     ]
+  },
+  {
+    // Aider 는 `~/.aider.conf.yml` 에 모델 + API key 를 텍스트로 보관 (env var 사용자는 별도 워크플로 필요).
+    // 빌트인 추가 가치는 "기본 제공" 편의성 — plugin JSON 작성 없이 즉시 사용 가능.
+    id: 'aider',
+    name: 'Aider',
+    sources: [
+      { type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }
+    ]
   }
 ];
 
