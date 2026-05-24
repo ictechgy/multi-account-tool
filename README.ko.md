@@ -229,6 +229,10 @@ mat 과 함께 배포되어야 할 커뮤니티 CLI 용. PR 환영.
 
 ---
 
+## 변경 이력
+
+릴리스 이력과 주요 변경 사항은 [CHANGELOG.md](./CHANGELOG.md) 참고 (Keep a Changelog 형식, Semantic Versioning).
+
 ## 로드맵
 
 v0.2+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:

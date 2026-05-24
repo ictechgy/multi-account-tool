@@ -1,0 +1,85 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **CLI def plugin loader** (`#14`) — `~/.multi-account-tool/cli-defs/*.json` 사용자 정의 CLI 지원. 신규 모듈 `src/core/cli-defs-plugin.ts` (`validateCliDefRaw` + `loadUserCliDefs`). 빌트인과 plugin id 충돌 시 빌트인 우선. 잘못된 plugin 은 warn + skip (mat 본체 정상 동작). `getAllCliDefs()` / `getCliDefsWarnings()` / `resetCliDefCache()` 헬퍼.
+- **`describeError` helper** (`#16`) — TUI/CLI 에서 에러를 일관된 사용자 메시지로 surface. `KeychainAccountMissingError` 인 경우 raw service 명을 별도 라인으로 노출해 plugin/redact 우회 식별 가능. `cli.tsx` top-level + `app.tsx` `runBusyAction` catch 두 곳 적용.
+- **`ValidationError` class** (`#17`) — `extends UsageError` 로 exitCode 2 자동 상속, `field` 명시. 입력 검증 실패 시 어떤 필드가 문제인지 호출자가 식별 가능.
+
+### Changed
+
+- **profile-store path traversal 자체 검증** (`#10`) — 9개 public 함수 모두 `cliId` / `name` / `fileName` 을 진입 즉시 자체 검증. `paths.ts` 의 path constructor 들도 동일 검증 수행 — 직접 호출 우회로도 traversal 불가능 (defense-in-depth).
+- **NFC 디스크 표기 단일화** (`#10`) — 모든 프로필 디렉토리는 NFC 정규화된 이름으로 디스크 저장. NFD 입력도 `validateProfileName` 이 NFC 로 변환 후 path 구성. APFS (macOS 기본) 는 NFC 보존 → 사실상 무영향. HFS+/외부 fs 의 NFD 디렉토리만 수동 마이그레이션 필요.
+- **validators 모듈 분리** (`#17`) — `paths.ts` (173줄, mixed-concern) → 87줄 (-93). validator 코드를 신규 `src/core/validators.ts` 로 추출. `paths.ts` re-export 로 호출자/테스트 변경 0건 (후방 호환).
+- **migrate.ts `LEGACY_DATA_DIR` constant → function** (`#5`) — testability refactor. import 시점 HOME fix → 호출 시점 HOME 평가. production 동작 동일, 테스트의 setupTmpHome 격리와 정합.
+
+### Fixed
+
+- **path traversal 방어 강화** (`#10`) — 이전 버전: `createProfile` / `renameProfile` 만 new name 검증, 나머지는 무방비. 새 버전: 모든 public 함수 + path constructor 가 입력 검증 → `../escape` / `foo/bar` / NUL 바이트 / 예약명 모두 차단.
+- **keychain account 미파악 시 swap 거부** (`#10`) — `KeychainAccountMissingError` 도입. 이전: 미파악 시 무시하고 진행 → data loss 위험. 새 버전: throw + 호출자 분기 + `describeError` 로 안전한 사용자 메시지.
+- **validator typeof string guard** (`#15`) — `validateCliId` / `validateProfileName` / `validateProfileFileName` 모두 runtime typeof 가드. Symbol / BigInt / Function 등 비-string 입력 거부 회귀 가드.
+
+### Security
+
+- **3-round quad-review 합의 13건 통합** (`#10`) — Claude + Codex + Antigravity + Forge 4트랙 8 워커가 traversal 가족 + keychain account 미파악을 종합 검토. R1 APPROVE 20% → R2 60% → R3 **100% 만장일치 수렴**.
+
+### CI / Infrastructure
+
+- **GitHub Actions CI** (`#3`) — macOS + ubuntu × node 20/22 = 4 조합 자동 검증. typecheck → vitest → build → check-publish. smoke-test 는 `continue-on-error` (CI 에 자격증명 없음). script injection 방지 (`github.event.*` 미사용, `env:` 추출).
+- **npm Trusted Publishing (OIDC)** (`#3`) — tag `v*` push → `publish.yml` 이 OIDC 로 npm publish + `--provenance`. 토큰 관리 불필요. provenance attestation 자동 첨부.
+- **Homebrew tap 자동 갱신** (`#13`) — `publish.yml` 에 `homebrew-tap` job 추가. `HOMEBREW_TAP_TOKEN` 시크릿 설정 시 동작 (Fine-grained PAT, homebrew-mat repo Contents=Read/Write). 미설정 시 skip notice 출력 후 정상 종료.
+
+### Internal
+
+- **테스트 인프라** (`#2`) — vitest 4 + `@vitest/coverage-v8` 도입. `tests/helpers/tmp-home.ts` 가 `$HOME` 격리. `vitest.config.ts` `pool: 'forks'` (concurrent worker HOME race 회피).
+- **모듈별 단위 테스트 보강** (`#4`~`#9`) — quad-review 4트랙 합의 발견을 PR 마다 통합. 테스트 67 → 214 누적.
+  - `#4`: quad-review single 발견 9건 (M/O/P/Q/R/V/W/L/K).
+  - `#5`: cli-defs + detector + migrate (+26).
+  - `#6`: config 모듈 (+19, atomic 0o600 + symlink scope).
+  - `#7`: profile-store CRUD (+43, NFC/NFD round-trip).
+  - `#8`: switcher snapshot/restore + 좀비 가드 (+15).
+  - `#9`: sources file/keychain dual-branch + backup/rollback (+23).
+- **PR #10 보안 강화 테스트** (`#10`) — 214 → 331 (+117). 9 public 함수 × 위험 입력 + path constructor 매트릭스.
+- **테스트 정리** (`#12`) — `as never` cast ~28건 제거 (helper 1곳에 격리). `mockSpawn.mock.calls[N]` 매직 인덱스 5건 → `findSpawnCallsByArg` helper.
+- **회귀 가드 보강** (`#15`, `#18`) — BAD_TYPES 매트릭스 확장 (Symbol/BigInt/Function), redact-before-truncate 순서 명문화 (`#15`), renameProfile rollback (corrupt meta.json 통합) + switcher 3-source 'tri-cli' fake def 주입 reverse-order rollback 검증 (`#18`).
+- **R3 quad-review LOW 정리** (`#11`) — JSDoc 4 + test 견고성 2.
+
+## [0.2.0] - 2026-05-23
+
+### Added
+
+- **`mat exec <cli> <profile> -- <cmd...>`** (`#1`) — swap → 실행 → 종료 시 자동 원복. 시간 격리. lterm 즉시 통합 가능. Exit code: 0 성공 / 1 unexpected / 2 UsageError / 74 restore failed / 75 LockHeldError / 128+N 자식 시그널.
+- **CLI 별 lockfile** (`src/core/lockfile.ts`) — mkdir-lock + owner token + atomic rename stale recovery. cli 별로 한 번에 하나의 `mat exec` 만 허용 (자격증명 손상 방지). POSIX mkdir atomicity 의존 (NFS 미지원, macOS/Linux 로컬 fs 전용).
+- **Signal forwarder** — runExec 진입~finally hoist 로 race 4개 (등록 직전/swap 중/restore 중/release 중) 동시 해결.
+- **`ExecResult.restoreError`** — cleanup 실패와 child 결과 분리 + 별도 exit code (74).
+- **v0.1 데이터 디렉토리 자동 마이그레이션** (`src/core/migrate.ts`) — `~/.multi-sub-terminal/` → `~/.multi-account-tool/`. `multi-subscription-terminal` → `multi-account-tool` 이름 변경 (8310cf7).
+- **TUI** — 여러 AI CLI (Claude Code / Codex / Gemini) 계정을 하나의 도구로 빠르게 전환. 프로필 단위 자격증명 보관 + 한 키스트로크 swap.
+- **자격증명 source** — macOS Keychain (`security` CLI) + 파일 기반 모두 지원. backup → 정확 acct delete → add. add 실패 시 자동 롤백.
+- **`writeFileAtomic` 공용 추출** — O_EXCL + O_NOFOLLOW + 0600 + rename. 모든 보안 쓰기 통일.
+- **빌트인 CLI def**: `claude`, `codex`, `gemini`.
+
+### Fixed
+
+- **quad-review P0 4건** (`63e0dce`) — `mat exec` 의 lockfile race / restore error / cliId 검증 / signal scope.
+
+### Security
+
+- macOS Keychain 사용 시 `security` CLI `-w` argv 노출 (의도적 trade-off, README 명시).
+- `-A` ACL 완화 (의도적 trade-off).
+- 평문 backup (의도적 trade-off, age 암호화는 ROADMAP).
+
+### Distribution
+
+- **npm**: `multi-account-tool@0.2.0` — `npm install -g multi-account-tool`.
+- **Homebrew**: `ictechgy/homebrew-mat` tap (mat.rb @ 0.2.0) — `brew tap ictechgy/mat && brew install mat`.
+- **GitHub**: https://github.com/ictechgy/multi-account-tool
+
+[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ictechgy/multi-account-tool/releases/tag/v0.2.0

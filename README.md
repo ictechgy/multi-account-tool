@@ -229,6 +229,10 @@ Use this for community-shared CLIs that should ship with mat. PRs welcome.
 
 ---
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for release history and notable changes (Keep a Changelog format, Semantic Versioning).
+
 ## Roadmap
 
 See [ROADMAP.md](./ROADMAP.md) for v0.2+ plans:
