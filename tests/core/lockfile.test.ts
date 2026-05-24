@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, promises as fs } from 'node:fs';
+import { dirname, join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import { cliLockPath } from '../../src/core/paths.js';
@@ -135,6 +135,77 @@ describe('lockfile.acquireCliLock', () => {
     await expect(acquireCliLock('../../etc/passwd', 'p')).rejects.toThrow(/path segment/);
   });
 
+  it('readInfo: pid=0 경계값 → isProcessAlive `pid <= 0` 분기 (line 156) + startedAt/profile 부재 시 빈 문자열 fallback (lines 145-146)', async () => {
+    // pid=0 은 typeof number ✓ 통과해 readInfo 가 LockBody 반환. isProcessAlive 의 pid<=0
+    // boundary 분기 (line 156 short-circuit RHS) 가 true → dead 로 판정 → handleConflict 가 stale 회수.
+    // startedAt/profile 필드 부재 → readInfo 의 typeof guard ternary (lines 145-146) 의 else 분기 실행.
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({ pid: 0, token: 'phantom-tok' })  // startedAt/profile 의도적 누락
+    );
+
+    const release = await acquireCliLock('codex', 'recovered');
+    const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(info.profile).toBe('recovered');
+    expect(info.pid).toBe(process.pid);
+    await release();
+  });
+
+  it('info.json shape 불일치 (pid/token 타입 mismatch) → readInfo typeof guard 가 null 반환, stale 회수', async () => {
+    // 기존 '빈 파일' 케이스는 JSON.parse 자체에서 throw → catch 분기 (line 149).
+    // 본 케이스는 유효 JSON 이지만 pid/token 타입이 잘못된 경우 → readInfo 의 typeof guard
+    // (line 142) 가 null 반환하는 분기 회귀 가드. 결과적으로 stale 로 회수되어야.
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({ pid: 'wrong-type', token: 123 })
+    );
+
+    const release = await acquireCliLock('codex', 'recovered');
+    const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(info.profile).toBe('recovered');
+    expect(info.pid).toBe(process.pid);
+    await release();
+  });
+
+  it('tryAcquire mkdir EACCES → 원본 에러 전파 (line 96 throw err 분기, non-EEXIST)', async () => {
+    // locks/ 부모를 0o500 (no write) 로 만들면 mkdir(lockDir) 가 EACCES throw.
+    // EEXIST 와 다른 코드이므로 tryAcquire catch 의 `code === 'EEXIST'` 분기를 통과하고
+    // line 96 의 `throw err` 가 작동해야 한다. handleConflict 까지 도달하지 않는다.
+    const lockDir = cliLockPath('codex');
+    const locksDir = dirname(lockDir);
+    // lockDir 자체는 사전 생성 안 함 — mkdir 가 EACCES 로 실패하도록.
+    await fs.mkdir(locksDir, { recursive: true, mode: 0o700 });
+    await fs.chmod(locksDir, 0o500);
+    try {
+      await expect(acquireCliLock('codex', 'p')).rejects.toThrow();
+      // 핵심 회귀 가드: lockDir 가 만들어지지 않았어야 (mkdir 실패).
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      await fs.chmod(locksDir, 0o700);
+    }
+  });
+
+  it('handleConflict rename EACCES → 원본 에러 전파 (line 128 throw err 분기)', async () => {
+    // locks/ 디렉토리를 0o500 (read+exec, no write) 로 만들면 rename(lockDir, stalePath) 가
+    // EACCES throw (rename 은 parent 의 write 권한 필요). 이는 ENOENT/ENOTEMPTY/EEXIST 외 경로
+    // 의 회귀 가드 — handleConflict catch 의 throw 분기 (line 128).
+    const lockDir = cliLockPath('codex');
+    const locksDir = dirname(lockDir);
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    // info.json 없음 → readInfo null → rename 단계까지 도달.
+    await fs.chmod(locksDir, 0o500);
+    try {
+      await expect(acquireCliLock('codex', 'p')).rejects.toThrow();
+    } finally {
+      // tmp 정리 가능하도록 권한 복원.
+      await fs.chmod(locksDir, 0o700);
+    }
+  });
+
   it('단일 프로세스 내 연속 acquire 는 정확히 하나만 성공한다 (cross-process race 는 별도 시나리오)', async () => {
     // single-process 한계 명시: V8 single-thread microtask 큐 특성상 사실상 직렬이라
     // OS-level mkdir race 자체는 검증하지 못한다. 다만 "두 번째 acquire 가 LockHeldError" 라는
@@ -153,5 +224,147 @@ describe('lockfile.acquireCliLock', () => {
     }
     const release = (fulfilled[0] as PromiseFulfilledResult<() => Promise<void>>).value;
     await release();
+  });
+});
+
+/**
+ * 도달 어려운 race / 권한 / writeFileAtomic 실패 분기를 vi.doMock + dynamic import 격리로 검증.
+ * migrate.test.ts 의 renameSync 실패 분기 패턴과 동일 스타일 — resetModules 로 mock 효과를 명시.
+ *
+ * 단일 프로세스 결정론적 시나리오로 cross-process fork barrier 없이도 lockfile 의
+ * 에러 처리 경로를 회귀 가드 (lines 85-87, 104-105, 125-128 등).
+ */
+describe('lockfile.acquireCliLock — doMock 시나리오', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    vi.doUnmock('../../src/core/io-atomic.js');
+    vi.doUnmock('node:fs');
+    vi.resetModules();
+    await tmp.cleanup();
+  });
+
+  it('tryAcquire: writeFileAtomic 실패 → 자기 lock 디렉토리 정리 + 원본 에러 전파 (lines 104-105)', async () => {
+    // mkdir(lockDir) 은 성공하지만 직후 writeFileAtomic 가 throw 하는 시나리오 (디스크 풀 등).
+    // 우리가 만든 빈 디렉토리를 다른 프로세스가 stale 로 오인하지 않도록 cleanup 후 throw.
+    const writeMock = vi.fn(async () => { throw new Error('simulated info write fail'); });
+    vi.doMock('../../src/core/io-atomic.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/core/io-atomic.js')>(
+        '../../src/core/io-atomic.js'
+      );
+      return { ...actual, writeFileAtomic: writeMock };
+    });
+
+    const { acquireCliLock: acl } = await import('../../src/core/lockfile.js');
+    const { cliLockPath: lp } = await import('../../src/core/paths.js');
+
+    await expect(acl('codex', 'doomed')).rejects.toThrow(/simulated info write fail/);
+    expect(writeMock).toHaveBeenCalledOnce();
+    // 핵심 회귀 가드: 자기가 만든 lock dir 이 cleanup 되어야.
+    expect(existsSync(lp('codex'))).toBe(false);
+  });
+
+  it('handleConflict rename ENOENT → 양보 (swallow), 2회 모두 회수 실패 시 "반복된 race" throw (lines 126, 85, 87)', async () => {
+    // ENOENT: 다른 회수자가 우리보다 먼저 lockDir 을 가져간 시나리오.
+    // 양 attempt 모두 handleConflict 가 swallow → fall through → fallback line 85 readInfo 는 null
+    // (rename mock 이라 실제 lockDir 은 그대로지만 info.json 없음) → line 87 throw.
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    // info.json 없음 → readInfo null → handleConflict 가 rename 시도.
+
+    const renameMock = vi.fn(async () => {
+      const err = new Error('ENOENT: simulated other recoverer won') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
+    vi.doMock('node:fs', async () => {
+      const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+      return {
+        ...actual,
+        promises: { ...actual.promises, rename: renameMock }
+      };
+    });
+
+    const { acquireCliLock: acl } = await import('../../src/core/lockfile.js');
+
+    await expect(acl('codex', 'p')).rejects.toThrow(/반복된 race/);
+    // 2회 시도 → rename 도 2번 호출.
+    expect(renameMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('handleConflict rename ENOTEMPTY → 양보 (swallow, line 127)', async () => {
+    // 매우 드문 POSIX 케이스: stale-suffix 충돌. 동일하게 swallow → fallback "반복된 race".
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+
+    const renameMock = vi.fn(async () => {
+      const err = new Error('ENOTEMPTY: simulated stale-suffix conflict') as NodeJS.ErrnoException;
+      err.code = 'ENOTEMPTY';
+      throw err;
+    });
+    vi.doMock('node:fs', async () => {
+      const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+      return {
+        ...actual,
+        promises: { ...actual.promises, rename: renameMock }
+      };
+    });
+
+    const { acquireCliLock: acl } = await import('../../src/core/lockfile.js');
+
+    await expect(acl('codex', 'p')).rejects.toThrow(/반복된 race/);
+    expect(renameMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('fallback: handleConflict 가 죽은 pid info 를 재시도 없이 양보하면 readInfo 가 holder 반환 → LockHeldError throw (line 86)', async () => {
+    // 정밀 시나리오: info 가 dead pid 라서 handleConflict 는 rename 시도하지만 mock 이 ENOENT 양보.
+    // 양 attempt fall through → fallback line 85 의 readInfo 는 같은 info (유효 LockBody) 반환
+    // → line 86 의 `if (holder) throw new LockHeldError(...)` 분기 회귀 가드.
+    const deadPid = (() => {
+      const ghost = spawnSync(process.execPath, ['-e', '']);
+      if (ghost.pid === undefined) throw new Error('ghost spawn fail');
+      return ghost.pid;
+    })();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'phantom',
+        token: 'ghost-token'
+      })
+    );
+
+    const renameMock = vi.fn(async () => {
+      const err = new Error('ENOENT') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    });
+    vi.doMock('node:fs', async () => {
+      const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+      return {
+        ...actual,
+        promises: { ...actual.promises, rename: renameMock }
+      };
+    });
+
+    const { acquireCliLock: acl, LockHeldError: LHE } = await import('../../src/core/lockfile.js');
+
+    try {
+      await acl('codex', 'p');
+      expect.fail('LockHeldError 가 던져졌어야 함');
+    } catch (err) {
+      expect(err).toBeInstanceOf(LHE);
+      expect((err as InstanceType<typeof LHE>).cliId).toBe('codex');
+      expect((err as InstanceType<typeof LHE>).holder.pid).toBe(deadPid);
+      expect((err as InstanceType<typeof LHE>).holder.profile).toBe('phantom');
+    }
   });
 });
