@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **회귀 가드 보강** (`#15`, `#18`) — BAD_TYPES 매트릭스 확장 (Symbol/BigInt/Function), redact-before-truncate 순서 명문화 (`#15`), renameProfile rollback (corrupt meta.json 통합) + switcher 3-source 'tri-cli' fake def 주입 reverse-order rollback 검증 (`#18`).
 - **R3 quad-review LOW 정리** (`#11`) — JSDoc 4 + test 견고성 2.
 
-## [0.2.0] - 2026-05-23
+## [0.2.0] - 2026-05-24
 
 ### Added
 
