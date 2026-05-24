@@ -1,0 +1,61 @@
+name: Publish to npm
+
+# tag `v*` push 시 npm 에 Trusted Publishing (OIDC) 방식으로 publish.
+# 사전조건:
+#   1. npmjs.com 의 multi-account-tool 패키지 settings 에서 Trusted Publisher 추가
+#      - GitHub repo: ictechgy/multi-account-tool
+#      - workflow path: .github/workflows/publish.yml
+#      - environment: (지정 안 함)
+#   2. 별도 NPM_TOKEN secret 불요 (OIDC token 으로 자동 교환).
+#
+# 보안:
+#   github.ref_name 은 env: 로 추출 후 quoted shell 변수로만 사용 — script injection 방지.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  # OIDC token 발급에 필수.
+  id-token: write
+
+jobs:
+  publish:
+    name: npm publish (provenance)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # registry-url 가 설정되면 setup-node 가 .npmrc 를 자동 구성해 OIDC 인증 가능.
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package version
+        # github.ref_name 은 사용자가 tag 이름으로 정한 값 — env 로 빼고 quoted 사용.
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${TAG_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag ($TAG_VERSION) 와 package.json version ($PKG_VERSION) 불일치"
+            exit 1
+          fi
+          echo "tag=$TAG_VERSION, package=$PKG_VERSION ✓"
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish readiness check
+        run: node scripts/check-publish-readiness.mjs
+
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public

@@ -4,7 +4,7 @@
   "description": "여러 AI CLI(Claude Code, Codex, Gemini/Antigravity) 계정을 하나의 TUI에서 전환해 사용하는 도구",
   "type": "module",
   "bin": {
-    "mat": "./dist/cli.js"
+    "mat": "dist/cli.js"
   },
   "files": [
     "dist",

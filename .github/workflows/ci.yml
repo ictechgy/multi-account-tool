@@ -1,0 +1,58 @@
+name: CI
+
+# Pull request / main push 시 빌드·테스트·체크 자동 실행.
+# Trusted Publishing (publish.yml) 의 사전 검증 역할도 겸한다.
+# 본 workflow 는 github.event.* untrusted input 을 run: 에서 사용하지 않는다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} / node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json 의 os 제한과 동일 — darwin + linux 만.
+        os: [macos-latest, ubuntu-latest]
+        # dev/test 는 node 20+ 필요 (vitest 4 → rolldown → node:util styleText).
+        # 빌드된 dist 자체는 engines.node='>=18.17.0' 으로 사용자에겐 18 OK,
+        # 다만 vitest 4 가 18 미지원이라 CI 에선 18 stage skip. node 18 은 2025-04 EOL.
+        node: ['20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish readiness check
+        run: node scripts/check-publish-readiness.mjs
+
+      # smoke-test 는 실제 사용자 keychain/profile 의존이라 CI 환경에서는
+      # missing 으로 나옴. core 모듈 load 검증만 의미가 있어 옵션 step 으로 유지.
+      - name: Smoke test (core module load)
+        run: node scripts/smoke-test.mjs
+        continue-on-error: true

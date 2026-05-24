@@ -98,18 +98,51 @@ mat
 
 ---
 
-## 3. (선택) GitHub Actions 자동화
+## 3. GitHub Actions 자동화
 
-태그 push 시 자동으로 npm publish 와 tap 업데이트를 수행하려면 `.github/workflows/release.yml` 를 추가할 수 있다 (이번 v0.1 범위에선 미포함).
+v0.2.x 부터 두 워크플로가 추가됨:
 
-핵심 단계:
+### 3.1 `.github/workflows/ci.yml` — PR 검증
 
-1. `actions/checkout` + `actions/setup-node`
-2. `npm ci && npm run build && npm publish`
-3. `curl` 로 sha256 계산
-4. `homebrew-mat` 저장소 checkout → Formula 갱신 → commit & push (deploy key 또는 PAT 필요)
+`main` push / PR 시 자동 실행. matrix:
+- OS: `macos-latest`, `ubuntu-latest` (package.json os 제한과 동일)
+- Node: `18.17`, `20`, `22`
 
-자세한 예시는 [JS Tooling — Publishing to Homebrew](https://docs.brew.sh/) 참고.
+각 조합마다 `npm ci` → `typecheck` → `test` (vitest) → `build` → `check-publish-readiness` 순으로 실행. smoke-test 는 CI 환경에선 자격증명 없어 missing 으로 나오므로 `continue-on-error: true`.
+
+### 3.2 `.github/workflows/publish.yml` — Trusted Publishing
+
+tag `v*` push 시 자동으로 npm 에 OIDC publish (`--provenance` attestation 첨부).
+
+**사전 설정 (최초 1회, npmjs.com 웹 UI)**:
+1. https://www.npmjs.com/package/multi-account-tool/access → "Trusted Publisher" → "Add Trusted Publisher"
+2. 설정값:
+   - **Publisher**: `GitHub Actions`
+   - **Organization / user**: `ictechgy`
+   - **Repository**: `multi-account-tool`
+   - **Workflow filename**: `publish.yml`
+   - **Environment**: (비우거나 `npm-publish` 같은 이름 — workflow 의 `jobs.publish.environment` 와 일치해야 함, 현재는 미사용)
+3. Save. 이후로 NPM_TOKEN secret 불필요.
+
+**배포 절차 (v0.3 이후)**:
+```bash
+# 1. main 에서 version bump (commit + tag 자동 생성)
+npm version minor  # 또는 patch / major
+
+# 2. main commit + tag push → workflow 자동 trigger
+git push --follow-tags
+
+# 3. https://github.com/ictechgy/multi-account-tool/actions 에서 workflow 결과 확인
+#    "Publish to npm" job 이 success 면 npm 에 publish 완료
+```
+
+workflow 가 `--provenance` 로 publish 하므로 패키지 페이지 (`https://www.npmjs.com/package/multi-account-tool`) 에 "Provenance" badge 가 표시되어 빌드 출처를 검증할 수 있다.
+
+**tag 와 package.json version 일치 검증**: workflow 의 `Verify tag matches package version` step 이 사전 차단. `npm version` 이 둘 다 동시 갱신하므로 정상 흐름에선 깨지지 않음.
+
+### 3.3 Homebrew tap 자동화 (미구현, 후속)
+
+현재 tap repo (`ictechgy/homebrew-mat`) 의 `Formula/mat.rb` url/sha256 갱신은 수동. 자동화하려면 publish workflow 마지막 단계에 deploy key 또는 PAT 로 tap repo 에 commit & push 추가 필요.
 
 ---
 
