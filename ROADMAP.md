@@ -13,13 +13,14 @@
 
 ## 1. 다른 AI CLI 도구 스왑 지원
 
-### 현재 (v0.1) 내장 CLI
+### 현재 (v0.3) 내장 CLI
 
 | id | credential 위치 |
 | --- | --- |
 | `claude` | macOS Keychain (`Claude Code-credentials`) |
 | `codex` | `~/.codex/auth.json` |
 | `gemini` | `~/.gemini/oauth_creds.json` + `google_accounts.json` |
+| `aider` | `~/.aider.conf.yml` |
 
 ### 확장 대상 universe
 

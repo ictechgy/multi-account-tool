@@ -2,7 +2,7 @@
  * cli-defs 단위 테스트.
  *
  * 두 가지 영역 검증:
- *  1) BUILTIN_CLI_DEFS 의 구성 (3 CLI, source 정확성, saveAs invariant) +
+ *  1) BUILTIN_CLI_DEFS 의 구성 (4 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
  *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
