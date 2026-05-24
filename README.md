@@ -185,6 +185,34 @@ Files are created with `0600`, directories with `0700`.
 
 ## Adding a new CLI
 
+Two options.
+
+### 1. User plugin — no code change required (recommended for personal use)
+
+Drop a JSON file at `~/.multi-account-tool/cli-defs/<id>.json`:
+
+```json
+{
+  "id": "aider",
+  "name": "Aider",
+  "sources": [
+    { "type": "file", "path": "~/.aider.conf.yml", "saveAs": "aider.yml" }
+  ]
+}
+```
+
+mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`) cannot be overridden — id collision is rejected.
+
+Field rules:
+- `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).
+- `name`: any non-empty string (display label).
+- `sources[].type`: `'file'` or `'keychain'` (keychain is macOS-only).
+- `sources[].saveAs`: ASCII filename, 1~64 chars (`[a-zA-Z0-9._-]`).
+- `sources[].path` (file): any non-empty string (your filesystem path, `~/` expanded).
+- `sources[].service` (keychain): any non-empty string (Keychain service name).
+
+### 2. Built-in addition — requires mat repo PR
+
 Add an entry to `src/core/cli-defs.ts`:
 
 ```ts
@@ -197,9 +225,7 @@ Add an entry to `src/core/cli-defs.ts`:
 }
 ```
 
-`source.type` can be `'file'` or `'keychain'` (the latter is macOS-only). A JSON-based plugin loader (`~/.multi-account-tool/cli-defs/*.json`) is on the roadmap.
-
-PRs welcome.
+Use this for community-shared CLIs that should ship with mat. PRs welcome.
 
 ---
 
@@ -207,7 +233,7 @@ PRs welcome.
 
 See [ROADMAP.md](./ROADMAP.md) for v0.2+ plans:
 
-- Plugin mechanism for community-contributed CLI definitions
+- ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3: see *Adding a new CLI* above)
 - Session-scoped credential isolation (different account per `lterm` session)
 - More built-in CLIs (Aider, Cursor Agent, Goose, Copilot CLI, …)
 - `lterm claude --profile <name>` shim wrapper
