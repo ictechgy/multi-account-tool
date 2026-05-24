@@ -445,16 +445,24 @@ describe('profile-store', () => {
       expect(await readProfileFile('codex', NFD, 'auth.json')).toBe('{"v":1}');
     });
 
-    it('touchProfile: NFD 입력 → NFC 디스크의 meta.updatedAt 갱신 (PR #10 round-2 보강)', async () => {
+    it('touchProfile: NFD 입력 → NFC 디스크의 meta.updatedAt 갱신 + NFD lookup 결과도 NFC name 반환', async () => {
       // round-2 Claude-2 Issue 5: NFD round-trip 매트릭스의 touchProfile 누락 보강.
-      // NFD 입력으로 touchProfile 호출 → NFC 디스크에 저장된 meta.json 의 updatedAt 갱신 확인.
+      // round-3 R3 보강: NFD lookup 자체 검증 + defensive toBeTruthy assertion (agy-1 LOW).
       const created = await createProfile('codex', NFC);
       await new Promise((r) => setTimeout(r, 20));  // ISO ms 정밀도 + scheduling 흡수
       await touchProfile('codex', NFD);
-      const meta = await readMeta('codex', NFC);
-      expect(meta?.createdAt).toBe(created.createdAt);
-      expect(new Date(meta!.updatedAt).getTime())
+
+      // defensive: meta null 일 때 non-null assertion 의 raw TypeError 회피.
+      const metaViaNfc = await readMeta('codex', NFC);
+      expect(metaViaNfc).toBeTruthy();
+      expect(metaViaNfc!.createdAt).toBe(created.createdAt);
+      expect(new Date(metaViaNfc!.updatedAt).getTime())
         .toBeGreaterThan(new Date(created.updatedAt).getTime());
+
+      // NFD lookup 자체도 동일 NFC 디스크 항목으로 resolve 되는지 매트릭스 완결.
+      const metaViaNfd = await readMeta('codex', NFD);
+      expect(metaViaNfd?.name).toBe(NFC);
+      expect(metaViaNfd?.updatedAt).toBe(metaViaNfc!.updatedAt);
     });
 
     it('renameProfile: NFD oldName → NFD newName 도 NFC 디스크에서 처리', async () => {

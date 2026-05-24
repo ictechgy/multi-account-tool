@@ -25,6 +25,11 @@ export class UsageError extends Error {
  * 현재는 service 명이 운영 컨텍스트지만 ROADMAP 의 CLI def plugin 도입 시
  * user-supplied service 가 들어올 수 있어 정의 시점에 방어선 적용.
  * Typed caller 는 readonly service 필드로 raw 값에 직접 접근 가능.
+ *
+ * **UI 권장**: redactMessage 가 50자+ base64-like service 명을 [redacted] 로
+ * 가릴 수 있으므로, instanceof 분기 후 `err.service` 를 별도 라인 (또는 안내
+ * UI 의 보조 필드) 으로 surface 해야 사용자가 어떤 service 를 정리해야 할지
+ * 식별 가능. 현재 BUILTIN service 명은 짧아 redact 가 발생하지 않음.
  */
 export class KeychainAccountMissingError extends Error {
   readonly service: string;
