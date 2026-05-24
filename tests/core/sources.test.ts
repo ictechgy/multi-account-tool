@@ -12,6 +12,7 @@
  *    (vi.stubGlobal 은 process 전체를 교체하지 않으므로 platform 만 변경하려면 defineProperty 가 정확)
  */
 
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,6 +36,9 @@ const mockSpawn = vi.mocked(spawn);
  * security CLI 응답 시뮬레이션용 fake process.
  * stdout/stderr 데이터를 비동기 emit 후 close 이벤트.
  * error 옵션이 있으면 close 대신 error 이벤트만 emit.
+ *
+ * 반환 타입은 `ChildProcessWithoutNullStreams` 로 cast (spawn 호환) — `as never`
+ * 캐스트를 callsite 마다 반복하지 않고 한 곳에 격리.
  */
 function fakeProc(opts: {
   code?: number;
@@ -43,7 +47,7 @@ function fakeProc(opts: {
   error?: Error;
   /** error 후 close 도 emit (production 의 ENOENT 시 실제 동작 — settled-guard 검증용) */
   emitCloseAfterError?: boolean;
-}) {
+}): ChildProcessWithoutNullStreams {
   const proc = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
@@ -62,7 +66,18 @@ function fakeProc(opts: {
     proc.emit('close', opts.code ?? 0);
   });
 
-  return proc;
+  return proc as unknown as ChildProcessWithoutNullStreams;
+}
+
+/**
+ * mockSpawn.mock.calls 에서 특정 security CLI action 을 인자에 포함한 호출들을 반환.
+ * 각 항목은 spawn 호출 튜플 `[cmd, args]` (call[0] = SECURITY_BIN, call[1] = argv).
+ *
+ * `mock.calls[N]` 매직 인덱스는 spawn 호출 순서 변경 시 silently mis-mapping 위험 —
+ * find by argument 로 시퀀스 변화에 견고화.
+ */
+function findSpawnCallsByArg(action: string) {
+  return mockSpawn.mock.calls.filter(call => (call[1] as string[]).includes(action));
 }
 
 /** security CLI 의 find-generic-password (account 포함) 출력 형식 시뮬레이션. */
@@ -168,9 +183,9 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     it('항목 존재 → KeychainStored JSON (value + account)', async () => {
       mockSpawn
         // 1st call: find -s -w (value)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'secret-token\n' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'secret-token\n' }))
         // 2nd call: find -s (account 메타)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('user@example.com') }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('user@example.com') }));
 
       const raw = await readSource(KEYCHAIN_SRC);
       expect(raw).not.toBeNull();
@@ -181,8 +196,8 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
 
     it('account 없음 (빈 acct) → KeychainStored.account = undefined', async () => {
       mockSpawn
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'secret-token' }) as never)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('') }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'secret-token' }))
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('') }));
 
       const raw = await readSource(KEYCHAIN_SRC);
       const parsed = JSON.parse(raw!) as KeychainStored;
@@ -193,9 +208,9 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       // production keychainGetAccount 의 `/"acct"<blob>="([^"]*)"/` 가 매치 안 되면 null 반환.
       // 따라서 KeychainStored.account = undefined 가 안전한 fallback.
       mockSpawn
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'secret-token' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'secret-token' }))
         // stdout 에 acct 라인 자체가 없음 (security CLI 출력 형식이 다른 경우)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'keychain: "/Users/test/Library/..."\nclass: "genp"' }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'keychain: "/Users/test/Library/..."\nclass: "genp"' }));
 
       const raw = await readSource(KEYCHAIN_SRC);
       const parsed = JSON.parse(raw!) as KeychainStored;
@@ -205,21 +220,21 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
 
     it('항목 없음 (errSecItemNotFound, code 44) → null', async () => {
       mockSpawn.mockReturnValueOnce(
-        fakeProc({ code: 44, stderr: 'security: ...could not be found in keychain.' }) as never
+        fakeProc({ code: 44, stderr: 'security: ...could not be found in keychain.' })
       );
       expect(await readSource(KEYCHAIN_SRC)).toBeNull();
     });
 
     it('항목 없음 (코드 다름 + "could not be found" 메시지) → null (regex fallback)', async () => {
       mockSpawn.mockReturnValueOnce(
-        fakeProc({ code: 1, stderr: 'security: item could not be found' }) as never
+        fakeProc({ code: 1, stderr: 'security: item could not be found' })
       );
       expect(await readSource(KEYCHAIN_SRC)).toBeNull();
     });
 
     it('다른 에러 → throw (redacted message)', async () => {
       mockSpawn.mockReturnValueOnce(
-        fakeProc({ code: 2, stderr: 'access denied' }) as never
+        fakeProc({ code: 2, stderr: 'access denied' })
       );
       await expect(readSource(KEYCHAIN_SRC)).rejects.toThrow(/keychain 읽기 실패/);
     });
@@ -234,18 +249,19 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     it('신규 (기존 없음): backup null → delete skip → add 만 호출 (SECURITY_BIN + -A ACL 검증)', async () => {
       mockSpawn
         // keychainGetValue (find -w) → not found
-        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
         // add-generic-password
-        .mockReturnValueOnce(fakeProc({ code: 0 }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
 
       const stored: KeychainStored = { value: 'new-token', account: 'alice' };
       await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
 
       expect(mockSpawn).toHaveBeenCalledTimes(2);
-      const addCall = mockSpawn.mock.calls[1];
+      // find by argument — spawn 호출 순서 변경에도 견고.
+      const [addCall] = findSpawnCallsByArg('add-generic-password');
+      expect(addCall).toBeDefined();
       // SECURITY_BIN 절대경로 검증 — PATH shim 우회 방어 (sources.ts SECURITY_BIN 상수).
       expect(addCall[0]).toBe('/usr/bin/security');
-      expect(addCall[1]).toContain('add-generic-password');
       expect(addCall[1]).toContain('-a');
       expect(addCall[1]).toContain('alice');
       expect(addCall[1]).toContain('-w');
@@ -257,19 +273,19 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     it('기존 있음: backup value + account 조회 → 정확한 acct 로 delete → add', async () => {
       mockSpawn
         // 1. keychainGetValue (find -w) → 'old-token'
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token\n' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token\n' }))
         // 2. keychainGetAccount (find -s) → 'bob'
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }))
         // 3. delete (with -a bob)
-        .mockReturnValueOnce(fakeProc({ code: 0 }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0 }))
         // 4. add (new)
-        .mockReturnValueOnce(fakeProc({ code: 0 }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
 
       const stored: KeychainStored = { value: 'new-token', account: 'alice' };
       await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
 
-      const deleteCall = mockSpawn.mock.calls[2];
-      expect(deleteCall[1]).toContain('delete-generic-password');
+      const [deleteCall] = findSpawnCallsByArg('delete-generic-password');
+      expect(deleteCall).toBeDefined();
       // 정확한 acct (bob) 로 delete — service-only 삭제 회피
       expect(deleteCall[1]).toContain('-a');
       expect(deleteCall[1]).toContain('bob');
@@ -280,9 +296,9 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       // 동일 service 의 타 항목까지 영구 삭제될 위험이 있었다. 새 정책은 throw 로
       // swap 자체를 거부 — Keychain 의 acct 메타가 비정상이면 사용자가 수동 정리해야 함.
       mockSpawn
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }))
         // account 조회: code 0 이지만 acct 라인 없음 → keychainGetAccount = null
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct line here' }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct line here' }));
 
       const stored: KeychainStored = { value: 'new', account: 'alice' };
       // PR #10 quad-review Claude-2 합의: KeychainAccountMissingError 클래스로 분기 가능.
@@ -302,8 +318,8 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
 
     it('KeychainAccountMissingError: error.service 필드로 호출자가 어느 service 인지 분기 가능', async () => {
       mockSpawn
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }) as never)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct' }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }))
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct' }));
 
       const stored: KeychainStored = { value: 'new' };
       try {
@@ -319,23 +335,24 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     it('add 실패 시 backup 으로 롤백 + 원본 에러 throw', async () => {
       mockSpawn
         // backup value 있음
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }) as never)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }))
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }))
         // delete OK
-        .mockReturnValueOnce(fakeProc({ code: 0 }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0 }))
         // add 실패
-        .mockReturnValueOnce(fakeProc({ code: 5, stderr: 'add failed' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 5, stderr: 'add failed' }))
         // 롤백 add (성공)
-        .mockReturnValueOnce(fakeProc({ code: 0 }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
 
       const stored: KeychainStored = { value: 'new', account: 'alice' };
       await expect(writeSource(KEYCHAIN_SRC, JSON.stringify(stored)))
         .rejects.toThrow(/keychain 쓰기 실패/);
 
-      // 롤백: add (with backup value 'old-token', acct 'bob') + -A ACL 보존
-      const rollbackCall = mockSpawn.mock.calls[4];
+      // 롤백 add 는 add-generic-password 호출 중 두 번째 (첫 번째는 실패한 새 값 시도).
+      const addCalls = findSpawnCallsByArg('add-generic-password');
+      expect(addCalls).toHaveLength(2);
+      const rollbackCall = addCalls[1];
       expect(rollbackCall[0]).toBe('/usr/bin/security');
-      expect(rollbackCall[1]).toContain('add-generic-password');
       expect(rollbackCall[1]).toContain('old-token');
       expect(rollbackCall[1]).toContain('bob');
       // 롤백 add 도 -A 포함 (회귀 가드 — backup ACL 보존, Claude 토큰 접근 권한 유지).
@@ -344,12 +361,12 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
 
     it('add 실패 + 롤백도 실패 → "백업 복구도 실패" note 포함', async () => {
       mockSpawn
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }) as never)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }) as never)
-        .mockReturnValueOnce(fakeProc({ code: 0 }) as never)
-        .mockReturnValueOnce(fakeProc({ code: 5, stderr: 'add failed' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }))
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }))
+        .mockReturnValueOnce(fakeProc({ code: 5, stderr: 'add failed' }))
         // 롤백 add 도 실패
-        .mockReturnValueOnce(fakeProc({ code: 6, stderr: 'rollback also failed' }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 6, stderr: 'rollback also failed' }));
 
       const stored: KeychainStored = { value: 'new' };
       await expect(writeSource(KEYCHAIN_SRC, JSON.stringify(stored)))
@@ -358,10 +375,10 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
 
     it('백업 delete 자체가 실패 → throw "백업 항목 삭제 실패"', async () => {
       mockSpawn
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }) as never)
-        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }))
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }))
         // delete 실패
-        .mockReturnValueOnce(fakeProc({ code: 7, stderr: 'delete failed' }) as never);
+        .mockReturnValueOnce(fakeProc({ code: 7, stderr: 'delete failed' }));
 
       const stored: KeychainStored = { value: 'new' };
       await expect(writeSource(KEYCHAIN_SRC, JSON.stringify(stored)))
@@ -380,13 +397,14 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       process.env.USER = 'env-user';
       try {
         mockSpawn
-          .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }) as never)
-          .mockReturnValueOnce(fakeProc({ code: 0 }) as never);
+          .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+          .mockReturnValueOnce(fakeProc({ code: 0 }));
 
         const stored: KeychainStored = { value: 'v' };  // account 없음
         await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
 
-        const addCall = mockSpawn.mock.calls[1];
+        const [addCall] = findSpawnCallsByArg('add-generic-password');
+        expect(addCall).toBeDefined();
         expect(addCall[1]).toContain('env-user');
       } finally {
         if (origUser === undefined) delete process.env.USER;
@@ -399,15 +417,17 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     it('존재 → true (stdout 무관, code 만 확인)', async () => {
       // production keychainExists 는 r.code === 0 만 본다. stdout 페이로드는 무관.
       // 비워서 misleading 회피.
-      mockSpawn.mockReturnValueOnce(fakeProc({ code: 0 }) as never);
+      mockSpawn.mockReturnValueOnce(fakeProc({ code: 0 }));
       expect(await sourceExists(KEYCHAIN_SRC)).toBe(true);
       // find -s 호출 (find -w 가 아님) 검증 — `-w` 가 없어야 함.
-      expect(mockSpawn.mock.calls[0][1]).not.toContain('-w');
+      const [findCall] = findSpawnCallsByArg('find-generic-password');
+      expect(findCall).toBeDefined();
+      expect(findCall[1]).not.toContain('-w');
     });
 
     it('없음 (code 44) → false', async () => {
       mockSpawn.mockReturnValueOnce(
-        fakeProc({ code: 44, stderr: 'not found' }) as never
+        fakeProc({ code: 44, stderr: 'not found' })
       );
       expect(await sourceExists(KEYCHAIN_SRC)).toBe(false);
     });
@@ -416,7 +436,7 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
   describe('runCommand 의 spawn error/close race', () => {
     it('spawn error 이벤트 → code -1 으로 settle (keychain 읽기 실패 throw)', async () => {
       mockSpawn.mockReturnValueOnce(
-        fakeProc({ error: new Error('ENOENT: /usr/bin/security') }) as never
+        fakeProc({ error: new Error('ENOENT: /usr/bin/security') })
       );
       // error 이벤트 → code -1 settle → KEYCHAIN_NOT_FOUND 아니므로 throw.
       await expect(readSource(KEYCHAIN_SRC)).rejects.toThrow(/keychain 읽기 실패.*-1/);
@@ -426,7 +446,7 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       // production runCommand 의 settled flag 가 정확히 동작하는지 — error → close 시퀀스에서
       // 두 번째 emit 이 무시되어야 한다 (단일 resolve, 두 번 reject/처리 안 함).
       mockSpawn.mockReturnValueOnce(
-        fakeProc({ error: new Error('ENOENT'), emitCloseAfterError: true }) as never
+        fakeProc({ error: new Error('ENOENT'), emitCloseAfterError: true })
       );
       // throw 1회만 발생 — race 로 두 번 throw 되거나 unhandled rejection 발생하면 안 됨.
       await expect(readSource(KEYCHAIN_SRC)).rejects.toThrow(/keychain 읽기 실패/);

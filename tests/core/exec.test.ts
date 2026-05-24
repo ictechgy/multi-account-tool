@@ -95,6 +95,14 @@ type FakeChildProcess = EventEmitter & {
 };
 
 /**
+ * `mockSpawn.mockReturnValue` / `mockImplementation` 에 넘길 ChildProcess 캐스팅을
+ * 한 곳에 격리. 각 callsite 에 `as unknown as ChildProcess` / `as never` 를 반복하지 않도록 helper 화.
+ */
+function asChildProcess(fake: FakeChildProcess): ChildProcess {
+  return fake as unknown as ChildProcess;
+}
+
+/**
  * child_process.spawn 결과 흉내. exit/error 를 비동기로 emit. opts 비면 emit 없음 (수동 제어용).
  * 실제 Node ChildProcess 는 exit 직후 close 도 emit 하므로 fake 도 동일하게 emit —
  * runExec 가 향후 close 를 듣게 되어도 hang 없이 동작.
@@ -148,7 +156,7 @@ describe('runExec', () => {
   });
 
   it('성공: swap → spawn (exit 0) → restore → release 순으로 호출', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'echo', args: ['hi']
@@ -163,7 +171,7 @@ describe('runExec', () => {
 
   it('already-active: swap/restore 모두 skip, spawn 만 실행', async () => {
     mockGetActive.mockResolvedValue('work');
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'echo', args: []
@@ -175,7 +183,7 @@ describe('runExec', () => {
   });
 
   it('자식이 non-zero 로 종료: code 반환 + restore 수행', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 42, signal: null } }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 42, signal: null } })));
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'false', args: []
@@ -187,7 +195,7 @@ describe('runExec', () => {
   });
 
   it('자식이 시그널로 종료: signal 반환 + restore 수행', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: null, signal: 'SIGINT' } }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: null, signal: 'SIGINT' } })));
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'sleep', args: ['100']
@@ -201,7 +209,7 @@ describe('runExec', () => {
 
   it('spawn error: throw + restore 수행 + release 수행', async () => {
     const spawnErr = new Error('ENOENT: no such file');
-    mockSpawn.mockReturnValue(fakeChild({ error: spawnErr }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ error: spawnErr })));
 
     await expect(runExec({
       cliId: 'codex', profileName: 'work', command: 'nosuchbin', args: []
@@ -250,7 +258,7 @@ describe('runExec', () => {
   });
 
   it('restore 실패: child 결과는 보존하면서 restoreError 채워짐', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
     mockSwitch
       .mockResolvedValueOnce(FAKE_SWITCH)
       .mockRejectedValueOnce(new Error('keychain access denied'));
@@ -267,8 +275,11 @@ describe('runExec', () => {
 
   it('LockHeldError 가 진짜 클래스 그대로 전파됨 (partial mock)', async () => {
     // partial mock 덕분에 진짜 LockHeldError 의 exitCode/holder shape 까지 검증.
-    const holder = { pid: 12345, profile: 'other', startedAt: 'now', token: 'x' };
-    mockAcquire.mockRejectedValue(new LockHeldError('codex', holder as never));
+    // satisfies 로 LockBody contract 검증 — 필수 필드 누락 시 컴파일 에러.
+    const holder = {
+      pid: 12345, profile: 'other', startedAt: 'now', token: 'x'
+    } satisfies LockHeldError['holder'];
+    mockAcquire.mockRejectedValue(new LockHeldError('codex', holder));
 
     const promise = runExec({
       cliId: 'codex', profileName: 'work', command: 'echo', args: []
@@ -305,10 +316,10 @@ describe('runExec', () => {
       await new Promise((r) => setImmediate(r));
       callOrder.push('release:done');
     });
-    mockSpawn.mockImplementation((() => {
+    mockSpawn.mockImplementation(() => {
       callOrder.push('spawn');
-      return fakeChild({ exit: { code: 0, signal: null } });
-    }) as never);
+      return asChildProcess(fakeChild({ exit: { code: 0, signal: null } }));
+    });
 
     // runExec 가 SIGINT 에 등록한 정확한 forwarder handler 만 capture (identity check).
     let forwarder: ((...args: unknown[]) => void) | undefined;
@@ -353,7 +364,7 @@ describe('runExec', () => {
   });
 
   it('child non-zero + restore 실패: child code 보존 + restoreError 포함', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 17, signal: null } }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 17, signal: null } })));
     mockSwitch
       .mockResolvedValueOnce(FAKE_SWITCH)
       .mockRejectedValueOnce(new Error('restore boom'));
@@ -368,7 +379,7 @@ describe('runExec', () => {
   });
 
   it('spawn error + restore 실패: spawn error 가 throw 됨 (restoreError 는 surface 안 됨)', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ error: new Error('ENOENT: no such file') }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ error: new Error('ENOENT: no such file') })));
     mockSwitch
       .mockResolvedValueOnce(FAKE_SWITCH)
       .mockRejectedValueOnce(new Error('restore boom'));
@@ -385,15 +396,15 @@ describe('runExec', () => {
     // runExec 가 register 한 SIGINT listener 를 잡아 invoke 하고, 그 결과 child.kill('SIGINT') 가
     // 호출되는지 검증 (Quad-review Finding S — Forge-2 HIGH).
     const child = fakeChild({});  // exit/error 자동 emit 없음 — 수동 제어
-    mockSpawn.mockImplementation((() => {
+    mockSpawn.mockImplementation(() => {
       // spawn 시점에 childRef.current = child 가 채워짐. 그 직후 forwarder invoke.
       setImmediate(() => {
         latestSignalListener('SIGINT')('SIGINT');
         // 그 다음 tick 에 child 가 SIGINT 받고 종료된 척 emit → runExec 종결
         setImmediate(() => child.emit('exit', null, 'SIGINT'));
       });
-      return child;
-    }) as never);
+      return asChildProcess(child);
+    });
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'sleep', args: ['100']
@@ -406,7 +417,7 @@ describe('runExec', () => {
 
   it('runExec 종료 후 SIGINT listener 가 dispose 된다 (leak 방지)', async () => {
     const before = process.listeners('SIGINT').length;
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
     await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
     const after = process.listeners('SIGINT').length;
     expect(after).toBe(before);  // 등록 = 해제
