@@ -20,7 +20,7 @@
 import React, { useEffect, useReducer, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
-import { BUILTIN_CLI_DEFS, findCliDef } from './core/cli-defs.js';
+import { findCliDef, getAllCliDefs } from './core/cli-defs.js';
 import {
   cleanupTmpFiles,
   getActiveProfile,
@@ -207,7 +207,7 @@ async function loadAllData(): Promise<AppData> {
 async function loadProfilesByCli(): Promise<AppData['profilesByCli']> {
   const result: AppData['profilesByCli'] = {};
   await Promise.all(
-    BUILTIN_CLI_DEFS.map(async (cli) => {
+    getAllCliDefs().map(async (cli) => {
       const names = await listProfiles(cli.id);
       const items = await Promise.all(
         names.map(async (name) => ({
@@ -277,7 +277,7 @@ function renderHome(
   dispatch: React.Dispatch<Action>,
   exit: () => void
 ): React.ReactElement {
-  const items: CliRow[] = BUILTIN_CLI_DEFS.map((cli) => {
+  const items: CliRow[] = getAllCliDefs().map((cli) => {
     const det = data.detection.find((d) => d.cli.id === cli.id);
     return {
       cli,

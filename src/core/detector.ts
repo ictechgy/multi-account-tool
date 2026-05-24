@@ -5,7 +5,7 @@
  * CLI 사이와 같은 CLI 의 source 들 모두 Promise.all 로 병렬 점검한다 (read-only).
  */
 
-import { BUILTIN_CLI_DEFS } from './cli-defs.js';
+import { getAllCliDefs } from './cli-defs.js';
 import { sourceExists } from './sources.js';
 import type { CliDef } from './types.js';
 
@@ -21,9 +21,9 @@ export interface DetectionResult {
   missing: string[];
 }
 
-/** 내장된 모든 CLI 에 대해 라이브 자격증명 존재 여부를 병렬 감지. */
+/** builtin + plugin 모든 CLI 에 대해 라이브 자격증명 존재 여부를 병렬 감지. */
 export async function detectAll(): Promise<DetectionResult[]> {
-  return Promise.all(BUILTIN_CLI_DEFS.map(detect));
+  return Promise.all(getAllCliDefs().map(detect));
 }
 
 async function detect(cli: CliDef): Promise<DetectionResult> {

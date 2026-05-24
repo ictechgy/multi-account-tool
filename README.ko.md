@@ -185,6 +185,34 @@ lterm send-keys "mat exec claude work -- claude" Enter
 
 ## 새 CLI 추가하기
 
+두 가지 방법.
+
+### 1. 사용자 플러그인 — 코드 변경 불필요 (개인 사용 권장)
+
+`~/.multi-account-tool/cli-defs/<id>.json` 파일을 만든다:
+
+```json
+{
+  "id": "aider",
+  "name": "Aider",
+  "sources": [
+    { "type": "file", "path": "~/.aider.conf.yml", "saveAs": "aider.yml" }
+  ]
+}
+```
+
+mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`) id 와 충돌하면 plugin 이 무시된다 (보안).
+
+필드 규칙:
+- `id`: 영문 시작 + 영숫자/`_`/`-`, 1~32자 (빌트인 id 와 중복 불가).
+- `name`: 비어있지 않은 임의 문자열 (표시용).
+- `sources[].type`: `'file'` 또는 `'keychain'` (keychain 은 macOS 전용).
+- `sources[].saveAs`: ASCII 파일명, 1~64자 (`[a-zA-Z0-9._-]`).
+- `sources[].path` (file): 비어있지 않은 문자열 (`~/` 자동 확장).
+- `sources[].service` (keychain): 비어있지 않은 Keychain service 이름.
+
+### 2. 빌트인 추가 — mat repo PR 필요
+
 `src/core/cli-defs.ts` 에 항목 추가:
 
 ```ts
@@ -197,9 +225,7 @@ lterm send-keys "mat exec claude work -- claude" Enter
 }
 ```
 
-`source.type` 은 `'file'` 또는 `'keychain'` 지원 (후자는 macOS 전용). JSON 기반 플러그인 로더 (`~/.multi-account-tool/cli-defs/*.json`) 가 로드맵에 있다.
-
-PR 환영.
+mat 과 함께 배포되어야 할 커뮤니티 CLI 용. PR 환영.
 
 ---
 
@@ -207,7 +233,7 @@ PR 환영.
 
 v0.2+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 
-- 커뮤니티 CLI 정의를 위한 플러그인 메커니즘
+- ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3: 위 *새 CLI 추가하기* 섹션 참조)
 - 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
 - 빌트인 CLI 확장 (Aider, Cursor Agent, Goose, Copilot CLI 등)
 - `lterm claude --profile <name>` 같은 shim wrapper
