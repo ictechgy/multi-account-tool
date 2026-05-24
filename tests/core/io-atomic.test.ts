@@ -78,4 +78,43 @@ describe('writeFileAtomic', () => {
     await writeFileAtomic(target, 'C');
     expect(await fs.readFile(target, 'utf8')).toBe('C');
   });
+
+  it('rename 실패 시 .tmp 가 정리된다 (Quad-review V)', async () => {
+    // target 이 기존 디렉토리이면 fs.rename(file, dir) 가 EISDIR/ENOTDIR 로 실패.
+    // open + writeFile 까지는 성공해 tmp 가 생성되지만, catch 블록이 정리해야 한다.
+    const target = join(dir, 'isdir');
+    await fs.mkdir(target);
+
+    await expect(writeFileAtomic(target, 'data')).rejects.toThrow();
+
+    // .tmp 잔존 없음 — 본 invariant 가 깨지면 후속 atomic 호출이 EEXIST 로 깨진다.
+    const entries = await fs.readdir(dir);
+    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('동시 쓰기 (Promise.all) 시 .tmp 잔존 없음 — atomicity 는 단일 caller 한정 (Quad-review W)', async () => {
+    // io-atomic.ts 의 contract (모듈 상단 주석에 명시):
+    //   "호출자는 같은 path 에 동시 호출하지 않도록 보장해야 한다 (mutateConfig 같은 직렬화 헬퍼 사용)."
+    //
+    // 즉 같은 target 에 대한 동시 호출은 결과 미정 — tmp path 가 결정적 (`${target}.tmp`) 이라
+    // 호출 A 가 open(tmp) 성공 후 호출 B 가 open(tmp) EEXIST → B 의 catch 가 rm(tmp) → A 의
+    // rename 이 ENOENT 로 실패. 결과적으로 두 호출 모두 실패 가능.
+    //
+    // 본 테스트는 그 한계 하에서도 깨지지 않아야 할 invariant 만 검증:
+    //  1) 파일이 생성되었다면 그 값은 A/B/C 중 하나 (partial write 없음)
+    //  2) .tmp 잔존 없음 — 후속 호출이 EEXIST 로 깨지지 않게 보장
+    const target = join(dir, 'concurrent.json');
+    await Promise.allSettled([
+      writeFileAtomic(target, 'A'),
+      writeFileAtomic(target, 'B'),
+      writeFileAtomic(target, 'C')
+    ]);
+
+    const fileExists = await fs.access(target).then(() => true).catch(() => false);
+    if (fileExists) {
+      expect(['A', 'B', 'C']).toContain(await fs.readFile(target, 'utf8'));
+    }
+    const entries = await fs.readdir(dir);
+    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+  });
 });
