@@ -66,3 +66,23 @@ export function errorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   return redactMessage(raw);
 }
+
+/**
+ * 사용자 표시용 에러 설명. errorMessage 결과에 타입별 컨텍스트 라인을 덧붙인다.
+ *
+ * 현재 분기:
+ *  - KeychainAccountMissingError: redactMessage 가 긴 base64-like service 명을
+ *    [redacted] 로 가릴 수 있으므로, raw `service` 를 별도 라인으로 surface 한다.
+ *    사용자가 Keychain Access.app 에서 어떤 service 를 정리할지 식별 가능.
+ *  - 그 외: errorMessage 와 동일 (단일 라인).
+ *
+ * 호출자는 multi-line 표시가 허용되는 곳에서만 사용 (TUI message body, mat exec stderr).
+ * 단일 라인 컨텍스트 (예: first import 의 per-cli failure summary) 에는 errorMessage 유지.
+ */
+export function describeError(err: unknown): string {
+  const msg = errorMessage(err);
+  if (err instanceof KeychainAccountMissingError) {
+    return `${msg}\n→ Service: ${err.service}`;
+  }
+  return msg;
+}

@@ -15,7 +15,7 @@ import { render } from 'ink';
 
 import App from './app.js';
 import { runExec } from './core/exec.js';
-import { errorMessage } from './core/errors.js';
+import { describeError } from './core/errors.js';
 import { migrateLegacyDataDir } from './core/migrate.js';
 
 const USAGE =
@@ -38,7 +38,7 @@ const USAGE =
 const EXIT_RESTORE_FAILED = 74;
 
 main().catch((err) => {
-  process.stderr.write(`mat: ${errorMessage(err)}\n`);
+  process.stderr.write(`mat: ${describeError(err)}\n`);
   const exitCode = (err as { exitCode?: unknown })?.exitCode;
   process.exit(typeof exitCode === 'number' ? exitCode : 1);
 });

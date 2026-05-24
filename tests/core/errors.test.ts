@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { KeychainAccountMissingError, UsageError, errorMessage, redactMessage } from '../../src/core/errors.js';
+import { KeychainAccountMissingError, UsageError, describeError, errorMessage, redactMessage } from '../../src/core/errors.js';
 
 describe('UsageError', () => {
   it('exitCode 는 2, name 은 UsageError', () => {
@@ -86,6 +86,44 @@ describe('KeychainAccountMissingError', () => {
     const err = new KeychainAccountMissingError(hugeService);
     expect(err.message.length).toBeLessThanOrEqual(500);
     expect(err.service).toBe(hugeService);
+  });
+});
+
+describe('describeError', () => {
+  it('일반 Error 는 errorMessage 와 동일 (단일 라인)', () => {
+    const err = new Error('lock 획득 실패');
+    expect(describeError(err)).toBe(errorMessage(err));
+    expect(describeError(err)).not.toContain('\n');
+  });
+
+  it('UsageError 도 errorMessage 와 동일', () => {
+    const err = new UsageError('잘못된 인자');
+    expect(describeError(err)).toBe(errorMessage(err));
+  });
+
+  it('Error 가 아닌 값도 errorMessage 와 동일', () => {
+    expect(describeError('plain')).toBe(errorMessage('plain'));
+    expect(describeError(42)).toBe(errorMessage(42));
+    expect(describeError(null)).toBe(errorMessage(null));
+  });
+
+  it('KeychainAccountMissingError 는 message + "→ Service: ${service}" 라인 추가', () => {
+    const err = new KeychainAccountMissingError('com.openai.codex');
+    const out = describeError(err);
+    expect(out).toContain('→ Service: com.openai.codex');
+    expect(out.split('\n').length).toBeGreaterThanOrEqual(2);
+    // 1번째 라인은 errorMessage 와 동일.
+    expect(out.split('\n')[0]).toBe(errorMessage(err));
+  });
+
+  it('긴 plugin service 명: message 는 redact 되지만 → Service 라인은 raw 보존 (핵심 가치)', () => {
+    // redactMessage 가 [redacted] 로 가린 service 를 사용자가 식별할 수 있게 surface.
+    // 이 라인이 없으면 사용자는 어떤 Keychain service 를 정리해야 할지 알 수 없음.
+    const longService = 'a'.repeat(60);
+    const err = new KeychainAccountMissingError(longService);
+    const out = describeError(err);
+    expect(out).toContain('[redacted]');
+    expect(out).toContain(`→ Service: ${longService}`);
   });
 });
 
