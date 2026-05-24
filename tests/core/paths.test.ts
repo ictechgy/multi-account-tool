@@ -122,7 +122,10 @@ describe('paths', () => {
       [true, 'boolean true'],
       [123, 'number'],
       [{}, 'object'],
-      [[], 'array']
+      [[], 'array'],
+      [Symbol('s'), 'symbol'],
+      [10n, 'bigint'],
+      [() => 'x', 'function']
     ];
 
     it.each(BAD_TYPES)('validateCliId 비문자열 throw: %s (%s)', (bad, _r) => {
