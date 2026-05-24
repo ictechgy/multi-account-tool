@@ -5,6 +5,12 @@
 
 ---
 
+## Done
+
+- ✅ **`mat exec <cli> <profile> -- <cmd...>`** — 시간 격리 실행. cli 별 lockfile 로 동시 swap 차단, stale lock 자동 복구, SIGINT/SIGTERM/SIGHUP 전달, `finally` 원복. 세션 격리는 아니며 `SIGKILL` 시 원복 불가는 한계로 명시.
+
+---
+
 ## 1. 다른 AI CLI 도구 스왑 지원
 
 ### 현재 (v0.1) 내장 CLI
@@ -95,7 +101,8 @@
 
 ### 통합 시나리오
 
-#### A. `mat exec <profile> -- <cmd>` (가장 빨리 가능 — 격리 한계 인정)
+#### A. `mat exec <cli> <profile> -- <cmd>` ✅ 구현됨 (Done 섹션 참고)
+
 1. 일시적으로 `<profile>` 로 swap (현재 활성 자동 백업)
 2. `<cmd>` 실행
 3. 명령 종료 후 원래 profile 로 자동 복원
@@ -103,10 +110,15 @@
 사용 예:
 ```bash
 lterm start work
-lterm send-keys "mat exec work-acc -- claude" Enter
+lterm send-keys "mat exec claude work-acc -- claude" Enter
 ```
 
 격리는 아니지만 **시간 분할**: 한 세션 안에서 한 명령 동안만 다른 계정. CLI 가 시작 시 토큰 읽고 메모리 보관하는 경우 동작.
+
+구현 세부:
+- 인자 형식은 `<cli> <profile> -- <cmd...>` (모호함 없음).
+- cli 별 lockfile (`~/.multi-account-tool/locks/<cli>.lock`) 로 동시 실행 직렬화.
+- 활성 프로필이 설정되지 않은 cli 에서는 사용 불가 (라이브 자격증명 보존 보장 못함).
 
 #### B. lterm session hook (있다면)
 - 세션 시작/종료 hook API 가 있는지 확인
@@ -139,12 +151,11 @@ lterm send-keys "mat exec work-acc -- claude" Enter
 
 | 순서 | 작업 | 사유 |
 | --- | --- | --- |
-| 1 | `mat exec <profile> -- <cmd>` 도입 | lterm 즉시 통합 가능, 격리 한계 인정 |
-| 2 | `~/.multi-account-tool/cli-defs/*.json` plugin | 사용자가 mat 코드 변경 없이 새 CLI 추가 |
-| 3 | Aider 내장 지원 | text-based config 라 가장 단순 |
-| 4 | 다른 CLI 조사 + 내장 추가 | Cursor / Goose / Copilot 등 |
-| 5 | 세션 격리 (#2) | env var override 지원 CLI 부터. Keychain CLI 는 별도 R&D |
-| 6 | lterm shim wrapper (`lterm claude --profile X`) | lterm repo 협력 |
+| 1 | `~/.multi-account-tool/cli-defs/*.json` plugin | 사용자가 mat 코드 변경 없이 새 CLI 추가 |
+| 2 | Aider 내장 지원 | text-based config 라 가장 단순 |
+| 3 | 다른 CLI 조사 + 내장 추가 | Cursor / Goose / Copilot 등 |
+| 4 | 세션 격리 (#2) | env var override 지원 CLI 부터. Keychain CLI 는 별도 R&D |
+| 5 | lterm shim wrapper (`lterm claude --profile X`) | lterm repo 협력 |
 
 ---
 

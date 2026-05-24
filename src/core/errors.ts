@@ -1,6 +1,18 @@
 /**
  * 공용 에러 처리 + 토큰 redact 유틸.
+ *
+ * `exitCode` 프로퍼티가 붙은 에러는 cli.tsx 의 top-level catch 에서 같은 코드로 종료된다
+ * (UsageError = 2, LockHeldError = 75, restore 실패는 ExecResult 경로로 별도 처리).
  */
+
+/** 인자/입력 검증 실패. cli.tsx 가 exit 2 로 매핑. */
+export class UsageError extends Error {
+  readonly exitCode = 2;
+  constructor(message: string) {
+    super(message);
+    this.name = 'UsageError';
+  }
+}
 
 /**
  * 자격증명/토큰 후보 시퀀스를 redact.
