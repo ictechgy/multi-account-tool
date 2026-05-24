@@ -25,7 +25,7 @@
 
 `lterm` README 가 정리한 agent 리스트와 같은 부분 채택:
 
-- **즉시 가능 (file-based)**: Aider, OpenCode, Goose, Amp, Crush, Kimi, Qwen
+- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), OpenCode, Goose, Amp, Crush, Kimi, Qwen
 - **GitHub Copilot CLI** — GitHub 토큰 (`~/.config/gh/` 또는 own store)
 - **Cursor Agent** — `~/Library/Application Support/Cursor/` (큰 디렉토리, 일부만 swap)
 - **Kiro, Jules** — credential 패턴 미조사
@@ -151,8 +151,8 @@ lterm send-keys "mat exec claude work-acc -- claude" Enter
 
 | 순서 | 작업 | 사유 |
 | --- | --- | --- |
-| 1 | `~/.multi-account-tool/cli-defs/*.json` plugin | 사용자가 mat 코드 변경 없이 새 CLI 추가 |
-| 2 | Aider 내장 지원 | text-based config 라 가장 단순 |
+| 1 | ~~`~/.multi-account-tool/cli-defs/*.json` plugin~~ ✅ | 사용자가 mat 코드 변경 없이 새 CLI 추가 (PR #14) |
+| 2 | ~~Aider 내장 지원~~ ✅ | text-based config 라 가장 단순 (v0.3 빌트인) |
 | 3 | 다른 CLI 조사 + 내장 추가 | Cursor / Goose / Copilot 등 |
 | 4 | 세션 격리 (#2) | env var override 지원 CLI 부터. Keychain CLI 는 별도 R&D |
 | 5 | lterm shim wrapper (`lterm claude --profile X`) | lterm repo 협력 |

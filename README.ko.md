@@ -31,6 +31,7 @@
 | Claude Code | macOS Keychain (`Claude Code-credentials`) | Keychain 항목 swap |
 | Codex CLI | `~/.codex/auth.json` | 파일 swap |
 | Gemini / Antigravity | `~/.gemini/oauth_creds.json`, `google_accounts.json` | 파일 swap |
+| Aider | `~/.aider.conf.yml` | 파일 swap |
 
 ### 전환 흐름 (데이터 손실 없음)
 
@@ -189,19 +190,19 @@ lterm send-keys "mat exec claude work -- claude" Enter
 
 ### 1. 사용자 플러그인 — 코드 변경 불필요 (개인 사용 권장)
 
-`~/.multi-account-tool/cli-defs/<id>.json` 파일을 만든다:
+`~/.multi-account-tool/cli-defs/<id>.json` 파일을 만든다. 임의 CLI 추가용 템플릿 예:
 
 ```json
 {
-  "id": "aider",
-  "name": "Aider",
+  "id": "my-cli",
+  "name": "My CLI",
   "sources": [
-    { "type": "file", "path": "~/.aider.conf.yml", "saveAs": "aider.yml" }
+    { "type": "file", "path": "~/.config/my-cli/credentials.json", "saveAs": "credentials.json" }
   ]
 }
 ```
 
-mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`) id 와 충돌하면 plugin 이 무시된다 (보안).
+mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`, `aider`) id 와 충돌하면 plugin 이 무시된다 (보안).
 
 필드 규칙:
 - `id`: 영문 시작 + 영숫자/`_`/`-`, 1~32자 (빌트인 id 와 중복 불가).
@@ -234,8 +235,9 @@ mat 과 함께 배포되어야 할 커뮤니티 CLI 용. PR 환영.
 v0.2+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 
 - ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3: 위 *새 CLI 추가하기* 섹션 참조)
+- ~~Aider 빌트인 지원~~ ✅ (v0.3: claude/codex/gemini 와 함께 빌트인 제공)
 - 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
-- 빌트인 CLI 확장 (Aider, Cursor Agent, Goose, Copilot CLI 등)
+- 빌트인 CLI 확장 (Cursor Agent, Goose, Copilot CLI 등)
 - `lterm claude --profile <name>` 같은 shim wrapper
 
 ---
