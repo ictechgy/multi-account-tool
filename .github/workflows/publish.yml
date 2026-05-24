@@ -9,7 +9,8 @@ name: Publish to npm
 #   2. 별도 NPM_TOKEN secret 불요 (OIDC token 으로 자동 교환).
 #
 # 보안:
-#   github.ref_name 은 env: 로 추출 후 quoted shell 변수로만 사용 — script injection 방지.
+#   github.ref_name 등 사용자 제어 가능 입력은 모두 env: 로 추출 후 quoted shell 변수로만 사용 — script injection 방지.
+#   Python heredoc 에서도 인자/환경변수만 읽고 직접 인터폴레이션 금지.
 
 on:
   push:
@@ -59,3 +60,129 @@ jobs:
 
       - name: Publish to npm with provenance
         run: npm publish --provenance --access public
+
+  homebrew-tap:
+    name: Update Homebrew tap formula
+    needs: publish
+    runs-on: ubuntu-latest
+    # 사전조건 (사용자 액션):
+    #   1. GitHub Settings → Developer settings → Personal access tokens (Fine-grained)
+    #      - Resource owner: ictechgy
+    #      - Repository: homebrew-mat
+    #      - Permissions: Contents = Read and write (그 외 minimum)
+    #   2. ictechgy/multi-account-tool repo → Settings → Secrets and variables → Actions
+    #      - HOMEBREW_TAP_TOKEN = <위에서 만든 PAT>
+    # 시크릿 미설정 시: 첫 step 에서 안내 메시지 + 정상 종료, npm publish 자체는 영향 없음.
+    # 보안: PAT 권한 범위는 homebrew-mat repo 의 Contents 만. 다른 repo 접근 불가.
+    if: ${{ github.repository == 'ictechgy/multi-account-tool' }}
+
+    steps:
+      - name: Check HOMEBREW_TAP_TOKEN secret
+        env:
+          HAS_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' && 'yes' || 'no' }}
+        run: |
+          if [ "$HAS_TOKEN" != "yes" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN 시크릿 미설정 — Homebrew tap 자동 갱신 skip"
+            echo "수동 갱신 절차는 HANDOFF.md 의 '자주 쓰는 명령' 섹션 참고"
+            exit 0
+          fi
+          echo "HOMEBREW_TAP_TOKEN 존재 — tap 자동 갱신 진행"
+          echo "PROCEED=yes" >> "$GITHUB_ENV"
+
+      - name: Resolve published version + tarball SHA256
+        if: env.PROCEED == 'yes'
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # tag 에서 'v' prefix 제거 (예: v0.2.1 → 0.2.1). TAG_NAME 은 env 로 빼고 quoted 사용.
+          VERSION="${TAG_NAME#v}"
+          TARBALL_URL="https://registry.npmjs.org/multi-account-tool/-/multi-account-tool-${VERSION}.tgz"
+
+          # npm publish 직후 registry 가 tarball 을 노출하는 데 propagation 시간이 필요.
+          # 최대 60초 (10초 × 6회 retry) — 그 이상 걸리면 npm 측 이슈로 간주하고 실패.
+          HTTP=""
+          for i in 1 2 3 4 5 6; do
+            HTTP=$(curl -sL -o /tmp/mat.tgz -w '%{http_code}' "$TARBALL_URL")
+            if [ "$HTTP" = "200" ]; then
+              break
+            fi
+            echo "tarball not yet available (HTTP $HTTP), retry $i/6 in 10s..."
+            sleep 10
+          done
+
+          if [ "$HTTP" != "200" ]; then
+            echo "::error::npm registry 에서 tarball 미발견 (HTTP $HTTP) — $TARBALL_URL"
+            exit 1
+          fi
+
+          SHA256="$(sha256sum /tmp/mat.tgz | cut -d' ' -f1)"
+          echo "version=$VERSION"
+          echo "tarball=$TARBALL_URL"
+          echo "sha256=$SHA256"
+
+          # 후속 step 으로 전달.
+          {
+            echo "MAT_VERSION=$VERSION"
+            echo "MAT_TARBALL_URL=$TARBALL_URL"
+            echo "MAT_SHA256=$SHA256"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout tap repo
+        if: env.PROCEED == 'yes'
+        uses: actions/checkout@v4
+        with:
+          repository: ictechgy/homebrew-mat
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+          # 같은 PAT 로 commit + push 모두 수행.
+
+      - name: Update Formula/mat.rb url + sha256
+        if: env.PROCEED == 'yes'
+        working-directory: homebrew-tap
+        env:
+          # python 이 os.environ 으로 안전 참조 — shell 인터폴레이션 회피.
+          MAT_TARBALL_URL: ${{ env.MAT_TARBALL_URL }}
+          MAT_SHA256: ${{ env.MAT_SHA256 }}
+        run: |
+          FORMULA="Formula/mat.rb"
+          if [ ! -f "$FORMULA" ]; then
+            echo "::error::$FORMULA 미발견 — tap repo 구조 확인 필요"
+            exit 1
+          fi
+
+          # url + sha256 라인만 정확히 치환. heredoc 내부에서 os.environ 으로 읽어
+          # 정규식/quote 이스케이프 위험 회피.
+          python3 - "$FORMULA" <<'PY'
+          import os, pathlib, re, sys
+          path = pathlib.Path(sys.argv[1])
+          url = os.environ['MAT_TARBALL_URL']
+          sha = os.environ['MAT_SHA256']
+          src = path.read_text()
+          src, n_url = re.subn(r'^(\s*url\s+)"[^"]+"', lambda m: m.group(1) + f'"{url}"', src, count=1, flags=re.M)
+          src, n_sha = re.subn(r'^(\s*sha256\s+)"[^"]+"', lambda m: m.group(1) + f'"{sha}"', src, count=1, flags=re.M)
+          if n_url == 0 or n_sha == 0:
+              sys.stderr.write(f'::error::url/sha256 라인 패턴 미매치 (url={n_url}, sha256={n_sha})\n')
+              sys.exit(1)
+          path.write_text(src)
+          PY
+
+          if git diff --quiet "$FORMULA"; then
+            echo "::error::$FORMULA 변경 없음 — 이미 최신이거나 치환 실패"
+            exit 1
+          fi
+
+          echo "갱신된 Formula diff:"
+          git --no-pager diff "$FORMULA"
+
+      - name: Commit + push to tap
+        if: env.PROCEED == 'yes'
+        working-directory: homebrew-tap
+        env:
+          MAT_VERSION: ${{ env.MAT_VERSION }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/mat.rb
+          git commit -m "mat ${MAT_VERSION}: url + sha256 자동 갱신 (publish.yml ${SOURCE_SHA})"
+          git push
