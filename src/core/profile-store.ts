@@ -60,7 +60,11 @@ async function writeMeta(meta: Profile): Promise<void> {
   await writeFileAtomic(profileMetaPath(meta.cli, meta.name), JSON.stringify(meta, null, 2));
 }
 
-/** 프로필 생성 (디렉토리 + meta.json). 이미 존재하면 에러. */
+/**
+ * 프로필 생성 (디렉토리 + meta.json). 이미 존재하면 에러.
+ * writeMeta 실패 (디스크 풀/권한 거부 등) 시 생성된 디렉토리를 best-effort 롤백 —
+ * renameProfile 의 catch 분기와 동일한 패턴으로 부분 상태 (디렉토리만 남고 meta 없음) 방지.
+ */
 export async function createProfile(
   cliId: string,
   rawName: string,
@@ -74,7 +78,14 @@ export async function createProfile(
   await fs.mkdir(profileDir(cliId, name), { recursive: true, mode: 0o700 });
   const now = new Date().toISOString();
   const meta: Profile = { name, cli: cliId, createdAt: now, updatedAt: now, label };
-  await writeMeta(meta);
+  try {
+    await writeMeta(meta);
+  } catch (err) {
+    await fs.rm(profileDir(cliId, name), { recursive: true, force: true }).catch(() => {
+      /* 롤백 실패는 무시 — 원본 에러를 호출자에게 전파 */
+    });
+    throw err;
+  }
   return meta;
 }
 

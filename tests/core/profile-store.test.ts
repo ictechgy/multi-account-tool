@@ -12,7 +12,7 @@
 import { promises as fs, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createProfile,
@@ -91,6 +91,15 @@ describe('profile-store', () => {
       expect(await listProfiles('codex')).toEqual(['home', 'side', 'work']);
     });
 
+    it('non-ENOENT 에러 (ENOTDIR) → throw 전파 (catch 분기 회귀 가드)', async () => {
+      // cliProfilesDir 경로를 일반 파일로 만들면 fs.readdir 가 ENOTDIR 로 throw.
+      // ENOENT swallow 분기 외 throw 분기 (profile-store.ts line 43) 회귀 가드.
+      const profilesRoot = join(tmp.home, '.multi-account-tool', 'profiles');
+      await fs.mkdir(profilesRoot, { recursive: true, mode: 0o700 });
+      await fs.writeFile(cliProfilesDir('codex'), 'not-a-directory');
+      await expect(listProfiles('codex')).rejects.toThrow();
+    });
+
     it('일반 file 은 결과에서 제외 (디렉토리만)', async () => {
       const base = cliProfilesDir('codex');
       await fs.mkdir(base, { recursive: true });
@@ -143,6 +152,63 @@ describe('profile-store', () => {
     it('잘못된 이름 → validateProfileName 단계에서 throw, 디렉토리 미생성', async () => {
       await expect(createProfile('codex', '../escape')).rejects.toThrow();
       expect(existsSync(join(cliProfilesDir('codex'), '../escape'))).toBe(false);
+    });
+
+    describe('writeMeta 실패 시 디렉토리 rollback (vi.doMock io-atomic)', () => {
+      // doMock + dynamic import 격리 패턴 — migrate.test.ts 의 renameSync 실패 분기와 동일 스타일.
+      // beforeEach 에서 vi.resetModules() 먼저 호출해 doMock 효과가 dynamic import 에 정확히 적용.
+      beforeEach(() => { vi.resetModules(); });
+      afterEach(() => {
+        vi.doUnmock('../../src/core/io-atomic.js');
+        vi.doUnmock('node:fs');
+        vi.resetModules();
+      });
+
+      it('writeFileAtomic throw → 생성된 디렉토리 롤백 (partial state 방지)', async () => {
+        // 디스크 풀/권한 거부 등으로 writeMeta 가 실패하는 시나리오. renameProfile 과 동일하게
+        // catch 에서 best-effort 롤백 → 디렉토리만 남는 부분 상태가 발생하지 않는다.
+        const writeMock = vi.fn(async () => { throw new Error('simulated disk full'); });
+        vi.doMock('../../src/core/io-atomic.js', async () => {
+          const actual = await vi.importActual<typeof import('../../src/core/io-atomic.js')>(
+            '../../src/core/io-atomic.js'
+          );
+          return { ...actual, writeFileAtomic: writeMock };
+        });
+
+        const { createProfile: cp } = await import('../../src/core/profile-store.js');
+        const { profileDir: pd } = await import('../../src/core/paths.js');
+
+        await expect(cp('codex', 'doomed')).rejects.toThrow(/simulated disk full/);
+        expect(writeMock).toHaveBeenCalledOnce();
+        // 핵심 회귀 가드: 디렉토리가 남아있지 않아야 (rollback 동작).
+        expect(existsSync(pd('codex', 'doomed'))).toBe(false);
+      });
+
+      it('rollback 실패해도 원본 writeMeta 에러를 전파 (롤백 swallow 분기)', async () => {
+        // fs.rm 자체가 실패하는 극단 시나리오를 시뮬: writeFileAtomic 후 fs.rm 도 throw 하게 만든다.
+        // best-effort 패턴이므로 롤백 실패는 swallow 되고 원본 에러만 호출자가 받는다.
+        const writeMock = vi.fn(async () => { throw new Error('write fail'); });
+        const rmMock = vi.fn(async () => { throw new Error('rollback fail (should be swallowed)'); });
+        vi.doMock('../../src/core/io-atomic.js', async () => {
+          const actual = await vi.importActual<typeof import('../../src/core/io-atomic.js')>(
+            '../../src/core/io-atomic.js'
+          );
+          return { ...actual, writeFileAtomic: writeMock };
+        });
+        vi.doMock('node:fs', async () => {
+          const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+          return {
+            ...actual,
+            promises: { ...actual.promises, rm: rmMock }
+          };
+        });
+
+        const { createProfile: cp } = await import('../../src/core/profile-store.js');
+
+        await expect(cp('codex', 'rollback-fail')).rejects.toThrow(/write fail/);
+        expect(writeMock).toHaveBeenCalledOnce();
+        expect(rmMock).toHaveBeenCalledOnce();
+      });
     });
   });
 
@@ -222,6 +288,17 @@ describe('profile-store', () => {
       expect(existsSync(profileDir('codex', 'a'))).toBe(true);
     });
 
+    it('meta.json 누락 (디렉토리만 존재) → rename 성공, writeMeta 미호출 (if(meta) else 분기 가드)', async () => {
+      // readMeta 가 ENOENT 로 null 반환 → renameProfile 의 `if (meta)` false 분기.
+      // 디렉토리 rename 만 수행하고 writeMeta 는 호출 안 함. 사용자가 meta 를 수동 삭제한 시나리오.
+      await fs.mkdir(profileDir('codex', 'no-meta'), { recursive: true, mode: 0o700 });
+      await renameProfile('codex', 'no-meta', 'renamed');
+      expect(existsSync(profileDir('codex', 'no-meta'))).toBe(false);
+      expect(existsSync(profileDir('codex', 'renamed'))).toBe(true);
+      // meta.json 은 여전히 없어야 (writeMeta 미호출 검증).
+      expect(existsSync(profileMetaPath('codex', 'renamed'))).toBe(false);
+    });
+
     it('rollback (line 129-132): 손상된 meta.json 으로 readMeta throw → 디렉토리 rename 원복', async () => {
       // createProfile 로 정상 디렉토리 생성 후, 외부에서 meta.json 을 invalid JSON 으로 손상.
       // renameProfile 의 fs.rename 은 성공하지만, readMeta 의 JSON.parse 가 throw 하면
@@ -293,6 +370,14 @@ describe('profile-store', () => {
 
     it('readProfileFile: 없으면 null (ENOENT swallow)', async () => {
       expect(await readProfileFile('codex', 'work', 'never.json')).toBeNull();
+    });
+
+    it('readProfileFile: non-ENOENT 에러 (EISDIR) → throw 전파 (catch 분기 회귀 가드)', async () => {
+      // 파일 path 를 디렉토리로 만들면 fs.readFile 가 EISDIR 로 throw.
+      // ENOENT swallow 분기 외 throw 분기 (profile-store.ts readProfileFile catch) 회귀 가드.
+      await createProfile('codex', 'work');
+      await fs.mkdir(profileFilePath('codex', 'work', 'auth.json'), { recursive: true });
+      await expect(readProfileFile('codex', 'work', 'auth.json')).rejects.toThrow();
     });
   });
 
