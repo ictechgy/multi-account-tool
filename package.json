@@ -16,6 +16,9 @@
     "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "check-publish": "node scripts/check-publish-readiness.mjs",
     "prepublishOnly": "node scripts/check-publish-readiness.mjs && npm run build"
   },
@@ -53,8 +56,10 @@
   "devDependencies": {
     "@types/node": "^22.7.4",
     "@types/react": "^18.3.11",
+    "@vitest/coverage-v8": "^4.1.7",
     "tsx": "^4.19.1",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.7"
   },
   "engines": {
     "node": ">=18.17.0"
