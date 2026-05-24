@@ -36,6 +36,11 @@ jobs:
           # registry-url 가 설정되면 setup-node 가 .npmrc 를 자동 구성해 OIDC 인증 가능.
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Upgrade npm for Trusted Publishing
+        # Trusted Publishing (OIDC) 은 npm 11.5.1+ 필요. node 20 번들 npm 은 10.x 라 별도 upgrade.
+        # 미upgrade 시 npm publish 가 OIDC 토큰 교환을 못 해 404 (registry not found) 로 실패.
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: npm ci
 
