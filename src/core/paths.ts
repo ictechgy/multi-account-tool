@@ -77,25 +77,29 @@ export function validateProfileName(rawName: string): string {
 /**
  * 프로필 내 임의 파일명 (source 의 saveAs) 검증.
  * 비문자열 / traversal 가능 형식 + 예약명 + 화이트리스트 미매치 시 throw.
+ * 반환값은 NFC 정규화된 형태 (validateProfileName 과 대칭).
  *
  * 현재는 BUILTIN_CLI_DEFS 의 saveAs 만 호출 경로상 들어오지만, ROADMAP 의
  * CLI def plugin (`~/.multi-account-tool/cli-defs/*.json`) 도입 시 신뢰할 수 없는
  * 입력이 되므로 정의 단계가 아닌 사용 단계에서 마지막 방어선을 둔다.
+ * 화이트리스트는 ASCII-only 이므로 NFC 정규화가 결과를 바꾸지 않지만,
+ * validateProfileName 과의 일관성 + 검증 전 표준화 정책 표현 목적으로 적용.
  */
 export function validateProfileFileName(rawFileName: string): string {
   if (typeof rawFileName !== 'string') {
     throw new Error('프로필 파일명은 문자열이어야 합니다.');
   }
-  if (PROFILE_FILE_NAME_RESERVED.has(rawFileName)) {
+  const fileName = rawFileName.normalize('NFC');
+  if (PROFILE_FILE_NAME_RESERVED.has(fileName)) {
     throw new Error('"." 또는 ".." 는 프로필 파일명으로 사용할 수 없습니다.');
   }
-  if (/[/\\\x00]/.test(rawFileName)) {
+  if (/[/\\\x00]/.test(fileName)) {
     throw new Error('프로필 파일명에 / \\ NUL 은 포함될 수 없습니다.');
   }
-  if (!PROFILE_FILE_NAME_RE.test(rawFileName)) {
+  if (!PROFILE_FILE_NAME_RE.test(fileName)) {
     throw new Error('프로필 파일명은 영문/숫자/._- 만 사용 가능하며 1~64자 이내여야 합니다.');
   }
-  return rawFileName;
+  return fileName;
 }
 
 /** ~/.multi-account-tool 의 절대 경로 */
@@ -122,8 +126,12 @@ export function cliProfilesDir(cliId: string): string {
 /**
  * 특정 CLI/프로필의 디렉토리. cliId + profileName 자체 검증.
  * profileName 은 NFC 정규화 결과로 경로 구성 (디스크 단일 표기 통일).
+ *
+ * cliId 검증은 cliProfilesDir 위임으로도 일어나지만, 향후 inline 화 등 refactor 시
+ * 위임이 끊겨도 안전하도록 명시 재호출 (idempotent, perf 무시 가능).
  */
 export function profileDir(cliId: string, profileName: string): string {
+  validateCliId(cliId);
   const safeName = validateProfileName(profileName);
   return join(cliProfilesDir(cliId), safeName);
 }

@@ -445,6 +445,18 @@ describe('profile-store', () => {
       expect(await readProfileFile('codex', NFD, 'auth.json')).toBe('{"v":1}');
     });
 
+    it('touchProfile: NFD 입력 → NFC 디스크의 meta.updatedAt 갱신 (PR #10 round-2 보강)', async () => {
+      // round-2 Claude-2 Issue 5: NFD round-trip 매트릭스의 touchProfile 누락 보강.
+      // NFD 입력으로 touchProfile 호출 → NFC 디스크에 저장된 meta.json 의 updatedAt 갱신 확인.
+      const created = await createProfile('codex', NFC);
+      await new Promise((r) => setTimeout(r, 20));  // ISO ms 정밀도 + scheduling 흡수
+      await touchProfile('codex', NFD);
+      const meta = await readMeta('codex', NFC);
+      expect(meta?.createdAt).toBe(created.createdAt);
+      expect(new Date(meta!.updatedAt).getTime())
+        .toBeGreaterThan(new Date(created.updatedAt).getTime());
+    });
+
     it('renameProfile: NFD oldName → NFD newName 도 NFC 디스크에서 처리', async () => {
       await createProfile('codex', NFC, 'L');
       // 다른 한글: '나' NFD ↔ NFC
