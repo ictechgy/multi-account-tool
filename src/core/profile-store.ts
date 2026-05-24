@@ -5,13 +5,14 @@
  *
  * 모든 파일 쓰기는 io-atomic 의 writeFileAtomic (O_EXCL + O_NOFOLLOW + 0600) 으로 통일.
  *
- * 모든 public 함수는 path traversal 방어를 위해 입력값을 내부에서 검증한다:
- *  - cliId  → validateCliId      (영문 시작 + 영숫자/`_`/`-` 1~32자)
- *  - name   → validateProfileName (NFC 정규화 + 예약명/구분자 차단 + 1~40자)
- *  - 파일명 → validateProfileFileName (영숫자/`.`/`_`/`-` 1~64자, 단독 `.`/`..` 차단)
+ * 모든 public 함수는 path traversal 방어를 위해 입력값을 진입 즉시 검증한다:
+ *  - cliId  → validateCliId      (paths.ts 정의; 영문 시작 + 영숫자/`_`/`-` 1~32자)
+ *  - name   → validateProfileName (paths.ts 정의; NFC 정규화 + 예약명/구분자 차단 + 1~40자)
+ *  - 파일명 → validateProfileFileName (paths.ts 정의; 영숫자/`.`/`_`/`-` 1~64자)
  *
  * 검증된 NFC-정규화 결과를 path 구성에 사용해, 입력이 NFD/raw 였더라도
- * 디스크에는 단일 NFC 표기로 통일된다.
+ * 디스크에는 단일 NFC 표기로 통일된다. paths.ts 의 path constructor 들도
+ * 동일 검증을 수행하므로 외부 직접 호출자도 우회 불가 (defense-in-depth).
  */
 
 import { promises as fs } from 'node:fs';
@@ -21,65 +22,15 @@ import {
   profileDir,
   profileFilePath,
   profileMetaPath,
-  validateCliId
+  validateCliId,
+  validateProfileFileName,
+  validateProfileName
 } from './paths.js';
 import type { Profile } from './types.js';
 
-/** 한글/영문/숫자 + _-. 만, 1~40자. */
-const PROFILE_NAME_RE = /^[a-zA-Z0-9가-힣_.-]{1,40}$/;
-
-/** 디렉토리 traversal 위험으로 예약된 이름. */
-const PROFILE_NAME_RESERVED = new Set<string>(['.', '..']);
-
-/** 프로필 내 임의 파일명 화이트리스트. 영문/숫자/`.`/`_`/`-` 만 1~64자. */
-const PROFILE_FILE_NAME_RE = /^[a-zA-Z0-9._-]{1,64}$/;
-
-/** 파일명도 예약된 단독 `.`/`..` 는 별도 차단. */
-const PROFILE_FILE_NAME_RESERVED = new Set<string>(['.', '..']);
-
-/**
- * 프로필 이름을 검증하고 NFC 정규화된 형태로 반환.
- * 잘못된 입력은 throw.
- *
- * - NFC 정규화 (한글 NFD/NFC 우회로 동일 표기 두 프로필 생성 방지)
- * - `.`, `..` 명시 차단 (경로 traversal)
- * - `/`, `\`, NUL 명시 차단
- * - PROFILE_NAME_RE 매칭
- */
-export function validateProfileName(rawName: string): string {
-  const name = rawName.normalize('NFC');
-  if (PROFILE_NAME_RESERVED.has(name)) {
-    throw new Error('"." 또는 ".." 는 프로필 이름으로 사용할 수 없습니다.');
-  }
-  if (/[/\\\x00]/.test(name)) {
-    throw new Error('프로필 이름에 / \\ NUL 은 포함될 수 없습니다.');
-  }
-  if (!PROFILE_NAME_RE.test(name)) {
-    throw new Error('프로필 이름은 한글/영문/숫자/_-. 만 사용 가능하며 1~40자 이내여야 합니다.');
-  }
-  return name;
-}
-
-/**
- * 프로필 내 임의 파일명 (source 의 saveAs) 검증.
- * traversal 가능 형식 (`..`, `/`, `\`, NUL) + 예약명 + 화이트리스트 미매치 시 throw.
- *
- * 현재는 BUILTIN_CLI_DEFS 의 saveAs 만 호출 경로상 들어오지만, ROADMAP 의
- * CLI def plugin (`~/.multi-account-tool/cli-defs/*.json`) 도입 시 신뢰할 수 없는
- * 입력이 되므로 정의 단계가 아닌 사용 단계 (profile-store) 에서 마지막 방어선을 둔다.
- */
-export function validateProfileFileName(rawFileName: string): string {
-  if (PROFILE_FILE_NAME_RESERVED.has(rawFileName)) {
-    throw new Error('"." 또는 ".." 는 프로필 파일명으로 사용할 수 없습니다.');
-  }
-  if (/[/\\\x00]/.test(rawFileName)) {
-    throw new Error('프로필 파일명에 / \\ NUL 은 포함될 수 없습니다.');
-  }
-  if (!PROFILE_FILE_NAME_RE.test(rawFileName)) {
-    throw new Error('프로필 파일명은 영문/숫자/._- 만 사용 가능하며 1~64자 이내여야 합니다.');
-  }
-  return rawFileName;
-}
+// app.tsx / exec.ts 등 외부 호출자 backward compat 용 re-export.
+// 검증자는 paths.ts 단일 소스 — profile-store.ts 에 별도 정의 없음.
+export { validateProfileFileName, validateProfileName } from './paths.js';
 
 /** 특정 CLI 의 프로필 이름 목록 (디렉토리 기반, 알파벳 순). */
 export async function listProfiles(cliId: string): Promise<string[]> {
@@ -161,21 +112,21 @@ export async function renameProfile(
 ): Promise<void> {
   validateCliId(cliId);
   const safeOld = validateProfileName(oldName);
-  const newName = validateProfileName(rawNewName);
-  if (safeOld === newName) return;
-  if (await profileExists(cliId, newName)) {
-    throw new Error(`이미 존재하는 프로필 이름입니다: ${newName}`);
+  const safeNew = validateProfileName(rawNewName);
+  if (safeOld === safeNew) return;
+  if (await profileExists(cliId, safeNew)) {
+    throw new Error(`이미 존재하는 프로필 이름입니다: ${safeNew}`);
   }
-  await fs.rename(profileDir(cliId, safeOld), profileDir(cliId, newName));
+  await fs.rename(profileDir(cliId, safeOld), profileDir(cliId, safeNew));
   try {
-    const meta = await readMeta(cliId, newName);
+    const meta = await readMeta(cliId, safeNew);
     if (meta) {
-      meta.name = newName;
+      meta.name = safeNew;
       meta.updatedAt = new Date().toISOString();
       await writeMeta(meta);
     }
   } catch (err) {
-    await fs.rename(profileDir(cliId, newName), profileDir(cliId, safeOld)).catch(() => {
+    await fs.rename(profileDir(cliId, safeNew), profileDir(cliId, safeOld)).catch(() => {
       /* 롤백 실패는 무시 — 원본 에러를 호출자에게 전파 */
     });
     throw err;

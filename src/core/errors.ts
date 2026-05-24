@@ -15,6 +15,26 @@ export class UsageError extends Error {
 }
 
 /**
+ * Keychain 항목의 기존 account 메타데이터를 파악할 수 없어 안전 swap 을 거부한 경우.
+ * service-only 삭제는 동일 service 의 타 항목까지 영향을 줄 수 있어 data loss 위험.
+ *
+ * 호출자 (TUI / switcher / exec) 는 instanceof 로 분기하여 사용자에게
+ * Keychain Access.app 정리 안내를 명확히 표시할 수 있다.
+ */
+export class KeychainAccountMissingError extends Error {
+  readonly service: string;
+  constructor(service: string) {
+    super(
+      `keychain service '${service}' 의 기존 항목 account 를 파악할 수 없어 안전 swap 을 거부합니다. ` +
+      `service-only 삭제는 동일 service 의 타 항목까지 영향을 줄 수 있어 data loss 위험이 있습니다. ` +
+      `Keychain Access.app 에서 해당 service 의 항목을 수동 정리 후 다시 시도하세요.`
+    );
+    this.name = 'KeychainAccountMissingError';
+    this.service = service;
+  }
+}
+
+/**
  * 자격증명/토큰 후보 시퀀스를 redact.
  * JWT (eyJ...) 패턴과 50자 이상 base64-like 시퀀스를 [redacted] 로 대체하고 500자로 절단.
  *

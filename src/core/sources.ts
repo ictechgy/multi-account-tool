@@ -15,7 +15,7 @@
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
-import { redactMessage } from './errors.js';
+import { KeychainAccountMissingError, redactMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
 import type { KeychainSource, KeychainStored, Source } from './types.js';
 
@@ -97,11 +97,7 @@ async function keychainSet(service: string, account: string, value: string): Pro
 
   if (backupValue != null) {
     if (!backupAccount) {
-      throw new Error(
-        `keychain service '${service}' 의 기존 항목 account 를 파악할 수 없어 안전 swap 을 거부합니다. ` +
-        `service-only 삭제는 동일 service 의 타 항목까지 영향을 줄 수 있어 data loss 위험이 있습니다. ` +
-        `Keychain Access.app 에서 해당 service 의 항목을 수동 정리 후 다시 시도하세요.`
-      );
+      throw new KeychainAccountMissingError(service);
     }
     const delArgs = ['delete-generic-password', '-s', service, '-a', backupAccount];
     const delRes = await runCommand(SECURITY_BIN, delArgs);

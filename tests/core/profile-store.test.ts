@@ -406,6 +406,73 @@ describe('profile-store', () => {
     });
   });
 
+  describe('NFC/NFD round-trip — PR #10 quad-review Claude+Forge 합의', () => {
+    // validateProfileName 이 NFC 정규화한다는 점을 활용해 모든 public 함수가
+    // NFD/NFC 양쪽 입력을 동일 디스크 경로로 resolve 하는지 검증.
+    // 이전 버전: 단순 BAD_NAMES 매트릭스만 있어 "정상 NFD 입력 → NFC 디스크" 일관성 미커버.
+
+    const NFD = '가'.normalize('NFD');  // 'ᄀ' + 'ᅡ' (2 codepoints)
+    const NFC = '가'.normalize('NFC');  // '가' (1 codepoint)
+
+    it('NFD 입력으로 createProfile → 디스크는 NFC 단일 표기', async () => {
+      // sanity: NFD 와 NFC 가 다른 byte sequence 라야 의미 있음
+      expect(NFD).not.toBe(NFC);
+      await createProfile('codex', NFD, 'NFD 입력');
+
+      const dirs = await listProfiles('codex');
+      expect(dirs).toContain(NFC);
+      expect(dirs).not.toContain(NFD);
+    });
+
+    it('NFC/NFD 양쪽 lookup 동일 결과 (profileExists/readMeta)', async () => {
+      await createProfile('codex', NFC);
+      expect(await profileExists('codex', NFC)).toBe(true);
+      expect(await profileExists('codex', NFD)).toBe(true);
+
+      expect((await readMeta('codex', NFC))?.name).toBe(NFC);
+      expect((await readMeta('codex', NFD))?.name).toBe(NFC);
+    });
+
+    it('NFD 로 delete → NFC 디스크 디렉토리 제거', async () => {
+      await createProfile('codex', NFC);
+      await deleteProfile('codex', NFD);
+      expect(await profileExists('codex', NFC)).toBe(false);
+    });
+
+    it('NFD 로 read/writeProfileFile → NFC 디스크 경로로 round-trip', async () => {
+      await writeProfileFile('codex', NFD, 'auth.json', '{"v":1}');
+      expect(await readProfileFile('codex', NFC, 'auth.json')).toBe('{"v":1}');
+      expect(await readProfileFile('codex', NFD, 'auth.json')).toBe('{"v":1}');
+    });
+
+    it('renameProfile: NFD oldName → NFD newName 도 NFC 디스크에서 처리', async () => {
+      await createProfile('codex', NFC, 'L');
+      // 다른 한글: '나' NFD ↔ NFC
+      const NFD2 = '나'.normalize('NFD');
+      const NFC2 = '나'.normalize('NFC');
+      await renameProfile('codex', NFD, NFD2);
+      expect(await profileExists('codex', NFC)).toBe(false);
+      expect(await profileExists('codex', NFC2)).toBe(true);
+      expect((await readMeta('codex', NFC2))?.name).toBe(NFC2);
+    });
+
+    it('정규화 후 길이 경계: NFC 40자 통과 / NFC 41자 throw', () => {
+      const exactly40 = 'a'.repeat(40);
+      const exactly41 = 'a'.repeat(41);
+      expect(validateProfileName(exactly40)).toBe(exactly40);
+      expect(() => validateProfileName(exactly41)).toThrow();
+    });
+
+    it('정규화 후 길이 경계 한글: NFC 40자 통과', () => {
+      // 한글 1글자 = NFC 1 codepoint = 1 char 로 .length 측정
+      const exactly40Korean = '가'.repeat(40);
+      expect(validateProfileName(exactly40Korean)).toBe(exactly40Korean);
+      // NFD 입력은 codepoint 2개씩이므로 raw length 는 80, 그러나 정규화 후 40 — 통과
+      const exactly40KoreanNFD = '가'.normalize('NFD').repeat(40);
+      expect(validateProfileName(exactly40KoreanNFD)).toBe(exactly40Korean);
+    });
+  });
+
   describe('fileName 검증 강제 (회귀 가드: readProfileFile / writeProfileFile)', () => {
     const BAD_FILES = ['../escape.json', '../../etc/passwd', 'sub/file.json', '.', '..', 'file\x00.json', ''];
 

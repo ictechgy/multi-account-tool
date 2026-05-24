@@ -14,7 +14,9 @@ import {
   profileFilePath,
   profileMetaPath,
   profilesDir,
-  validateCliId
+  validateCliId,
+  validateProfileFileName,
+  validateProfileName
 } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
@@ -107,6 +109,65 @@ describe('paths', () => {
       ['a'.repeat(33), '33자 (상한 32 초과)']
     ])('위험한 cliId 거부: %s (%s)', (id, _reason) => {
       expect(() => cliLockPath(id)).toThrow(/path segment/);
+    });
+  });
+
+  describe('typeof string guard (3 validators 모두) — PR #10 quad-review Codex-2', () => {
+    // RegExp.test() 가 비문자열을 string 으로 강제 변환 → null/undefined/true 가
+    // 'null'/'undefined'/'true' 로 regex 통과할 수 있는 corner case.
+    // TypeScript strict 가 컴파일 타임만 보장하므로 unknown cast / dynamic import / JSON 경계 방어용.
+    const BAD_TYPES: [unknown, string][] = [
+      [null, 'null'],
+      [undefined, 'undefined'],
+      [true, 'boolean true'],
+      [123, 'number'],
+      [{}, 'object'],
+      [[], 'array']
+    ];
+
+    it.each(BAD_TYPES)('validateCliId 비문자열 throw: %s (%s)', (bad, _r) => {
+      expect(() => validateCliId(bad as string)).toThrow(/문자열/);
+    });
+
+    it.each(BAD_TYPES)('validateProfileName 비문자열 throw: %s (%s)', (bad, _r) => {
+      expect(() => validateProfileName(bad as string)).toThrow(/문자열/);
+    });
+
+    it.each(BAD_TYPES)('validateProfileFileName 비문자열 throw: %s (%s)', (bad, _r) => {
+      expect(() => validateProfileFileName(bad as string)).toThrow(/문자열/);
+    });
+  });
+
+  describe('path constructor 직접 호출 traversal 방어 — PR #10 quad-review Codex-1', () => {
+    // 이전 버전: validateCliId 가 cliLockPath 에만 적용 → profile-store 우회해
+    // paths.ts 의 cliProfilesDir/profileDir/profileFilePath/profileMetaPath 를 직접
+    // import 하는 호출자는 untrusted cliId 로 traversal 가능했음.
+    // 새 정책: 모든 path constructor 가 입력 자체 검증.
+
+    it.each([
+      ['cliProfilesDir', () => cliProfilesDir('../escape')],
+      ['profileDir cliId', () => profileDir('../escape', 'work')],
+      ['profileDir name', () => profileDir('codex', '../escape')],
+      ['profileFilePath cliId', () => profileFilePath('../escape', 'work', 'auth.json')],
+      ['profileFilePath name', () => profileFilePath('codex', '../escape', 'auth.json')],
+      ['profileFilePath fileName', () => profileFilePath('codex', 'work', '../escape.json')],
+      ['profileMetaPath cliId', () => profileMetaPath('../escape', 'work')],
+      ['profileMetaPath name', () => profileMetaPath('codex', '../escape')]
+    ])('%s traversal 입력 → throw', (_label, fn) => {
+      expect(fn).toThrow();
+    });
+
+    it('정상 입력은 모두 통과 (회귀 가드)', () => {
+      expect(() => cliProfilesDir('codex')).not.toThrow();
+      expect(() => profileDir('codex', 'work')).not.toThrow();
+      expect(() => profileFilePath('codex', 'work', 'auth.json')).not.toThrow();
+      expect(() => profileMetaPath('codex', 'work')).not.toThrow();
+    });
+
+    it('profileDir 는 NFC 정규화된 경로 반환 (NFD 입력 → NFC 디렉토리)', () => {
+      const nfd = '가'.normalize('NFD');
+      const nfc = '가'.normalize('NFC');
+      expect(profileDir('codex', nfd)).toBe(profileDir('codex', nfc));
     });
   });
 
