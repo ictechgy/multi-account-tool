@@ -29,7 +29,7 @@ import {
   setActiveProfile
 } from './core/config.js';
 import { detectAll, type DetectionResult } from './core/detector.js';
-import { errorMessage } from './core/errors.js';
+import { describeError, errorMessage } from './core/errors.js';
 import {
   deleteProfile,
   listProfiles,
@@ -497,7 +497,7 @@ async function runBusyAction<T>(cfg: BusyActionConfig<T>): Promise<void> {
   } catch (err) {
     cfg.dispatch({
       type: 'replace',
-      screen: { kind: 'message', tone: 'error', title: cfg.errorTitle, body: errorMessage(err) }
+      screen: { kind: 'message', tone: 'error', title: cfg.errorTitle, body: describeError(err) }
     });
   }
 }
