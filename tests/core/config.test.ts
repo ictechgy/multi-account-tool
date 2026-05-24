@@ -63,6 +63,27 @@ describe('config', () => {
       await fs.writeFile(configPath(), 'not-json{{{');
       await expect(loadConfig()).rejects.toThrow();
     });
+
+    it('파일 없을 때 firstImportPromptShown 은 undefined (명시)', async () => {
+      const cfg = await loadConfig();
+      expect(cfg.firstImportPromptShown).toBeUndefined();
+    });
+
+    it('파일에 firstImportPromptShown=false 면 false 로 보존', async () => {
+      await fs.mkdir(dataDir(), { recursive: true, mode: 0o700 });
+      await fs.writeFile(configPath(), JSON.stringify({ version: 1, active: {}, firstImportPromptShown: false }));
+      const cfg = await loadConfig();
+      expect(cfg.firstImportPromptShown).toBe(false);
+    });
+
+    it('active 가 null 인 손상 shape → 빈 객체로 안전 처리 (parsed.active ?? {})', async () => {
+      // production loadConfig 의 `parsed.active ?? {}` 가 null 도 빈 객체로 정규화.
+      // 만약 누군가 ?? 를 || 로 바꿔도 동일 동작이지만, contract 명시 가치.
+      await fs.mkdir(dataDir(), { recursive: true, mode: 0o700 });
+      await fs.writeFile(configPath(), JSON.stringify({ version: 1, active: null }));
+      const cfg = await loadConfig();
+      expect(cfg.active).toEqual({});
+    });
   });
 
   describe('saveConfig', () => {
@@ -102,6 +123,22 @@ describe('config', () => {
       });
       const cfg = await loadConfig();
       expect(cfg.active.gemini).toBe('g');
+    });
+
+    it('mutator 가 throw 하면 save 안 됨 → 디스크 상태 원본 유지', async () => {
+      // production contract: mutator throw 시 saveConfig 호출 안 됨 (try/catch 없음).
+      // 따라서 부분 mutation 이 디스크에 누출되지 않음 — atomic 의도된 안전성.
+      await saveConfig({ version: 1, active: { codex: 'pristine' } });
+
+      await expect(
+        mutateConfig((cfg) => {
+          cfg.active.codex = 'mutated-but-should-not-save';
+          throw new Error('mutator failure');
+        })
+      ).rejects.toThrow('mutator failure');
+
+      const cfg = await loadConfig();
+      expect(cfg.active.codex).toBe('pristine');
     });
   });
 
@@ -177,21 +214,55 @@ describe('config', () => {
       expect(existsSync(join(nested, 'auth.json.tmp'))).toBe(false);
     });
 
-    it('symlink 는 추적하지 않음 (loop 방지 + out-of-scope 보호)', async () => {
+    it('symlink 는 추적하지 않음 (out-of-scope 보호) + symlink 자체도 잔존', async () => {
       const base = dataDir();
       await fs.mkdir(base, { recursive: true, mode: 0o700 });
-      // 외부 디렉토리 시뮬레이션: tmp 안에 별도 dir 만들고 그 안에 .tmp 둠.
       const outside = join(tmp.home, 'outside-dir');
       await fs.mkdir(outside, { recursive: true });
       await fs.writeFile(join(outside, 'should-not-be-deleted.tmp'), 'outside');
 
-      // 데이터 디렉토리 안에서 outside 로 symlink.
-      await fs.symlink(outside, join(base, 'link-to-outside'));
+      const linkPath = join(base, 'link-to-outside');
+      await fs.symlink(outside, linkPath);
 
       await cleanupTmpFiles();
 
-      // symlink 가 추적됐으면 outside 의 .tmp 가 지워졌을 것 — 보존되어야 한다.
+      // 두 가지 invariant 명시:
+      //  1) symlink 추적 안 함 → outside 의 .tmp 보존
+      //  2) symlink 자체는 'continue' 로 skip → link 도 base 에 남음 (정리 대상 아님)
       expect(existsSync(join(outside, 'should-not-be-deleted.tmp'))).toBe(true);
+      expect(existsSync(linkPath)).toBe(true);
+      const linkStat = await fs.lstat(linkPath);
+      expect(linkStat.isSymbolicLink()).toBe(true);
+    });
+
+    it('서브 디렉토리 readdir 실패 (chmod 000) → 안쪽 catch 가 무시, sibling .tmp 정리 계속', async () => {
+      // walkAndCleanTmp 의 inner try/catch (line 105) 가 fs.readdir 실패를 잡고 silent return.
+      // 권한 거부 dir 안의 .tmp 는 정리 못 하지만 sibling 정리는 계속되어야 한다 (best-effort).
+      const base = dataDir();
+      await fs.mkdir(base, { recursive: true, mode: 0o700 });
+      const denied = join(base, 'denied-dir');
+      await fs.mkdir(denied, { mode: 0o700 });
+      await fs.writeFile(join(denied, 'inside.tmp'), 'cannot-access');
+      await fs.writeFile(join(base, 'sibling.tmp'), 'normal');
+
+      // CI runner 가 root 이면 chmod 0o000 이 무시되어 readdir 가 성공 — 그 경우 본 테스트 skip.
+      await fs.chmod(denied, 0o000);
+      try {
+        await fs.readdir(denied);
+        // 여기 도달하면 readdir 가 성공 (= root) → 테스트 의도 무효, skip.
+        return;
+      } catch { /* EACCES 기대대로 발생 — 진행 */ }
+
+      try {
+        await expect(cleanupTmpFiles()).resolves.toBeUndefined();
+        // sibling 은 정리됨
+        expect(existsSync(join(base, 'sibling.tmp'))).toBe(false);
+        // denied dir 자체는 보존 (안쪽 못 들어가 정리 못 함)
+        expect(existsSync(denied)).toBe(true);
+      } finally {
+        // tmp.cleanup() 이 dir 삭제할 수 있게 권한 복구.
+        await fs.chmod(denied, 0o700).catch(() => { /* best-effort, root 아니면 OK */ });
+      }
     });
   });
 });
