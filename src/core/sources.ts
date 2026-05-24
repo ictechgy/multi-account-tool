@@ -15,7 +15,7 @@
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
-import { redactMessage } from './errors.js';
+import { KeychainAccountMissingError, redactMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
 import type { KeychainSource, KeychainStored, Source } from './types.js';
 
@@ -84,7 +84,8 @@ async function keychainGetValue(service: string): Promise<string | null> {
  * Keychain 항목을 안전하게 쓴다.
  *  1) 기존 값/account 메모리 백업
  *  2) 백업 acct 와 정확히 매칭되는 항목만 삭제 (-a 명시).
- *     백업이 있는데 acct 를 모를 때는 console.warn 만 출력하고 service-only 삭제 (옛 동작 유지).
+ *     백업이 있는데 acct 를 못 잡으면 throw — service-only 삭제는 동일 service 의
+ *     타 항목 영구 손실 위험이 있어 swap 자체를 거부한다 (data loss 방지).
  *  3) 새 값 추가. 실패 시 백업으로 롤백 (롤백 결과도 확인해 실패 시 에러에 첨부).
  *
  * `-A` 로 동일 사용자 모든 앱이 접근 가능한 ACL 사용 (Claude 가 토큰을 못 읽는 회귀 방지).
@@ -95,12 +96,10 @@ async function keychainSet(service: string, account: string, value: string): Pro
   const backupAccount = backupValue != null ? await keychainGetAccount(service) : null;
 
   if (backupValue != null) {
-    const delArgs = ['delete-generic-password', '-s', service];
-    if (backupAccount) {
-      delArgs.push('-a', backupAccount);
-    } else {
-      console.warn(`경고: keychain service '${service}' 의 account 를 파악할 수 없어 service-only 삭제를 수행합니다. 동일 service 의 다른 항목이 영향받을 수 있습니다.`);
+    if (!backupAccount) {
+      throw new KeychainAccountMissingError(service);
     }
+    const delArgs = ['delete-generic-password', '-s', service, '-a', backupAccount];
     const delRes = await runCommand(SECURITY_BIN, delArgs);
     if (delRes.code !== 0) {
       throw keychainErr('백업 항목 삭제', delRes);

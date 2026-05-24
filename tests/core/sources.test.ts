@@ -23,6 +23,7 @@ vi.mock('node:child_process', () => ({
 import { spawn } from 'node:child_process';
 
 import { readSource, sourceExists, writeSource } from '../../src/core/sources.js';
+import { KeychainAccountMissingError } from '../../src/core/errors.js';
 import type { FileSource, KeychainSource, KeychainStored } from '../../src/core/types.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 import { promises as fs } from 'node:fs';
@@ -274,26 +275,44 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(deleteCall[1]).toContain('bob');
     });
 
-    it('기존 있음 but account 못 잡음: console.warn + service-only delete', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* 캡처 */ });
+    it('기존 있음 but account 못 잡음: KeychainAccountMissingError throw — delete/add 명령 미발급', async () => {
+      // 회귀 가드: 이전 버전은 console.warn 후 service-only delete 를 수행해
+      // 동일 service 의 타 항목까지 영구 삭제될 위험이 있었다. 새 정책은 throw 로
+      // swap 자체를 거부 — Keychain 의 acct 메타가 비정상이면 사용자가 수동 정리해야 함.
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }) as never)
+        // account 조회: code 0 이지만 acct 라인 없음 → keychainGetAccount = null
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct line here' }) as never);
+
+      const stored: KeychainStored = { value: 'new', account: 'alice' };
+      // PR #10 quad-review Claude-2 합의: KeychainAccountMissingError 클래스로 분기 가능.
+      // rejects.toThrow(Class) 는 instanceof 검증.
+      await expect(writeSource(KEYCHAIN_SRC, JSON.stringify(stored)))
+        .rejects.toThrow(KeychainAccountMissingError);
+
+      // PR #10 quad-review Forge-2 합의: 보안 invariant 직접 검증.
+      // 호출 횟수 (toHaveBeenCalledTimes(2)) 는 fragile — 무해한 read 추가 시 false fail.
+      // 대신 mutation 명령 (delete-generic-password / add-generic-password) 부재를 명시 검증.
+      const mutations = mockSpawn.mock.calls.filter(call => {
+        const args = call[1] as string[];
+        return args.some(a => a === 'delete-generic-password' || a === 'add-generic-password');
+      });
+      expect(mutations).toEqual([]);
+    });
+
+    it('KeychainAccountMissingError: error.service 필드로 호출자가 어느 service 인지 분기 가능', async () => {
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }) as never)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct' }) as never);
+
+      const stored: KeychainStored = { value: 'new' };
       try {
-        mockSpawn
-          .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }) as never)
-          // account 조회 실패 (코드 0 인데 acct 파싱 안 됨)
-          .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'no acct line here' }) as never)
-          // delete (service-only)
-          .mockReturnValueOnce(fakeProc({ code: 0 }) as never)
-          // add
-          .mockReturnValueOnce(fakeProc({ code: 0 }) as never);
-
-        const stored: KeychainStored = { value: 'new', account: 'alice' };
         await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
-
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/account 를 파악할 수 없어/));
-        const deleteCall = mockSpawn.mock.calls[2];
-        expect(deleteCall[1]).not.toContain('-a');
-      } finally {
-        warnSpy.mockRestore();
+        throw new Error('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(KeychainAccountMissingError);
+        expect((err as KeychainAccountMissingError).service).toBe('Test Service');
+        expect((err as KeychainAccountMissingError).name).toBe('KeychainAccountMissingError');
       }
     });
 
