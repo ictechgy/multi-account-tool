@@ -58,6 +58,16 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }
     ]
+  },
+  {
+    // MoonshotAI 공식 Kimi Code CLI (https://github.com/MoonshotAI/kimi-cli).
+    // 단일 TOML 파일 `~/.kimi/config.toml` 에 provider/api_key + OAuth 토큰 모두 평문 저장.
+    // CLI 자체는 `--config-file <path>` 로 경로 override 가능하나 mat 의 swap 모델은 기본 경로 swap 으로 충분.
+    id: 'kimi',
+    name: 'Kimi CLI',
+    sources: [
+      { type: 'file', path: '~/.kimi/config.toml', saveAs: 'kimi.toml' }
+    ]
   }
 ];
 
