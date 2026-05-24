@@ -79,40 +79,53 @@ describe('writeFileAtomic', () => {
     expect(await fs.readFile(target, 'utf8')).toBe('C');
   });
 
-  it('rename 실패 시 .tmp 가 정리된다 (Quad-review V)', async () => {
-    // target 이 기존 디렉토리이면 fs.rename(file, dir) 가 EISDIR/ENOTDIR 로 실패.
-    // open + writeFile 까지는 성공해 tmp 가 생성되지만, catch 블록이 정리해야 한다.
+  it('target 이 디렉토리여서 쓰기가 실패해도 .tmp 가 정리된다', async () => {
+    // target=dir 이면 fs.rename(tmp, target) 가 EISDIR/ENOTDIR/ENOTEMPTY 등으로 실패.
+    // platform/filesystem 마다 정확한 errno 가 다를 수 있어 화이트리스트로 검증한다.
+    // 핵심 invariant 는 "어느 단계든 실패하면 .tmp 가 dir 에 남지 않음" — 후속 atomic
+    // 호출이 잔존 .tmp 의 EEXIST 로 깨지지 않게 보장.
     const target = join(dir, 'isdir');
     await fs.mkdir(target);
 
-    await expect(writeFileAtomic(target, 'data')).rejects.toThrow();
+    let caughtCode: string | undefined;
+    try {
+      await writeFileAtomic(target, 'data');
+      expect.fail('write 가 실패했어야 함');
+    } catch (err) {
+      caughtCode = (err as NodeJS.ErrnoException).code;
+    }
+    expect(['EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'EPERM']).toContain(caughtCode);
 
-    // .tmp 잔존 없음 — 본 invariant 가 깨지면 후속 atomic 호출이 EEXIST 로 깨진다.
     const entries = await fs.readdir(dir);
     expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
   });
 
-  it('동시 쓰기 (Promise.all) 시 .tmp 잔존 없음 — atomicity 는 단일 caller 한정 (Quad-review W)', async () => {
-    // io-atomic.ts 의 contract (모듈 상단 주석에 명시):
-    //   "호출자는 같은 path 에 동시 호출하지 않도록 보장해야 한다 (mutateConfig 같은 직렬화 헬퍼 사용)."
+  it('동시 쓰기는 race 결과와 무관하게 .tmp 잔존 없음 (intentional all-rejected 도 수용)', async () => {
+    // io-atomic.ts contract (모듈 상단 주석): 호출자가 같은 path 에 동시 호출하지 않도록
+    // 보장해야 한다. 본 테스트는 그 contract 를 위배했을 때의 안전망 검증:
+    //   - 호출 A 가 open(tmp) 성공 후 호출 B 가 open(tmp) → EEXIST → B 가 catch 에서 rm(tmp)
+    //   - 호출 A 의 rename 이 ENOENT 로 실패. 모든 호출이 실패할 수 있음 (intentional contract 위배 결과).
     //
-    // 즉 같은 target 에 대한 동시 호출은 결과 미정 — tmp path 가 결정적 (`${target}.tmp`) 이라
-    // 호출 A 가 open(tmp) 성공 후 호출 B 가 open(tmp) EEXIST → B 의 catch 가 rm(tmp) → A 의
-    // rename 이 ENOENT 로 실패. 결과적으로 두 호출 모두 실패 가능.
-    //
-    // 본 테스트는 그 한계 하에서도 깨지지 않아야 할 invariant 만 검증:
-    //  1) 파일이 생성되었다면 그 값은 A/B/C 중 하나 (partial write 없음)
-    //  2) .tmp 잔존 없음 — 후속 호출이 EEXIST 로 깨지지 않게 보장
+    // 의도된 invariant 두 가지를 모두 명시 assert (silent pass 차단):
+    //  1) settled 결과의 모든 rejection 은 알려진 EEXIST/ENOENT 계열 — unexpected 에러 없음
+    //  2) 결과와 무관하게 .tmp 는 dir 에 남지 않음
     const target = join(dir, 'concurrent.json');
-    await Promise.allSettled([
-      writeFileAtomic(target, 'A'),
-      writeFileAtomic(target, 'B'),
-      writeFileAtomic(target, 'C')
+    const settled = await Promise.allSettled([
+      writeFileAtomic(target, 'longer-payload-A'),
+      writeFileAtomic(target, 'longer-payload-B'),
+      writeFileAtomic(target, 'longer-payload-C')
     ]);
 
+    for (const r of settled) {
+      if (r.status === 'rejected') {
+        const code = (r.reason as NodeJS.ErrnoException).code;
+        expect(['EEXIST', 'ENOENT', 'EPERM']).toContain(code);
+      }
+    }
     const fileExists = await fs.access(target).then(() => true).catch(() => false);
     if (fileExists) {
-      expect(['A', 'B', 'C']).toContain(await fs.readFile(target, 'utf8'));
+      const content = await fs.readFile(target, 'utf8');
+      expect(['longer-payload-A', 'longer-payload-B', 'longer-payload-C']).toContain(content);
     }
     const entries = await fs.readdir(dir);
     expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);

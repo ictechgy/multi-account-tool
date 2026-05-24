@@ -47,17 +47,18 @@ describe('paths', () => {
   });
 
   describe('cliLockPath — SAFE_CLI_ID_RE 검증 (path traversal 방어)', () => {
-    // 정상 case 도 [input, reason] 튜플로 통일 — it 제목에 의도 노출.
-    // 'a' (1자, 최소) 와 'a'.repeat(32) (정확한 상한) 경계값 모두 포함 →
-    // 정규식이 {0,30} 또는 {0,32} 로 잘못 바뀌어도 회귀 감지 가능 (Quad-review L+M).
+    // 정상/위험 case 모두 [input, reason] 튜플로 통일 — it 제목에 의도 노출.
+    // 'a' (1자, 최소) 와 'a'.repeat(32) (정확한 상한) 경계값 + 'a'.repeat(33) (상한 +1) →
+    // 정규식이 {0,30} 또는 {0,32} 로 잘못 바뀌어도 양방향 회귀 감지 가능.
+    // 콜백은 `(id, _reason)` 으로 두 인자 모두 받아 it.each 의 tuple 매핑 의도를 명시.
     it.each([
       ['codex', '기본 cli'],
       ['claude', '하이픈 없는 영문'],
       ['my-cli', '하이픈 포함'],
       ['cli_2', '언더스코어 + 숫자'],
       ['a', '1글자 최소 경계'],
-      ['a'.repeat(32), '정확히 32자 (상한 경계)']
-    ])('정상 cliId 수락: %s (%s)', (id) => {
+      ['a'.repeat(32), '정확히 32자 (상한 경계 — 허용)']
+    ])('정상 cliId 수락: %s (%s)', (id, _reason) => {
       expect(() => cliLockPath(id)).not.toThrow();
       expect(cliLockPath(id)).toBe(join(locksDir(), `${id}.lock`));
     });
@@ -74,7 +75,7 @@ describe('paths', () => {
       ['cli space', '공백 (shell 인자 분리 위험)'],
       ['cli\x00null', 'NUL 바이트 (path 종결자 우회)'],
       ['a'.repeat(33), '33자 (상한 32 초과)']
-    ])('위험한 cliId 거부: %s (%s)', (id) => {
+    ])('위험한 cliId 거부: %s (%s)', (id, _reason) => {
       expect(() => cliLockPath(id)).toThrow(/path segment/);
     });
   });
