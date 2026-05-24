@@ -50,7 +50,7 @@ describe('detectAll', () => {
     }
   });
 
-  it('gemini partial (oauth_creds 존재, google_accounts 부재) → hasAnyLive true, hasLive false', async () => {
+  it('gemini partial (oauth_creds.json 존재, google_accounts.json 부재) → hasAnyLive true, hasLive false', async () => {
     // gemini.sources[0] = oauth_creds.json (true), sources[1] = google_accounts.json (false)
     mockSourceExists.mockImplementation(async (src: Source) =>
       src.saveAs === 'oauth_creds.json'
