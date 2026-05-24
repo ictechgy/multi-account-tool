@@ -25,9 +25,22 @@ const USAGE =
   `  mat --help                                이 도움말 출력\n` +
   `  mat --version                             버전 출력\n`;
 
+/**
+ * Exit code 규약:
+ *   0  성공 (자식 0 종료 + restore 성공)
+ *   1  예상치 못한 에러 (spawn 실패, 알 수 없는 throw)
+ *   2  사용법/검증 실패 (UsageError, argv 파싱 실패)
+ *   74 restore 실패 (자식은 끝났지만 활성 프로필 원복 불가 — 자동화가 감지 가능)
+ *   75 다른 mat exec 가 lock 보유 중 (LockHeldError, 재시도 가능)
+ *   128+N 자식이 시그널 N 으로 종료 → 동일 시그널 self-raise
+ *   <child code>  자식 non-zero exit 그대로 전파
+ */
+const EXIT_RESTORE_FAILED = 74;
+
 main().catch((err) => {
   process.stderr.write(`mat: ${errorMessage(err)}\n`);
-  process.exit(1);
+  const exitCode = (err as { exitCode?: unknown })?.exitCode;
+  process.exit(typeof exitCode === 'number' ? exitCode : 1);
 });
 
 async function main(): Promise<void> {
@@ -92,19 +105,23 @@ async function handleExec(rest: string[]): Promise<void> {
   }
   const [command, ...cmdArgs] = after;
 
-  const { code, signal } = await runExec({
+  const { code, signal, restoreError } = await runExec({
     cliId,
     profileName,
     command,
     args: cmdArgs
   });
 
+  // restore 실패 시: 자식이 0 으로 끝나도 자동화가 cleanup 실패를 감지하도록 별도 exit code.
+  // 자식이 시그널/non-zero 로 끝났다면 그 결과를 더 중요하게 다루고 restoreError 는 stderr 안내만.
   if (signal) {
-    // 자식이 시그널로 종료된 경우 동일 시그널로 자신을 종료해 부모에 정확히 전달.
     process.kill(process.pid, signal);
     return;
   }
-  process.exit(code ?? 1);
+  if (code != null && code !== 0) {
+    process.exit(code);
+  }
+  process.exit(restoreError ? EXIT_RESTORE_FAILED : (code ?? 1));
 }
 
 async function printVersion(): Promise<void> {
