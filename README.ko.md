@@ -102,6 +102,31 @@ TUI 가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
 | 프로필 | `r` | 이름 변경 |
 | 프로필 | `d` | 삭제 |
 
+### `mat exec` — 한 명령에 한해 프로필 swap
+
+```bash
+mat exec <cli> <profile> -- <cmd...>
+```
+
+`<profile>` 로 일시 swap → `<cmd>` 실행 → 명령 종료 시 원래 활성 프로필로 자동 원복.
+
+```bash
+# 한 번의 Claude 세션만 work 프로필로 실행, 종료 후 personal 로 원복
+mat exec claude work -- claude
+
+# lterm 과 조합
+lterm send-keys "mat exec claude work -- claude" Enter
+```
+
+동작:
+
+- `<cli>` 에 이미 활성 프로필이 설정되어 있어야 한다 (먼저 TUI 로 라이브 자격증명을 캡처).
+- CLI 별 lockfile (`~/.multi-account-tool/locks/<cli>.lock`) 로 동일 CLI 의 `mat exec` 가 동시에 race 하지 않도록 직렬화. 비정상 종료로 남은 stale lock 은 자동 복구.
+- 자식에 `SIGINT` / `SIGTERM` / `SIGHUP` 을 전달하고, 자식의 종료 코드/시그널을 그대로 반영한다.
+- 원복은 `finally` 블록에서 일어나 정상 종료, 에러, 시그널 모두에서 실행된다. **단 `mat` 자체가 `SIGKILL` 을 받으면 원복은 일어나지 않는다** — 이 경우 활성 포인터가 `<profile>` 에 남으므로 TUI 로 다시 전환해야 한다.
+
+이는 **시간 격리**이지 세션 격리가 아니다. 자식이 실행되는 동안 OS 전역 자격증명은 `<profile>` 의 것. 두 터미널에서 서로 다른 `mat exec` 를 동시에 띄우면 lock 으로 직렬화되며, 진짜 세션별 격리는 로드맵.
+
 ---
 
 ## 데이터 저장 위치
@@ -184,7 +209,8 @@ v0.2+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 
 - 커뮤니티 CLI 정의를 위한 플러그인 메커니즘
 - 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
-- `lterm` 통합 shim (`mat exec <profile> -- <cmd>`)
+- 빌트인 CLI 확장 (Aider, Cursor Agent, Goose, Copilot CLI 등)
+- `lterm claude --profile <name>` 같은 shim wrapper
 
 ---
 

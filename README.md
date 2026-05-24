@@ -102,6 +102,31 @@ If the CLI's live credentials are already present, `mat` offers to import them a
 | Profiles | `r` | Rename |
 | Profiles | `d` | Delete |
 
+### `mat exec` — one-shot swap around a command
+
+```bash
+mat exec <cli> <profile> -- <cmd...>
+```
+
+Temporarily swap to `<profile>`, run `<cmd>`, then restore the previously active profile when the command exits.
+
+```bash
+# Run a single Claude session as the "work" profile, then restore "personal"
+mat exec claude work -- claude
+
+# Pair with lterm
+lterm send-keys "mat exec claude work -- claude" Enter
+```
+
+Behaviour:
+
+- Requires an active profile for `<cli>` already set (use the TUI to capture live credentials first).
+- A per-CLI lockfile (`~/.multi-account-tool/locks/<cli>.lock`) prevents two `mat exec` runs from racing on the same CLI. Stale locks from crashed processes are auto-recovered.
+- Signals (`SIGINT` / `SIGTERM` / `SIGHUP`) are forwarded to the child; the child's exit code and signal are propagated back.
+- The restore step runs in a `finally` block so normal exit, errors, and forwarded signals all trigger it. **A `SIGKILL` to `mat` itself bypasses restore** — the active pointer would then remain on `<profile>` until you switch back via the TUI.
+
+This is **temporal isolation**, not session isolation: while the child runs, the OS-global credentials are the `<profile>` ones. Two terminals running different `mat exec` commands serialise via the lock; true per-session isolation is on the roadmap.
+
 ---
 
 ## Data layout
@@ -184,7 +209,8 @@ See [ROADMAP.md](./ROADMAP.md) for v0.2+ plans:
 
 - Plugin mechanism for community-contributed CLI definitions
 - Session-scoped credential isolation (different account per `lterm` session)
-- `lterm` integration shims (`mat exec <profile> -- <cmd>`)
+- More built-in CLIs (Aider, Cursor Agent, Goose, Copilot CLI, …)
+- `lterm claude --profile <name>` shim wrapper
 
 ---
 

@@ -43,6 +43,16 @@ export function profileMetaPath(cliId: string, profileName: string): string {
   return profileFilePath(cliId, profileName, 'meta.json');
 }
 
+/** lockfile 들이 모이는 디렉토리 (`mat exec` 의 cli 별 직렬화용). */
+export function locksDir(): string {
+  return join(dataDir(), 'locks');
+}
+
+/** 특정 CLI 의 lockfile 경로. */
+export function cliLockPath(cliId: string): string {
+  return join(locksDir(), `${cliId}.lock`);
+}
+
 /** 선행 `~/` 를 home 으로 확장. 그 외 경로는 그대로 반환. */
 export function expandTilde(p: string): string {
   if (p === '~') return homedir();
