@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-24
+
 ### Added
 
+- **Aider 빌트인** (`#22`) — `BUILTIN_CLI_DEFS` 4번째 항목. `~/.aider.conf.yml` file source (saveAs `aider.yml`). plugin 으로 'aider' override 차단 (builtin 우선 보안 정책). README plugin 예시는 비-builtin `my-cli` 템플릿으로 교체.
 - **CLI def plugin loader** (`#14`) — `~/.multi-account-tool/cli-defs/*.json` 사용자 정의 CLI 지원. 신규 모듈 `src/core/cli-defs-plugin.ts` (`validateCliDefRaw` + `loadUserCliDefs`). 빌트인과 plugin id 충돌 시 빌트인 우선. 잘못된 plugin 은 warn + skip (mat 본체 정상 동작). `getAllCliDefs()` / `getCliDefsWarnings()` / `resetCliDefCache()` 헬퍼.
 - **`describeError` helper** (`#16`) — TUI/CLI 에서 에러를 일관된 사용자 메시지로 surface. `KeychainAccountMissingError` 인 경우 raw service 명을 별도 라인으로 노출해 plugin/redact 우회 식별 가능. `cli.tsx` top-level + `app.tsx` `runBusyAction` catch 두 곳 적용.
 - **`ValidationError` class** (`#17`) — `extends UsageError` 로 exitCode 2 자동 상속, `field` 명시. 입력 검증 실패 시 어떤 필드가 문제인지 호출자가 식별 가능.
@@ -22,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **createProfile partial-state 방지** (`#19`) — writeMeta 실패 (디스크 풀/권한 거부 등) 시 best-effort `fs.rm` rollback 추가. 이전: 디렉토리만 남는 부분 상태 가능. 새 버전: `renameProfile` 의 catch 분기와 동일 패턴 — 일관성 + 방어적 동작.
 - **path traversal 방어 강화** (`#10`) — 이전 버전: `createProfile` / `renameProfile` 만 new name 검증, 나머지는 무방비. 새 버전: 모든 public 함수 + path constructor 가 입력 검증 → `../escape` / `foo/bar` / NUL 바이트 / 예약명 모두 차단.
 - **keychain account 미파악 시 swap 거부** (`#10`) — `KeychainAccountMissingError` 도입. 이전: 미파악 시 무시하고 진행 → data loss 위험. 새 버전: throw + 호출자 분기 + `describeError` 로 안전한 사용자 메시지.
 - **validator typeof string guard** (`#15`) — `validateCliId` / `validateProfileName` / `validateProfileFileName` 모두 runtime typeof 가드. Symbol / BigInt / Function 등 비-string 입력 거부 회귀 가드.
@@ -49,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PR #10 보안 강화 테스트** (`#10`) — 214 → 331 (+117). 9 public 함수 × 위험 입력 + path constructor 매트릭스.
 - **테스트 정리** (`#12`) — `as never` cast ~28건 제거 (helper 1곳에 격리). `mockSpawn.mock.calls[N]` 매직 인덱스 5건 → `findSpawnCallsByArg` helper.
 - **회귀 가드 보강** (`#15`, `#18`) — BAD_TYPES 매트릭스 확장 (Symbol/BigInt/Function), redact-before-truncate 순서 명문화 (`#15`), renameProfile rollback (corrupt meta.json 통합) + switcher 3-source 'tri-cli' fake def 주입 reverse-order rollback 검증 (`#18`).
+- **profile-store.ts 100% lines + 100% branch** (`#19`) — listProfiles non-ENOENT (ENOTDIR) + readProfileFile non-ENOENT (EISDIR) real-fs 회귀 가드 + createProfile rollback (vi.doMock io-atomic, rollback 도 실패 swallow 분기 포함) + renameProfile `if(meta)` else 분기 (meta.json 누락) 커버. +5 테스트.
+- **lockfile.ts 100% lines + 100% branch** (`#20`) — cross-process fork barrier 대신 단일 프로세스 결정론 (vi.doMock + real-fs chmod). readInfo typeof guard, pid=0 boundary, tryAcquire mkdir/handleConflict rename EACCES (chmod 0o500 + root-skip guard via `chmodActuallyDenies` helper), writeFileAtomic 실패 cleanup, rename ENOENT/ENOTEMPTY swallow + "반복된 race" fallback, fallback LockHeldError dead-pid 모두 회귀 가드. +8 테스트.
+- **CHANGELOG.md 도입** (`#21`) — Keep a Changelog 1.1.0 형식. package.json `files` 에 명시. README / README.ko.md 에 Changelog 섹션 추가.
 - **R3 quad-review LOW 정리** (`#11`) — JSDoc 4 + test 견고성 2.
 
 ## [0.2.0] - 2026-05-24
@@ -81,5 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Homebrew**: `ictechgy/homebrew-mat` tap (mat.rb @ 0.2.0) — `brew tap ictechgy/mat && brew install mat`.
 - **GitHub**: https://github.com/ictechgy/multi-account-tool
 
-[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ictechgy/multi-account-tool/releases/tag/v0.2.0
