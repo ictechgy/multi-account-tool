@@ -15,6 +15,23 @@ export class UsageError extends Error {
 }
 
 /**
+ * 입력값 검증 실패 (cliId / profileName / profileFileName 등).
+ * UsageError 의 서브클래스 — exit 2 매핑은 그대로 상속.
+ *
+ * 기존 호출자는 instanceof UsageError 로 잡히므로 영향 없음.
+ * 신규 호출자는 instanceof ValidationError 로 분기해 `field` 로 어떤 입력이
+ * 잘못됐는지 식별 가능 (예: TUI 입력 폼의 inline 에러 표시).
+ */
+export class ValidationError extends UsageError {
+  readonly field: string;
+  constructor(message: string, field: string) {
+    super(message);
+    this.name = 'ValidationError';
+    this.field = field;
+  }
+}
+
+/**
  * Keychain 항목의 기존 account 메타데이터를 파악할 수 없어 안전 swap 을 거부한 경우.
  * service-only 삭제는 동일 service 의 타 항목까지 영향을 줄 수 있어 data loss 위험.
  *
