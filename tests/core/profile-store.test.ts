@@ -221,6 +221,21 @@ describe('profile-store', () => {
       await expect(renameProfile('codex', 'a', '../escape')).rejects.toThrow();
       expect(existsSync(profileDir('codex', 'a'))).toBe(true);
     });
+
+    it('rollback (line 129-132): 손상된 meta.json 으로 readMeta throw → 디렉토리 rename 원복', async () => {
+      // createProfile 로 정상 디렉토리 생성 후, 외부에서 meta.json 을 invalid JSON 으로 손상.
+      // renameProfile 의 fs.rename 은 성공하지만, readMeta 의 JSON.parse 가 throw 하면
+      // catch 분기에서 디렉토리를 원래 이름으로 rollback 해야 한다.
+      // io-atomic mock 없이 real fs 통합으로 동일 분기 도달 (writeMeta 가 아니라 readMeta 가 throw).
+      await createProfile('codex', 'src');
+      await fs.writeFile(profileMetaPath('codex', 'src'), 'not-valid-json{{{', { mode: 0o600 });
+
+      await expect(renameProfile('codex', 'src', 'dst')).rejects.toThrow();
+
+      // rollback 결과: 원본 디렉토리 복구, 새 이름 디렉토리 없음.
+      expect(existsSync(profileDir('codex', 'src'))).toBe(true);
+      expect(existsSync(profileDir('codex', 'dst'))).toBe(false);
+    });
   });
 
   describe('deleteProfile', () => {

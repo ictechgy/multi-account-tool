@@ -27,6 +27,30 @@ vi.mock('../../src/core/sources.js', () => ({
   sourceExists: vi.fn()
 }));
 
+// 'tri-cli' fake CliDef (3 sources) 주입 — switcher 의 reverse-order rollback 검증용.
+// BUILTIN 에는 1~2 source CLI 만 있어 sequential 과 구분 안 됨 (line 196 한계 해결).
+// vi.hoisted 로 factory 보다 먼저 평가되도록 보장.
+const { TRI_CLI } = vi.hoisted(() => ({
+  TRI_CLI: {
+    id: 'tri-cli',
+    name: 'Tri Source Test CLI',
+    sources: [
+      { type: 'file', path: '/tmp/mat-tri-a', saveAs: 'a.json' },
+      { type: 'file', path: '/tmp/mat-tri-b', saveAs: 'b.json' },
+      { type: 'file', path: '/tmp/mat-tri-c', saveAs: 'c.json' }
+    ]
+  }
+}));
+
+vi.mock('../../src/core/cli-defs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/cli-defs.js')>();
+  return {
+    ...actual,
+    // 'tri-cli' 만 fake 로 override, 나머지 ('codex' / 'gemini' 등) 는 real lookup 유지.
+    findCliDef: (id: string) => (id === 'tri-cli' ? TRI_CLI : actual.findCliDef(id))
+  };
+});
+
 import { getActiveProfile, setActiveProfile } from '../../src/core/config.js';
 import {
   createProfile,
@@ -193,7 +217,7 @@ describe('switcher', () => {
       await expect(restoreProfileToLive('gemini', 'rollback-test'))
         .rejects.toThrow('write failed at google_accounts');
 
-      // 알려진 한계: 2-source 라 reverse-order 자체 검증 어려움. 별도 PR 에서 3+ source.
+      // reverse-order 자체 검증은 'tri-cli' 3-source 케이스가 담당 (아래 it 참조).
       const oauthCalls = mockWriteSource.mock.calls.filter(
         (c) => (c[0] as Source).saveAs === 'oauth_creds.json'
       );
@@ -224,6 +248,53 @@ describe('switcher', () => {
       );
       expect(oauthCalls).toHaveLength(1);
       expect(oauthCalls[0][1]).toBe('new-oauth');
+    });
+
+    it('rollback reverse-order (3-source tri-cli): 3rd source throw → b → a 역순으로 liveBackup 복원', async () => {
+      // 2-source (gemini) 는 [1번 적용, 2번 throw, 1번 rollback] 으로 reverse 와 sequential 동치.
+      // 3+ source 에서만 [a,b 적용, c throw, b rollback, a rollback] 순서가 reverse 임을 확인.
+      await setupProfile('tri-cli', 'work');
+      await writeProfileFile('tri-cli', 'work', 'a.json', 'stored-a');
+      await writeProfileFile('tri-cli', 'work', 'b.json', 'stored-b');
+      await writeProfileFile('tri-cli', 'work', 'c.json', 'stored-c');
+
+      mockReadSource.mockImplementation(async (src: Source) => {
+        const map: Record<string, string> = {
+          'a.json': 'live-a',
+          'b.json': 'live-b',
+          'c.json': 'live-c'
+        };
+        return map[src.saveAs] ?? null;
+      });
+
+      mockWriteSource.mockImplementation(async (src: Source) => {
+        if (src.saveAs === 'c.json') {
+          throw new Error('3rd source write failed');
+        }
+      });
+
+      await expect(restoreProfileToLive('tri-cli', 'work'))
+        .rejects.toThrow('3rd source write failed');
+
+      // 호출 순서:
+      //  0. (a, 'stored-a') — apply 1
+      //  1. (b, 'stored-b') — apply 2
+      //  2. (c, 'stored-c') — apply 3 (throw)
+      //  3. (b, 'live-b')   — rollback (appliedIdx.reverse() 의 첫 번째)
+      //  4. (a, 'live-a')   — rollback (appliedIdx.reverse() 의 두 번째)
+      const calls = mockWriteSource.mock.calls;
+      expect(calls).toHaveLength(5);
+      expect((calls[0][0] as Source).saveAs).toBe('a.json');
+      expect(calls[0][1]).toBe('stored-a');
+      expect((calls[1][0] as Source).saveAs).toBe('b.json');
+      expect(calls[1][1]).toBe('stored-b');
+      expect((calls[2][0] as Source).saveAs).toBe('c.json');
+      expect(calls[2][1]).toBe('stored-c');
+      // 핵심: reverse-order — b 먼저, 그다음 a (a 가 먼저 적용됐으므로 가장 마지막 rollback).
+      expect((calls[3][0] as Source).saveAs).toBe('b.json');
+      expect(calls[3][1]).toBe('live-b');
+      expect((calls[4][0] as Source).saveAs).toBe('a.json');
+      expect(calls[4][1]).toBe('live-a');
     });
   });
 
