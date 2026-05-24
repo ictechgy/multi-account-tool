@@ -1,20 +1,22 @@
 /**
  * runExec 단위 테스트.
  *
- * 외부 의존성을 모두 vi.mock 으로 격리:
- *  - cli-defs.findCliDef
- *  - config.getActiveProfile
- *  - profile-store.{validateProfileName, profileExists}
- *  - switcher.switchProfile
- *  - lockfile.acquireCliLock
- *  - node:child_process.spawn
+ * Mock 전략:
+ *  - cli-defs / config / profile-store / switcher / node:child_process: 전부 mock
+ *  - lockfile: **partial mock** — 진짜 `LockHeldError` 는 그대로 export 하고
+ *    `acquireCliLock` 만 vi.fn() 으로 교체. exec.test.ts 가 실제 LockHeldError contract
+ *    (exitCode, holder 시그니처) 를 그대로 검증하도록 보장.
  *
- * 시나리오: success / already-active / child non-zero / child signal /
- *           spawn error / missing active / unknown cli / empty cmd /
- *           profile not found inside lock / restore failure /
- *           LockHeldError 전파 / lock release ordering
+ * 시나리오 (Quad-review 합의 후 보강):
+ *  - 기본: success / already-active / child non-zero / child signal /
+ *          spawn error / missing active / unknown cli / empty cmd /
+ *          profile not found / LockHeldError 전파 / release ordering
+ *  - 추가 (Forge-2 HIGH 지적): swap 단계 switchProfile 실패 (lock 회수 보장),
+ *          child non-zero + restore 실패 매트릭스, spawn error + restore 실패 매트릭스,
+ *          SIGINT forwarder 가 child.kill 을 호출하는지
  */
 
+import { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,19 +34,14 @@ vi.mock('../../src/core/profile-store.js', () => ({
 vi.mock('../../src/core/switcher.js', () => ({
   switchProfile: vi.fn()
 }));
-vi.mock('../../src/core/lockfile.js', () => {
-  // 실제 LockHeldError 도 시뮬레이션할 수 있게 가짜 클래스를 노출.
-  class LockHeldError extends Error {
-    readonly exitCode = 75;
-    constructor(public readonly cliId: string, public readonly holder: unknown) {
-      super(`lock held: ${cliId}`);
-      this.name = 'LockHeldError';
-    }
-  }
-  return {
-    acquireCliLock: vi.fn(),
-    LockHeldError
-  };
+// Partial mock: 진짜 LockHeldError 를 보존하고 acquireCliLock 만 spy.
+// 가짜 LockHeldError 를 재정의하면 `instanceof` 검증이 mock 클래스에 대해서만 동작하는
+// false-positive 가 발생 (Quad-review Finding A).
+vi.mock('../../src/core/lockfile.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/core/lockfile.js')>(
+    '../../src/core/lockfile.js'
+  );
+  return { ...actual, acquireCliLock: vi.fn() };
 });
 vi.mock('node:child_process', () => ({
   spawn: vi.fn()
@@ -58,7 +55,7 @@ import { UsageError } from '../../src/core/errors.js';
 import { runExec } from '../../src/core/exec.js';
 import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import { profileExists } from '../../src/core/profile-store.js';
-import { switchProfile } from '../../src/core/switcher.js';
+import { switchProfile, type SwitchResult } from '../../src/core/switcher.js';
 
 const mockFindCliDef = vi.mocked(findCliDef);
 const mockGetActive = vi.mocked(getActiveProfile);
@@ -67,24 +64,44 @@ const mockSwitch = vi.mocked(switchProfile);
 const mockAcquire = vi.mocked(acquireCliLock);
 const mockSpawn = vi.mocked(spawn);
 
-/** child_process.spawn 결과 흉내. exit 이벤트 또는 error 이벤트를 비동기로 emit. */
+/**
+ * switchProfile 의 반환 타입을 type alias 로 묶어 mock 캐스팅을 단순화.
+ * SwitchResult 시그니처가 바뀌면 이 alias 의 import 자체가 깨져 회귀 감지 가능
+ * (`undefined as unknown as ReturnType<typeof switchProfile> extends ...` 패턴은 가림).
+ */
+type FakeSwitch = SwitchResult;
+const FAKE_SWITCH = undefined as unknown as FakeSwitch;
+
+/** runExec 가 사용하는 ChildProcess 필드만 흉내내는 fake. 다른 필드는 의도적으로 없음. */
+type FakeChildProcess = EventEmitter & {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  kill: ReturnType<typeof vi.fn>;
+};
+
+/** child_process.spawn 결과 흉내. exit/error 를 비동기로 emit. opts 비면 emit 없음 (수동 제어용). */
 function fakeChild(opts: {
   exit?: { code: number | null; signal: NodeJS.Signals | null };
   error?: Error;
-}): EventEmitter & { exitCode: number | null; signalCode: NodeJS.Signals | null; kill: ReturnType<typeof vi.fn> } {
-  const ee = new EventEmitter() as EventEmitter & {
-    exitCode: number | null;
-    signalCode: NodeJS.Signals | null;
-    kill: ReturnType<typeof vi.fn>;
-  };
+}): FakeChildProcess {
+  const ee = new EventEmitter() as FakeChildProcess;
   ee.exitCode = null;
   ee.signalCode = null;
   ee.kill = vi.fn();
-  setImmediate(() => {
-    if (opts.error) ee.emit('error', opts.error);
-    else if (opts.exit) ee.emit('exit', opts.exit.code, opts.exit.signal);
-  });
+  if (opts.exit || opts.error) {
+    setImmediate(() => {
+      if (opts.error) ee.emit('error', opts.error);
+      else if (opts.exit) ee.emit('exit', opts.exit.code, opts.exit.signal);
+    });
+  }
   return ee;
+}
+
+/** runExec 가 process.on('SIGINT'...) 으로 등록한 forwarder 를 가져온다 (마지막 listener). */
+function latestSignalListener(sig: NodeJS.Signals): (received: NodeJS.Signals) => void {
+  const handlers = process.listeners(sig);
+  if (handlers.length === 0) throw new Error(`${sig} listener 가 등록되지 않음`);
+  return handlers[handlers.length - 1] as (received: NodeJS.Signals) => void;
 }
 
 describe('runExec', () => {
@@ -94,11 +111,10 @@ describe('runExec', () => {
     vi.clearAllMocks();
     release = vi.fn().mockResolvedValue(undefined);
     mockAcquire.mockResolvedValue(release as () => Promise<void>);
-    // 기본값: cli 존재, profile 존재, 활성 'default'
     mockFindCliDef.mockReturnValue({ id: 'codex' } as ReturnType<typeof findCliDef>);
     mockGetActive.mockResolvedValue('default');
     mockProfileExists.mockResolvedValue(true);
-    mockSwitch.mockResolvedValue(undefined as unknown as ReturnType<typeof switchProfile> extends Promise<infer T> ? T : never);
+    mockSwitch.mockResolvedValue(FAKE_SWITCH);
   });
 
   afterEach(() => {
@@ -106,22 +122,22 @@ describe('runExec', () => {
   });
 
   it('성공: swap → spawn (exit 0) → restore → release 순으로 호출', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as never);
+    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'echo', args: ['hi']
     });
 
     expect(result).toEqual({ code: 0, signal: null, restoreError: undefined });
-    expect(mockSwitch).toHaveBeenNthCalledWith(1, 'codex', 'work');     // swap
-    expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default');  // restore
+    expect(mockSwitch).toHaveBeenNthCalledWith(1, 'codex', 'work');
+    expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default');
     expect(release).toHaveBeenCalledOnce();
     expect(mockSpawn).toHaveBeenCalledWith('echo', ['hi'], { stdio: 'inherit' });
   });
 
   it('already-active: swap/restore 모두 skip, spawn 만 실행', async () => {
     mockGetActive.mockResolvedValue('work');
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as never);
+    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'echo', args: []
@@ -133,19 +149,19 @@ describe('runExec', () => {
   });
 
   it('자식이 non-zero 로 종료: code 반환 + restore 수행', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 42, signal: null } }) as never);
+    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 42, signal: null } }) as unknown as ChildProcess);
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'false', args: []
     });
 
     expect(result.code).toBe(42);
-    expect(mockSwitch).toHaveBeenCalledTimes(2); // swap + restore
+    expect(mockSwitch).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledOnce();
   });
 
   it('자식이 시그널로 종료: signal 반환 + restore 수행', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: null, signal: 'SIGINT' } }) as never);
+    mockSpawn.mockReturnValue(fakeChild({ exit: { code: null, signal: 'SIGINT' } }) as unknown as ChildProcess);
 
     const result = await runExec({
       cliId: 'codex', profileName: 'work', command: 'sleep', args: ['100']
@@ -157,15 +173,14 @@ describe('runExec', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('spawn 자체가 error 이벤트로 실패: throw + restore 수행 + release 수행', async () => {
+  it('spawn error: throw + restore 수행 + release 수행', async () => {
     const spawnErr = new Error('ENOENT: no such file');
-    mockSpawn.mockReturnValue(fakeChild({ error: spawnErr }) as never);
+    mockSpawn.mockReturnValue(fakeChild({ error: spawnErr }) as unknown as ChildProcess);
 
     await expect(runExec({
       cliId: 'codex', profileName: 'work', command: 'nosuchbin', args: []
     })).rejects.toThrow('ENOENT');
 
-    // swap 이후 spawn 실패해도 restore + release 는 보장.
     expect(mockSwitch).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledOnce();
   });
@@ -184,7 +199,6 @@ describe('runExec', () => {
 
   it('알 수 없는 cli: UsageError', async () => {
     mockFindCliDef.mockReturnValue(undefined);
-
     await expect(runExec({
       cliId: 'unknown', profileName: 'work', command: 'echo', args: []
     })).rejects.toThrow(UsageError);
@@ -200,22 +214,19 @@ describe('runExec', () => {
 
   it('lock 안에서 profile 미존재: UsageError, swap/spawn 안 함, release 는 호출', async () => {
     mockProfileExists.mockResolvedValue(false);
-
     await expect(runExec({
       cliId: 'codex', profileName: 'gone', command: 'echo', args: []
     })).rejects.toThrow(UsageError);
-
     expect(mockAcquire).toHaveBeenCalledOnce();
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce(); // finally 에서 release 보장
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it('restore 실패: child 결과는 보존하면서 restoreError 채워짐', async () => {
-    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as never);
-    // 첫 번째 (swap) 성공, 두 번째 (restore) 실패
+    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
     mockSwitch
-      .mockResolvedValueOnce(undefined as never)
+      .mockResolvedValueOnce(FAKE_SWITCH)
       .mockRejectedValueOnce(new Error('keychain access denied'));
 
     const result = await runExec({
@@ -228,24 +239,34 @@ describe('runExec', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('LockHeldError 가 그대로 전파, swap/spawn 호출 안 됨', async () => {
-    mockAcquire.mockRejectedValue(new LockHeldError('codex', {
-      pid: 12345, profile: 'other', startedAt: 'now', token: 'x'
-    }));
+  it('LockHeldError 가 진짜 클래스 그대로 전파됨 (partial mock)', async () => {
+    // partial mock 덕분에 진짜 LockHeldError 의 exitCode/holder shape 까지 검증.
+    const holder = { pid: 12345, profile: 'other', startedAt: 'now', token: 'x' };
+    mockAcquire.mockRejectedValue(new LockHeldError('codex', holder as never));
 
-    await expect(runExec({
+    const promise = runExec({
       cliId: 'codex', profileName: 'work', command: 'echo', args: []
-    })).rejects.toBeInstanceOf(LockHeldError);
-
+    });
+    await expect(promise).rejects.toBeInstanceOf(LockHeldError);
+    try {
+      await promise;
+    } catch (err) {
+      expect(err).toBeInstanceOf(LockHeldError);
+      const lhe = err as LockHeldError;
+      expect(lhe.exitCode).toBe(75);  // 진짜 클래스의 readonly exitCode
+      expect(lhe.cliId).toBe('codex');
+      expect(lhe.holder.pid).toBe(12345);
+    }
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
   });
 
-  it('lock release 는 restore 이후, forwarder dispose 이전에 실행된다', async () => {
+  it('lock release 는 restore 이후 실행된다 (call ordering)', async () => {
     const callOrder: string[] = [];
     mockSwitch.mockImplementation(async (_cli, profile) => {
       callOrder.push(`switch:${profile}`);
+      return FAKE_SWITCH;
     });
     release.mockImplementation(async () => {
       callOrder.push('release');
@@ -259,7 +280,82 @@ describe('runExec', () => {
       cliId: 'codex', profileName: 'work', command: 'echo', args: []
     });
 
-    // 기대: swap → spawn → restore → release
     expect(callOrder).toEqual(['switch:work', 'spawn', 'switch:default', 'release']);
+  });
+
+  // ---- Quad-review 합의 후 보강된 케이스들 ----
+
+  it('초기 swap (switchProfile) 실패: throw + spawn skip + lock release 보장', async () => {
+    mockSwitch.mockRejectedValueOnce(new Error('keychain locked at swap'));
+
+    await expect(runExec({
+      cliId: 'codex', profileName: 'work', command: 'echo', args: []
+    })).rejects.toThrow('keychain locked at swap');
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    // 핵심: swap 실패해도 lock 회수 (Quad-review Finding T — Forge-2 HIGH)
+    expect(release).toHaveBeenCalledOnce();
+    // restore 도 호출 안 됨 — swap 미완료 상태라 의도된 동작
+    expect(mockSwitch).toHaveBeenCalledTimes(1);
+  });
+
+  it('child non-zero + restore 실패: child code 보존 + restoreError 포함', async () => {
+    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 17, signal: null } }) as unknown as ChildProcess);
+    mockSwitch
+      .mockResolvedValueOnce(FAKE_SWITCH)
+      .mockRejectedValueOnce(new Error('restore boom'));
+
+    const result = await runExec({
+      cliId: 'codex', profileName: 'work', command: 'false', args: []
+    });
+
+    expect(result.code).toBe(17);  // child 결과 우선 보존
+    expect(result.restoreError?.message).toContain('restore boom');
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('spawn error + restore 실패: spawn error 가 throw 됨 (restoreError 는 surface 안 됨)', async () => {
+    mockSpawn.mockReturnValue(fakeChild({ error: new Error('ENOENT: no such file') }) as unknown as ChildProcess);
+    mockSwitch
+      .mockResolvedValueOnce(FAKE_SWITCH)
+      .mockRejectedValueOnce(new Error('restore boom'));
+
+    await expect(runExec({
+      cliId: 'codex', profileName: 'work', command: 'nosuchbin', args: []
+    })).rejects.toThrow('ENOENT');
+
+    expect(mockSwitch).toHaveBeenCalledTimes(2);  // swap + restore 시도
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('SIGINT forwarder 가 자식에게 신호 전달 (process listener 직접 invoke)', async () => {
+    // runExec 가 register 한 SIGINT listener 를 잡아 invoke 하고, 그 결과 child.kill('SIGINT') 가
+    // 호출되는지 검증 (Quad-review Finding S — Forge-2 HIGH).
+    const child = fakeChild({});  // exit/error 자동 emit 없음 — 수동 제어
+    mockSpawn.mockImplementation((() => {
+      // spawn 시점에 childRef.current = child 가 채워짐. 그 직후 forwarder invoke.
+      setImmediate(() => {
+        latestSignalListener('SIGINT')('SIGINT');
+        // 그 다음 tick 에 child 가 SIGINT 받고 종료된 척 emit → runExec 종결
+        setImmediate(() => child.emit('exit', null, 'SIGINT'));
+      });
+      return child;
+    }) as never);
+
+    const result = await runExec({
+      cliId: 'codex', profileName: 'work', command: 'sleep', args: ['100']
+    });
+
+    expect(child.kill).toHaveBeenCalledWith('SIGINT');
+    expect(result.signal).toBe('SIGINT');
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('runExec 종료 후 SIGINT listener 가 dispose 된다 (leak 방지)', async () => {
+    const before = process.listeners('SIGINT').length;
+    mockSpawn.mockReturnValue(fakeChild({ exit: { code: 0, signal: null } }) as unknown as ChildProcess);
+    await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+    const after = process.listeners('SIGINT').length;
+    expect(after).toBe(before);  // 등록 = 해제
   });
 });

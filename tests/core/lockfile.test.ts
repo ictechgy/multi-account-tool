@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
@@ -6,6 +7,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import { cliLockPath } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
+
+/**
+ * 거의 확실히 죽은 PID 를 확보한다.
+ * 즉시 종료되는 자식을 spawnSync 로 띄우고 그 PID 를 반환 — 호출 시점에는 이미 dead.
+ * 99999 같은 하드코딩 값보다 OS 별 PID 할당 가정에 덜 의존적.
+ */
+function spawnGhostPid(): number {
+  const ghost = spawnSync(process.execPath, ['-e', '']);
+  if (ghost.pid === undefined) throw new Error('ghost 자식을 spawn 하지 못함');
+  return ghost.pid;
+}
 
 describe('lockfile.acquireCliLock', () => {
   let tmp: TmpHome;
@@ -21,7 +33,6 @@ describe('lockfile.acquireCliLock', () => {
     expect(typeof info.token).toBe('string');
     expect(info.token.length).toBeGreaterThan(0);
     await release();
-    // release 후 lock 디렉토리가 사라진다.
     await expect(fs.access(lockDir)).rejects.toThrow();
   });
 
@@ -32,13 +43,18 @@ describe('lockfile.acquireCliLock', () => {
     await r2();
   });
 
-  it('동일 cliId 에 대해 살아있는 holder 가 있으면 LockHeldError', async () => {
+  it('동일 cliId 에 대해 살아있는 holder 가 있으면 LockHeldError 가 던져진다 (assertion 강제)', async () => {
     const release = await acquireCliLock('codex', 'work');
     try {
-      // 같은 프로세스의 pid 는 살아있다 → stale 회수 대상 아님.
+      // 첫 호출 — rejects matcher 로 1차 검증
       await expect(acquireCliLock('codex', 'other')).rejects.toThrowError(LockHeldError);
+
+      // 두 번째 호출 — holder 의 pid/profile 같은 inner 필드까지 확인.
+      // expect.assertions 로 catch 미진입 시 silent pass 방지.
+      expect.assertions(6);
       try {
         await acquireCliLock('codex', 'other');
+        expect.fail('LockHeldError 가 던져졌어야 함');
       } catch (err) {
         expect(err).toBeInstanceOf(LockHeldError);
         const lhe = err as LockHeldError;
@@ -53,13 +69,14 @@ describe('lockfile.acquireCliLock', () => {
   });
 
   it('죽은 pid 의 stale lock 은 회수되어 재획득 가능', async () => {
-    // 실제로 존재하지 않는 PID 로 가짜 lock 디렉토리를 미리 만든다.
+    // 환경 의존 하드코딩(예: 99999) 대신 spawnSync 로 즉시 종료된 PID 확보 — 거의 확실히 dead.
+    const deadPid = spawnGhostPid();
     const lockDir = cliLockPath('codex');
     await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
     await fs.writeFile(
       join(lockDir, 'info.json'),
       JSON.stringify({
-        pid: 99999, // 거의 확실히 존재하지 않는 PID
+        pid: deadPid,
         startedAt: new Date().toISOString(),
         profile: 'old',
         token: 'foreign-token'
@@ -75,11 +92,12 @@ describe('lockfile.acquireCliLock', () => {
   });
 
   it('corrupt info.json (빈 파일) 도 stale 로 처리되어 회수된다', async () => {
+    // 200ms in-flight wait 후 stale 판정 — 실제 fs/timer 와 함께 한 번에 검증 (fake timer 대신 real).
+    // fake timer 는 setImmediate/promise microtask 와 섞일 때 잘 안 맞으므로 본 케이스는 real time 유지.
     const lockDir = cliLockPath('codex');
     await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
     await fs.writeFile(join(lockDir, 'info.json'), '');
 
-    // 200ms in-flight wait 후에야 stale 판정 → 한 번에 회수 + 획득.
     const release = await acquireCliLock('codex', 'recovered');
     const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
     expect(info.profile).toBe('recovered');
@@ -89,7 +107,7 @@ describe('lockfile.acquireCliLock', () => {
   it('info.json 자체가 없는 빈 lock 디렉토리도 stale 로 회수된다', async () => {
     const lockDir = cliLockPath('codex');
     await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
-    // info.json 없이 디렉토리만 생성 (mat 가 SIGKILL 받았을 때 발생 가능)
+    // mat 가 SIGKILL 로 죽었을 때 발생할 수 있는 상황 — info.json 없이 디렉토리만 남음.
 
     const release = await acquireCliLock('codex', 'after-kill');
     const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
@@ -101,7 +119,7 @@ describe('lockfile.acquireCliLock', () => {
     const lockDir = cliLockPath('codex');
     const release = await acquireCliLock('codex', 'work');
 
-    // 외부에서 lock 내용을 다른 holder 의 token 으로 교체 (정상 시나리오는 아님 — 방어 검증).
+    // 외부에서 lock 내용을 다른 holder 의 token 으로 교체 (정상 시나리오 아님 — 방어 검증).
     const original = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
     await fs.writeFile(
       join(lockDir, 'info.json'),
@@ -109,19 +127,19 @@ describe('lockfile.acquireCliLock', () => {
     );
 
     await release();
-    // lock 디렉토리는 여전히 존재해야 한다 (다른 owner 의 lock 으로 보임).
+    // tmp.cleanup() 이 어차피 tmp HOME 전체를 지우므로 manual rm 은 생략.
     await expect(fs.access(lockDir)).resolves.toBeUndefined();
-    // 정리는 테스트가 직접.
-    await fs.rm(lockDir, { recursive: true, force: true });
   });
 
-  it('cliId 가 path traversal 형식이면 cliLockPath 단계에서 throw (lock 획득 시도 차단)', async () => {
+  it('cliId 가 path traversal 형식이면 cliLockPath 단계에서 throw', async () => {
     await expect(acquireCliLock('../../etc/passwd', 'p')).rejects.toThrow(/path segment/);
   });
 
-  it('동시 acquire 시 정확히 하나만 성공한다', async () => {
-    // 같은 프로세스에서 N 개의 mkdir-lock 시도를 동시에 발사.
-    // 하나는 acquire 성공, 나머지는 LockHeldError (자기 자신의 pid 이므로 stale 회수 안 됨).
+  it('단일 프로세스 내 연속 acquire 는 정확히 하나만 성공한다 (cross-process race 는 별도 시나리오)', async () => {
+    // single-process 한계 명시: V8 single-thread microtask 큐 특성상 사실상 직렬이라
+    // OS-level mkdir race 자체는 검증하지 못한다. 다만 "두 번째 acquire 가 LockHeldError" 라는
+    // contract 는 동일 process 시나리오에서도 그대로 적용되므로 유효한 회귀 가드.
+    // 진짜 cross-process race 는 child_process.fork 가 필요하며 별도 follow-up 테스트 대상.
     const N = 5;
     const results = await Promise.allSettled(
       Array.from({ length: N }, () => acquireCliLock('codex', `p${Math.random()}`))
@@ -133,7 +151,6 @@ describe('lockfile.acquireCliLock', () => {
     for (const r of rejected) {
       expect((r as PromiseRejectedResult).reason).toBeInstanceOf(LockHeldError);
     }
-    // cleanup
     const release = (fulfilled[0] as PromiseFulfilledResult<() => Promise<void>>).value;
     await release();
   });

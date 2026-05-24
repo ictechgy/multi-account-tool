@@ -51,16 +51,24 @@ describe('writeFileAtomic', () => {
     expect(entries.some((e) => e.endsWith('.tmp'))).toBe(false);
   });
 
-  it('tmp 가 symlink 면 O_NOFOLLOW 로 거부 (attacker symlink 추적 차단)', async () => {
+  it('tmp 가 symlink 면 open 단계에서 거부, decoy 손상 없음', async () => {
+    // writeFileAtomic 의 tmp path 는 `${target}.tmp` 로 결정적이라 미리 symlink 를 깔아두면
+    // open(O_EXCL | O_NOFOLLOW) 가 둘 중 하나로 즉시 실패한다.
+    // - O_EXCL → EEXIST (tmp 가 이미 존재) — 이게 먼저 잡힌다
+    // - O_NOFOLLOW → ELOOP (symlink 추적 차단)
+    // 어느 단계든 핵심 invariant 는 "decoy 가 손상되지 않는다" 이므로 그것을 명시 assert.
     const target = join(dir, 'victim.json');
     const tmpPath = `${target}.tmp`;
     const decoy = join(dir, 'decoy');
     await fs.writeFile(decoy, 'old');
     await symlink(decoy, tmpPath);
 
-    await expect(writeFileAtomic(target, 'attack')).rejects.toThrow();
-    // symlink 대상이 변경되지 않았음을 확인 (link 자체는 호출 실패 후 정리될 수 있음).
+    await expect(writeFileAtomic(target, 'attack')).rejects.toMatchObject({
+      code: expect.stringMatching(/^(EEXIST|ELOOP)$/)
+    });
     expect(await fs.readFile(decoy, 'utf8')).toBe('old');
+    // O_EXCL/O_NOFOLLOW 두 보호를 분리 검증하려면 별도 단위 테스트가 필요하나, 본 케이스는
+    // attacker symlink 가 있을 때 decoy 가 보호된다는 end-to-end invariant 만 보장한다.
   });
 
   it('연속 쓰기에 대해 마지막 쓰기 결과가 보존된다 (rename atomicity)', async () => {
