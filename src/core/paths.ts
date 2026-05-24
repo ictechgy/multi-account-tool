@@ -82,8 +82,10 @@ export function validateProfileName(rawName: string): string {
  * 현재는 BUILTIN_CLI_DEFS 의 saveAs 만 호출 경로상 들어오지만, ROADMAP 의
  * CLI def plugin (`~/.multi-account-tool/cli-defs/*.json`) 도입 시 신뢰할 수 없는
  * 입력이 되므로 정의 단계가 아닌 사용 단계에서 마지막 방어선을 둔다.
- * 화이트리스트는 ASCII-only 이므로 NFC 정규화가 결과를 바꾸지 않지만,
- * validateProfileName 과의 일관성 + 검증 전 표준화 정책 표현 목적으로 적용.
+ *
+ * NFC 정규화는 PROFILE_FILE_NAME_RE 가 ASCII-only 인 한 명목상 (no-op) 이다 —
+ * 비-ASCII 입력은 정규화 전후 모두 regex fail 로 throw. 화이트리스트 확장 시
+ * (한글 파일명 허용 등) 실질 정규화로 자동 전환된다.
  */
 export function validateProfileFileName(rawFileName: string): string {
   if (typeof rawFileName !== 'string') {
@@ -117,7 +119,10 @@ export function profilesDir(): string {
   return join(dataDir(), 'profiles');
 }
 
-/** 특정 CLI 의 프로필 루트. cliId 자체 검증 (직접 호출자 우회 차단). */
+/**
+ * 특정 CLI 의 프로필 루트. cliId 자체 검증 (직접 호출자 우회 차단).
+ * NOTE: profileDir 도 동일 cliId 를 명시 검증한다 (위임 fragility 제거 — 양쪽 동기화 필요).
+ */
 export function cliProfilesDir(cliId: string): string {
   const safeCli = validateCliId(cliId);
   return join(profilesDir(), safeCli);
@@ -128,7 +133,8 @@ export function cliProfilesDir(cliId: string): string {
  * profileName 은 NFC 정규화 결과로 경로 구성 (디스크 단일 표기 통일).
  *
  * cliId 검증은 cliProfilesDir 위임으로도 일어나지만, 향후 inline 화 등 refactor 시
- * 위임이 끊겨도 안전하도록 명시 재호출 (idempotent, perf 무시 가능).
+ * 위임이 끊겨도 안전하도록 명시 재호출. validateCliId 비용은 regex 1회 + 길이/예약명
+ * 체크 ~ microsecond 미만 → 중복 호출 비용 대비 refactor 안전성 이득이 큼.
  */
 export function profileDir(cliId: string, profileName: string): string {
   validateCliId(cliId);
