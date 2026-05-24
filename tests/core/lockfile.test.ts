@@ -19,6 +19,22 @@ function spawnGhostPid(): number {
   return ghost.pid;
 }
 
+/**
+ * chmod 0o500 가 root 사용자에는 효과 없음 — root 환경에서는 mkdir/rename 이 권한 무시하고 성공.
+ * 본 helper 는 디렉토리에 chmod 0o500 적용 후 probe mkdir 로 EACCES 실제 발생 여부 확인.
+ * root 환경이면 false 반환 (테스트 skip 신호). config.test.ts 의 패턴 차용.
+ */
+async function chmodActuallyDenies(dir: string): Promise<boolean> {
+  const probe = join(dir, '__probe__');
+  try {
+    await fs.mkdir(probe);
+    await fs.rmdir(probe);
+    return false; // mkdir 성공 → root 거나 OS 가 0o500 무시
+  } catch {
+    return true; // EACCES 정상 발생
+  }
+}
+
 describe('lockfile.acquireCliLock', () => {
   let tmp: TmpHome;
   beforeEach(async () => { tmp = await setupTmpHome(); });
@@ -181,6 +197,8 @@ describe('lockfile.acquireCliLock', () => {
     await fs.mkdir(locksDir, { recursive: true, mode: 0o700 });
     await fs.chmod(locksDir, 0o500);
     try {
+      // root 환경에서는 chmod 효과 없음 → 테스트 의미 없으므로 skip.
+      if (!await chmodActuallyDenies(locksDir)) return;
       await expect(acquireCliLock('codex', 'p')).rejects.toThrow();
       // 핵심 회귀 가드: lockDir 가 만들어지지 않았어야 (mkdir 실패).
       expect(existsSync(lockDir)).toBe(false);
@@ -199,6 +217,8 @@ describe('lockfile.acquireCliLock', () => {
     // info.json 없음 → readInfo null → rename 단계까지 도달.
     await fs.chmod(locksDir, 0o500);
     try {
+      // root 환경에서는 chmod 효과 없음 → 테스트 의미 없으므로 skip.
+      if (!await chmodActuallyDenies(locksDir)) return;
       await expect(acquireCliLock('codex', 'p')).rejects.toThrow();
     } finally {
       // tmp 정리 가능하도록 권한 복원.
