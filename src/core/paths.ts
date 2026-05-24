@@ -1,108 +1,24 @@
 /**
- * 데이터 디렉토리 및 경로 헬퍼 + 입력값 검증자.
+ * 데이터 디렉토리 및 경로 헬퍼.
  * 모든 프로필은 ~/.multi-account-tool 아래에 보관된다.
+ *
+ * 입력값 검증자는 validators.ts 로 분리 (path 합성과 검증의 mixed-concern 해체).
+ * 기존 호출자 호환을 위해 validateCliId / validateProfileName / validateProfileFileName
+ * 은 이 모듈에서 re-export 유지.
  *
  * 모든 path constructor (cliProfilesDir / profileDir / profileFilePath /
  * profileMetaPath / cliLockPath) 는 입력값을 자체 검증한다. 호출자가 우회로 paths.ts
  * 를 직접 import 해도 traversal escape 가 불가하다 (PR #10 quad-review Codex-1 합의).
- *
- * 검증자는 외부 typeof 우회 (`unknown as string`, JSON 경계 등) 도 차단하기 위해
- * typeof string 가드를 가장 먼저 적용한다 (PR #10 quad-review Codex-2 합의).
  */
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { validateCliId, validateProfileFileName, validateProfileName } from './validators.js';
+
+export { validateCliId, validateProfileFileName, validateProfileName };
+
 const DATA_DIR_NAME = '.multi-account-tool';
-
-/** filesystem 의 path segment 로 안전한 cli id 형식. 첫 글자는 영문, 이후 영문/숫자/`_`/`-` 만, 1~32자. */
-const SAFE_CLI_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
-
-/** 프로필 이름 화이트리스트. 한글/영문/숫자 + _-. 만, 1~40자. */
-const PROFILE_NAME_RE = /^[a-zA-Z0-9가-힣_.-]{1,40}$/;
-
-/** 디렉토리 traversal 위험으로 예약된 이름. */
-const PROFILE_NAME_RESERVED = new Set<string>(['.', '..']);
-
-/** 프로필 내 임의 파일명 화이트리스트. 영문/숫자/`.`/`_`/`-` 만 1~64자. */
-const PROFILE_FILE_NAME_RE = /^[a-zA-Z0-9._-]{1,64}$/;
-
-/** 파일명도 예약된 단독 `.`/`..` 는 별도 차단. */
-const PROFILE_FILE_NAME_RESERVED = new Set<string>(['.', '..']);
-
-/**
- * cliId 가 path segment 로 안전한지 검증.
- * 비문자열 / traversal 가능 형식 (`..`, `/`, `\`, NUL) / regex 미매치 시 throw.
- *
- * 모든 path constructor 와 profile-store 가 공통으로 사용 —
- * findCliDef 결과를 신뢰할 수 있을 때도 defense-in-depth 로 한 번 더 검증한다.
- */
-export function validateCliId(cliId: string): string {
-  if (typeof cliId !== 'string') {
-    throw new Error('cliId 는 문자열이어야 합니다.');
-  }
-  if (!SAFE_CLI_ID_RE.test(cliId)) {
-    throw new Error(`cliId 가 path segment 로 사용 불가한 형식입니다: ${cliId}`);
-  }
-  return cliId;
-}
-
-/**
- * 프로필 이름을 검증하고 NFC 정규화된 형태로 반환.
- * 비문자열 / 잘못된 입력은 throw.
- *
- * - typeof string 가드 (RegExp.test 의 비문자열 강제 변환 회피)
- * - NFC 정규화 (한글 NFD/NFC 우회로 동일 표기 두 프로필 생성 방지)
- * - `.`, `..` 명시 차단 (경로 traversal)
- * - `/`, `\`, NUL 명시 차단
- * - PROFILE_NAME_RE 매칭 (정규화 후 길이 1~40자)
- */
-export function validateProfileName(rawName: string): string {
-  if (typeof rawName !== 'string') {
-    throw new Error('프로필 이름은 문자열이어야 합니다.');
-  }
-  const name = rawName.normalize('NFC');
-  if (PROFILE_NAME_RESERVED.has(name)) {
-    throw new Error('"." 또는 ".." 는 프로필 이름으로 사용할 수 없습니다.');
-  }
-  if (/[/\\\x00]/.test(name)) {
-    throw new Error('프로필 이름에 / \\ NUL 은 포함될 수 없습니다.');
-  }
-  if (!PROFILE_NAME_RE.test(name)) {
-    throw new Error('프로필 이름은 한글/영문/숫자/_-. 만 사용 가능하며 1~40자 이내여야 합니다.');
-  }
-  return name;
-}
-
-/**
- * 프로필 내 임의 파일명 (source 의 saveAs) 검증.
- * 비문자열 / traversal 가능 형식 + 예약명 + 화이트리스트 미매치 시 throw.
- * 반환값은 NFC 정규화된 형태 (validateProfileName 과 대칭).
- *
- * 현재는 BUILTIN_CLI_DEFS 의 saveAs 만 호출 경로상 들어오지만, ROADMAP 의
- * CLI def plugin (`~/.multi-account-tool/cli-defs/*.json`) 도입 시 신뢰할 수 없는
- * 입력이 되므로 정의 단계가 아닌 사용 단계에서 마지막 방어선을 둔다.
- *
- * NFC 정규화는 PROFILE_FILE_NAME_RE 가 ASCII-only 인 한 명목상 (no-op) 이다 —
- * 비-ASCII 입력은 정규화 전후 모두 regex fail 로 throw. 화이트리스트 확장 시
- * (한글 파일명 허용 등) 실질 정규화로 자동 전환된다.
- */
-export function validateProfileFileName(rawFileName: string): string {
-  if (typeof rawFileName !== 'string') {
-    throw new Error('프로필 파일명은 문자열이어야 합니다.');
-  }
-  const fileName = rawFileName.normalize('NFC');
-  if (PROFILE_FILE_NAME_RESERVED.has(fileName)) {
-    throw new Error('"." 또는 ".." 는 프로필 파일명으로 사용할 수 없습니다.');
-  }
-  if (/[/\\\x00]/.test(fileName)) {
-    throw new Error('프로필 파일명에 / \\ NUL 은 포함될 수 없습니다.');
-  }
-  if (!PROFILE_FILE_NAME_RE.test(fileName)) {
-    throw new Error('프로필 파일명은 영문/숫자/._- 만 사용 가능하며 1~64자 이내여야 합니다.');
-  }
-  return fileName;
-}
 
 /** ~/.multi-account-tool 의 절대 경로 */
 export function dataDir(): string {

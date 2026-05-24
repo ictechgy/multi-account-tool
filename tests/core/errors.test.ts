@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { KeychainAccountMissingError, UsageError, describeError, errorMessage, redactMessage } from '../../src/core/errors.js';
+import {
+  KeychainAccountMissingError,
+  UsageError,
+  ValidationError,
+  describeError,
+  errorMessage,
+  redactMessage
+} from '../../src/core/errors.js';
 
 describe('UsageError', () => {
   it('exitCode 는 2, name 은 UsageError', () => {
@@ -9,6 +16,25 @@ describe('UsageError', () => {
     expect(err.name).toBe('UsageError');
     expect(err.message).toBe('잘못된 인자');
     expect(err).toBeInstanceOf(Error);
+  });
+});
+
+describe('ValidationError', () => {
+  it('UsageError 상속 → exitCode 2 자동, field 보존', () => {
+    const err = new ValidationError('cliId 가 잘못됨', 'cliId');
+    expect(err.exitCode).toBe(2);
+    expect(err.field).toBe('cliId');
+    expect(err.name).toBe('ValidationError');
+    expect(err.message).toBe('cliId 가 잘못됨');
+    expect(err).toBeInstanceOf(UsageError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it('cli.tsx top-level catch 가 instanceof UsageError 로 잡으면 ValidationError 도 자동 exit 2', () => {
+    // 신규 호출자가 instanceof ValidationError 분기 안 해도 기존 UsageError 처리 경로로 흘러간다.
+    const err: unknown = new ValidationError('msg', 'profileName');
+    const exitCode = err instanceof UsageError ? err.exitCode : 1;
+    expect(exitCode).toBe(2);
   });
 });
 
