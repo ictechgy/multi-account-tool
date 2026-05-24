@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { UsageError, errorMessage, redactMessage } from '../../src/core/errors.js';
+import { KeychainAccountMissingError, UsageError, errorMessage, redactMessage } from '../../src/core/errors.js';
 
 describe('UsageError', () => {
   it('exitCode 는 2, name 은 UsageError', () => {
@@ -39,8 +39,53 @@ describe('redactMessage', () => {
     expect(redactMessage(huge).length).toBeLessThanOrEqual(500);
   });
 
+  it('redact 가 truncate 보다 먼저 적용된다 (회귀 가드)', () => {
+    // 순서가 뒤바뀌면 500자 잘림 후 redact 가 끊긴 JWT/시크릿 시퀀스를 놓칠 수 있다.
+    // 앞쪽 400자를 안전 패딩으로 채우고 그 뒤에 JWT 를 둬, truncate 가 먼저면 JWT 가 살아남는 케이스를 만든다.
+    const padding = '가'.repeat(400);
+    const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature_data_block';
+    const out = redactMessage(`${padding} token=${jwt}`);
+    expect(out).not.toContain('eyJ');
+    expect(out).toContain('[redacted-jwt]');
+  });
+
   it('일반 메시지는 변경하지 않는다', () => {
     expect(redactMessage('lock 획득 실패')).toBe('lock 획득 실패');
+  });
+});
+
+describe('KeychainAccountMissingError', () => {
+  it('service 필드는 raw 값 보존, name 은 클래스명, instanceof Error', () => {
+    const err = new KeychainAccountMissingError('com.example.codex');
+    expect(err.service).toBe('com.example.codex');
+    expect(err.name).toBe('KeychainAccountMissingError');
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(KeychainAccountMissingError);
+  });
+
+  it('짧은 BUILTIN service 명은 메시지에 그대로 노출 (redact 미적용)', () => {
+    const err = new KeychainAccountMissingError('com.openai.codex');
+    expect(err.message).toContain('com.openai.codex');
+    expect(err.service).toBe('com.openai.codex');
+  });
+
+  it('50자+ base64-like plugin service 는 메시지에서 redact 되지만 service 필드는 raw 보존', () => {
+    // CLI def plugin 시나리오: 사용자가 긴 base64-like service 명 등록.
+    // UI 는 instanceof 분기 후 err.service 를 별도 라인으로 surface 하면 정확한 식별 가능.
+    const longService = 'a'.repeat(60);
+    const err = new KeychainAccountMissingError(longService);
+    expect(err.message).toContain('[redacted]');
+    expect(err.message).not.toContain(longService);
+    expect(err.service).toBe(longService);
+  });
+
+  it('초장문 service 명에도 message 는 500자 이내로 truncate (회귀 가드)', () => {
+    // base64 미해당 문자 (한글) 로만 1000자 → redact 미적용, truncate 만 발동.
+    // 메시지가 무한정 길어지지 않는다는 boundary contract.
+    const hugeService = '한'.repeat(1000);
+    const err = new KeychainAccountMissingError(hugeService);
+    expect(err.message.length).toBeLessThanOrEqual(500);
+    expect(err.service).toBe(hugeService);
   });
 });
 
