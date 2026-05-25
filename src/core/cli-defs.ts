@@ -29,6 +29,22 @@ function claudeSource(): Source {
   return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
 }
 
+/**
+ * Block (Square) 의 Goose AI agent (https://github.com/block/goose). Rust 구현.
+ * `crates/goose/src/config/` 의 paths.rs + base.rs 직접 확인 (PR #29 작성 시):
+ *  - macOS: Keychain service `goose` (system-keyring feature 활성 기본). KEYRING_USERNAME `secrets`.
+ *  - Linux: secret-service 백엔드 (mat 미지원) 또는 `GOOSE_DISABLE_KEYRING` 시 config.yaml file fallback.
+ * Linux 의 secret-service 는 mat 의 source 추상화 (file / macOS keychain) 로 표현 불가 →
+ * Linux 분기는 file fallback path (`~/.config/goose/config.yaml`) 로 통일. 사용자가
+ * Linux + system-keyring 사용 시 mat 가 swap 못함을 README/CHANGELOG 한계로 명시.
+ */
+function gooseSource(): Source {
+  if (process.platform === 'darwin') {
+    return { type: 'keychain', service: 'goose', saveAs: 'goose-secrets.json' };
+  }
+  return { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' };
+}
+
 
 export const BUILTIN_CLI_DEFS: CliDef[] = [
   {
@@ -135,6 +151,29 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
     ]
+  },
+  {
+    // Block (Square) Goose (https://github.com/block/goose). Rust AI agent — file/keyring 양쪽 지원.
+    // 경로 확인 (block/goose `crates/goose/src/config/paths.rs` 코드 주석):
+    //   "Block" is kept here for backwards compatibility with existing user config/data directories
+    //   (e.g. ~/Library/Application Support/Block/goose/).
+    // base.rs 에서 KEYRING_SERVICE="goose", KEYRING_USERNAME="secrets", CONFIG_YAML_NAME="config.yaml".
+    //
+    // 정책 (mat 의 keychain source 는 macOS 만 지원):
+    //   - macOS: Keychain service `goose` (Goose 의 기본 동작 — system-keyring feature 활성).
+    //   - Linux: file `~/.config/goose/config.yaml` (Goose 의 keyring fallback / Linux 의 secret-service
+    //     백엔드는 mat 미지원).
+    //
+    // mat scope 밖 한계:
+    //   - macOS 에서 `GOOSE_DISABLE_KEYRING=1` 시 Goose 가 file fallback → mat 의 keychain swap 무효.
+    //   - Linux + system-keyring (secret-service) 활성화 시 Goose 가 file 외 keyring 사용 → mat swap 미적용.
+    //   - macOS 의 model/provider 라우팅 config (`~/Library/Application Support/Block/goose/config.yaml`)
+    //     는 mat 가 swap 하지 않음 — secrets 만 swap, provider 라우팅은 한 사용자가 유지.
+    //   - provider env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` 등) 직접 export 시
+    //     shell env 가 우선 → swap 우회.
+    id: 'goose',
+    name: 'Goose',
+    sources: [gooseSource()]
   }
 ];
 

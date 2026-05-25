@@ -2,9 +2,9 @@
  * cli-defs 단위 테스트.
  *
  * 두 가지 영역 검증:
- *  1) BUILTIN_CLI_DEFS 의 구성 (8 CLI, source 정확성, saveAs invariant) +
+ *  1) BUILTIN_CLI_DEFS 의 구성 (9 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
- *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
+ *  2) claudeSource / gooseSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
  *     → 모든 CI runner OS 에서 양쪽 분기 회귀 감지 가능 (Quad-review #5 P0 A).
  *
@@ -17,8 +17,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
-  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode 8개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode']);
+  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode/goose 9개 정의를 정확히 포함', () => {
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose']);
   });
 
   it.each([
@@ -29,7 +29,8 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ['kimi', 'Kimi CLI'],
     ['qwen', 'Qwen Code CLI'],
     ['crush', 'Crush'],
-    ['opencode', 'OpenCode']
+    ['opencode', 'OpenCode'],
+    ['goose', 'Goose']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
@@ -93,6 +94,20 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
+  it('goose source 는 1개 (현재 platform 기준), saveAs `goose-secrets.json` 또는 `goose-config.yaml`', () => {
+    // macOS → keychain `goose` / 그 외 → file `~/.config/goose/config.yaml`. platform 분기 검증은 별도 describe.
+    const goose = BUILTIN_CLI_DEFS.find((c) => c.id === 'goose');
+    expect(goose?.sources).toHaveLength(1);
+    const src = goose!.sources[0];
+    if (src.type === 'keychain') {
+      expect(src.service).toBe('goose');
+      expect(src.saveAs).toBe('goose-secrets.json');
+    } else {
+      expect(src.path).toBe('~/.config/goose/config.yaml');
+      expect(src.saveAs).toBe('goose-config.yaml');
+    }
+  });
+
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
     for (const cli of BUILTIN_CLI_DEFS) {
       for (const src of cli.sources) {
@@ -103,7 +118,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);
@@ -156,6 +171,47 @@ describe('claudeSource — platform 별 분기 (양쪽 분기 검증)', () => {
       if (src.type === 'file') {
         expect(src.path).toBe('~/.claude/.credentials.json');
         expect(src.saveAs).toBe('credentials.json');
+      }
+    }
+  );
+});
+
+/**
+ * gooseSource 의 platform 분기 검증.
+ * macOS 는 Keychain service `goose` (Goose 의 system-keyring 기본 동작).
+ * 그 외는 file `~/.config/goose/config.yaml` (Linux secret-service mat 미지원이라 file fallback).
+ */
+describe('gooseSource — platform 별 분기 (양쪽 분기 검증)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('platform=darwin → keychain source (`goose`)', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+    vi.resetModules();
+    const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+    const goose = defs.find((c) => c.id === 'goose');
+    const src = goose!.sources[0];
+    expect(src.type).toBe('keychain');
+    if (src.type === 'keychain') {
+      expect(src.service).toBe('goose');
+      expect(src.saveAs).toBe('goose-secrets.json');
+    }
+  });
+
+  it.each(['linux', 'win32', 'freebsd'])(
+    'platform=%s → file source (~/.config/goose/config.yaml)',
+    async (platform) => {
+      vi.stubGlobal('process', { ...process, platform });
+      vi.resetModules();
+      const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+      const goose = defs.find((c) => c.id === 'goose');
+      const src = goose!.sources[0];
+      expect(src.type).toBe('file');
+      if (src.type === 'file') {
+        expect(src.path).toBe('~/.config/goose/config.yaml');
+        expect(src.saveAs).toBe('goose-config.yaml');
       }
     }
   );

@@ -25,12 +25,13 @@
 | `qwen` | `~/.qwen/settings.json` + `~/.qwen/.env` |
 | `crush` | `~/.config/crush/crush.json` + `~/.local/share/crush/crush.json` |
 | `opencode` | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) |
+| `goose` | macOS Keychain (`goose`) / Linux: `~/.config/goose/config.yaml` |
 
 ### 확장 대상 universe
 
 `lterm` README 가 정리한 agent 리스트와 같은 부분 채택:
 
-- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), ~~Kimi~~ ✅ (v0.3.x 빌트인), ~~Qwen~~ ✅ (v0.3.x 빌트인), ~~Crush~~ ✅ (v0.3.x 빌트인), ~~OpenCode~~ ✅ (v0.3.x 빌트인), Goose, Amp
+- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), ~~Kimi~~ ✅ (v0.3.x 빌트인), ~~Qwen~~ ✅ (v0.3.x 빌트인), ~~Crush~~ ✅ (v0.3.x 빌트인), ~~OpenCode~~ ✅ (v0.3.x 빌트인), ~~Goose~~ ✅ (v0.3.x 빌트인 — macOS keychain default), **Amp ❌ (env-var-only + multi-dir OAuth — file/keychain source 추상화로 표현 불가)**
 - **GitHub Copilot CLI** — GitHub 토큰 (`~/.config/gh/` 또는 own store)
 - **Cursor Agent** — `~/Library/Application Support/Cursor/` (큰 디렉토리, 일부만 swap)
 - **Kiro, Jules** — credential 패턴 미조사
