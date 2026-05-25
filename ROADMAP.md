@@ -25,14 +25,16 @@
 | `qwen` | `~/.qwen/settings.json` + `~/.qwen/.env` |
 | `crush` | `~/.config/crush/crush.json` + `~/.local/share/crush/crush.json` |
 | `opencode` | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) |
+| `copilot` | macOS Keychain (`copilot-cli`) / Linux: `~/.copilot/config.json` (storeTokenPlaintext fallback) |
 
 ### 확장 대상 universe
 
 `lterm` README 가 정리한 agent 리스트와 같은 부분 채택:
 
-- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), ~~Kimi~~ ✅ (v0.3.x 빌트인), ~~Qwen~~ ✅ (v0.3.x 빌트인), ~~Crush~~ ✅ (v0.3.x 빌트인), ~~OpenCode~~ ✅ (v0.3.x 빌트인), Goose, Amp
-- **GitHub Copilot CLI** — GitHub 토큰 (`~/.config/gh/` 또는 own store)
-- **Cursor Agent** — `~/Library/Application Support/Cursor/` (큰 디렉토리, 일부만 swap)
+- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), ~~Kimi~~ ✅ (v0.3.x 빌트인), ~~Qwen~~ ✅ (v0.3.x 빌트인), ~~Crush~~ ✅ (v0.3.x 빌트인), ~~OpenCode~~ ✅ (v0.3.x 빌트인)
+- **macOS Keychain (스트레치)**: ~~GitHub Copilot CLI~~ ✅ (v0.3.x — macOS keychain `copilot-cli`, Linux file fallback storeTokenPlaintext)
+- **mat 추상화 확장 필요 (보류)**: Goose, Amp — 모두 Linux 의 secret-service 백엔드 사용 + Goose 는 generic service name `goose` (KeychainSource account 필드 필요), Amp 는 `AMP_API_KEY` env-only + `~/.amp/oauth/` multi-file 디렉토리. KeychainSource 의 `account` 필드 + Linux secret-service source type 도입 후 별도 PR 묶음.
+- **Cursor Agent** — keychain service name 공식 미공개 (cli-config.json 만 swap 으로는 credential 격리 불가) → plugin 사용 권장
 - **Kiro, Jules** — credential 패턴 미조사
 
 ### 작업 분해

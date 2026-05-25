@@ -29,6 +29,26 @@ function claudeSource(): Source {
   return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
 }
 
+/**
+ * GitHub Copilot CLI (standalone, `copilot` 명령) 의 자격증명 source.
+ *  - macOS: Keychain service `copilot-cli` (Copilot 의 기본 저장소).
+ *  - Linux: `~/.copilot/config.json` (Copilot 의 `storeTokenPlaintext: true` 설정 시 plaintext fallback).
+ *
+ * 한계 (mat scope 밖):
+ *  - Linux 기본은 libsecret (Secret Service) — mat 가 secret-service 미지원이라 `storeTokenPlaintext: true`
+ *    설정 안 한 사용자는 swap 무효 (cli config 에 명시 필요).
+ *  - `COPILOT_HOME` env 디렉토리 override / `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`
+ *    env 우선 등 — 자세한 내역은 BUILTIN_CLI_DEFS entry 주석 참조.
+ *  - `~/.copilot/` 디렉토리 내 `session-store.db` (SQLite) 등 보조 파일은 swap 대상 외.
+ *  - `gh` extension (`gh copilot`) 사용자는 `~/.config/gh/hosts.yml` 의 토큰 사용 — 별개 plugin 필요.
+ */
+function copilotSource(): Source {
+  if (process.platform === 'darwin') {
+    return { type: 'keychain', service: 'copilot-cli', saveAs: 'copilot-credentials.json' };
+  }
+  return { type: 'file', path: '~/.copilot/config.json', saveAs: 'copilot-config.json' };
+}
+
 
 export const BUILTIN_CLI_DEFS: CliDef[] = [
   {
@@ -135,6 +155,27 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
     ]
+  },
+  {
+    // GitHub 공식 Copilot CLI (https://github.com/github/copilot-cli, standalone `copilot` 명령).
+    // 정책 (mat 의 keychain source 는 macOS 만 지원):
+    //   - macOS: Keychain service `copilot-cli` (Copilot 의 기본 저장 — `security find-generic-password -s copilot-cli` 로 확인).
+    //   - Linux: file `~/.copilot/config.json` (Copilot 의 `storeTokenPlaintext: true` 설정 시 plaintext fallback).
+    //
+    // mat scope 밖 한계:
+    //   - Linux 기본은 libsecret (Secret Service) — mat 가 secret-service 미지원. 사용자가
+    //     명시적으로 `storeTokenPlaintext: true` 설정해야만 file 모드 swap 유효.
+    //   - `COPILOT_HOME` env 시 디렉토리 자체 override → 기본 경로 swap 무효.
+    //   - `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN` env 우선 → shell export 시 swap 우회.
+    //   - `~/.copilot/` 디렉토리 내 `session-store.db` (SQLite) / `settings.json` / `mcp-config.json` /
+    //     `lsp-config.json` 는 swap 대상 외 — credential 만 swap.
+    //   - `gh` extension (`gh copilot`) 사용자는 `~/.config/gh/hosts.yml` (또는 macOS Keychain `gh:github.com`)
+    //     의 토큰 사용 — Copilot CLI 와 다른 source 라 별도 plugin 필요.
+    //   - Copilot CLI 의 `/user switch` / `copilot login` 으로 multi-account 가능하나 mat 의 profile
+    //     과 별개 — 두 메커니즘 동시 사용 시 사용자가 매칭 책임.
+    id: 'copilot',
+    name: 'GitHub Copilot CLI',
+    sources: [copilotSource()]
   }
 ];
 

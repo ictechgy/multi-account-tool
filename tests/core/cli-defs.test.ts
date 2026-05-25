@@ -2,9 +2,9 @@
  * cli-defs 단위 테스트.
  *
  * 두 가지 영역 검증:
- *  1) BUILTIN_CLI_DEFS 의 구성 (8 CLI, source 정확성, saveAs invariant) +
+ *  1) BUILTIN_CLI_DEFS 의 구성 (9 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
- *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
+ *  2) claudeSource / copilotSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
  *     → 모든 CI runner OS 에서 양쪽 분기 회귀 감지 가능 (Quad-review #5 P0 A).
  *
@@ -17,8 +17,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
-  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode 8개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode']);
+  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode/copilot 9개 정의를 정확히 포함', () => {
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'copilot']);
   });
 
   it.each([
@@ -29,7 +29,8 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ['kimi', 'Kimi CLI'],
     ['qwen', 'Qwen Code CLI'],
     ['crush', 'Crush'],
-    ['opencode', 'OpenCode']
+    ['opencode', 'OpenCode'],
+    ['copilot', 'GitHub Copilot CLI']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
@@ -93,6 +94,20 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
+  it('copilot source 는 1개 (현재 platform 기준), saveAs `copilot-credentials.json` 또는 `copilot-config.json`', () => {
+    // macOS → keychain `copilot-cli` / 그 외 → file `~/.copilot/config.json` (storeTokenPlaintext fallback).
+    const copilot = BUILTIN_CLI_DEFS.find((c) => c.id === 'copilot');
+    expect(copilot?.sources).toHaveLength(1);
+    const src = copilot!.sources[0];
+    if (src.type === 'keychain') {
+      expect(src.service).toBe('copilot-cli');
+      expect(src.saveAs).toBe('copilot-credentials.json');
+    } else {
+      expect(src.path).toBe('~/.copilot/config.json');
+      expect(src.saveAs).toBe('copilot-config.json');
+    }
+  });
+
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
     for (const cli of BUILTIN_CLI_DEFS) {
       for (const src of cli.sources) {
@@ -103,7 +118,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'copilot'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);
@@ -156,6 +171,47 @@ describe('claudeSource — platform 별 분기 (양쪽 분기 검증)', () => {
       if (src.type === 'file') {
         expect(src.path).toBe('~/.claude/.credentials.json');
         expect(src.saveAs).toBe('credentials.json');
+      }
+    }
+  );
+});
+
+/**
+ * copilotSource 의 platform 분기 검증.
+ * macOS 는 Keychain service `copilot-cli` (Copilot 의 기본 저장).
+ * 그 외는 file `~/.copilot/config.json` (storeTokenPlaintext fallback — 사용자가 명시 설정 시).
+ */
+describe('copilotSource — platform 별 분기 (양쪽 분기 검증)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('platform=darwin → keychain source (`copilot-cli`)', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+    vi.resetModules();
+    const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+    const copilot = defs.find((c) => c.id === 'copilot');
+    const src = copilot!.sources[0];
+    expect(src.type).toBe('keychain');
+    if (src.type === 'keychain') {
+      expect(src.service).toBe('copilot-cli');
+      expect(src.saveAs).toBe('copilot-credentials.json');
+    }
+  });
+
+  it.each(['linux', 'win32', 'freebsd'])(
+    'platform=%s → file source (~/.copilot/config.json)',
+    async (platform) => {
+      vi.stubGlobal('process', { ...process, platform });
+      vi.resetModules();
+      const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+      const copilot = defs.find((c) => c.id === 'copilot');
+      const src = copilot!.sources[0];
+      expect(src.type).toBe('file');
+      if (src.type === 'file') {
+        expect(src.path).toBe('~/.copilot/config.json');
+        expect(src.saveAs).toBe('copilot-config.json');
       }
     }
   );
