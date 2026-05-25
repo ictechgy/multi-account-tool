@@ -2,11 +2,14 @@
  * cli-defs 단위 테스트.
  *
  * 두 가지 영역 검증:
- *  1) BUILTIN_CLI_DEFS 의 구성 (7 CLI, source 정확성, saveAs invariant) +
+ *  1) BUILTIN_CLI_DEFS 의 구성 (8 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
  *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
  *     → 모든 CI runner OS 에서 양쪽 분기 회귀 감지 가능 (Quad-review #5 P0 A).
+ *
+ *  주의: OpenCode 는 npm `xdg-basedir` 사용 — OS 무관 단일 XDG 경로 (`~/.local/share/opencode/auth.json`)
+ *  이므로 platform 분기 없음 (PR #28 quad-review 정정 사항).
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,8 +17,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
-  it('claude/codex/gemini/aider/kimi/qwen/crush 7개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush']);
+  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode 8개 정의를 정확히 포함', () => {
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode']);
   });
 
   it.each([
@@ -25,7 +28,8 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ['aider', 'Aider'],
     ['kimi', 'Kimi CLI'],
     ['qwen', 'Qwen Code CLI'],
-    ['crush', 'Crush']
+    ['crush', 'Crush'],
+    ['opencode', 'OpenCode']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
@@ -81,6 +85,14 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
+  it('opencode source 는 1개 file (~/.local/share/opencode/auth.json, OS 공통)', () => {
+    // OpenCode 는 npm xdg-basedir 사용 → macOS/Linux/BSD/Windows 모두 동일 경로.
+    const opencode = BUILTIN_CLI_DEFS.find((c) => c.id === 'opencode');
+    expect(opencode?.sources).toEqual([
+      { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
+    ]);
+  });
+
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
     for (const cli of BUILTIN_CLI_DEFS) {
       for (const src of cli.sources) {
@@ -91,7 +103,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);
@@ -144,6 +156,33 @@ describe('claudeSource — platform 별 분기 (양쪽 분기 검증)', () => {
       if (src.type === 'file') {
         expect(src.path).toBe('~/.claude/.credentials.json');
         expect(src.saveAs).toBe('credentials.json');
+      }
+    }
+  );
+});
+
+/**
+ * OpenCode 의 경로는 platform 분기 없음 — npm `xdg-basedir` 의 XDG 표준 (`~/.local/share`) 만 사용.
+ * 전체 platform 에서 `~/.local/share/opencode/auth.json` 이 동일하게 적용되는지 검증.
+ */
+describe('opencode source — platform 무관 단일 경로 (xdg-basedir 동작)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it.each(['darwin', 'linux', 'win32', 'freebsd'])(
+    'platform=%s → ~/.local/share/opencode/auth.json (OS 공통)',
+    async (platform) => {
+      vi.stubGlobal('process', { ...process, platform });
+      vi.resetModules();
+      const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+      const opencode = defs.find((c) => c.id === 'opencode');
+      const src = opencode!.sources[0];
+      expect(src.type).toBe('file');
+      if (src.type === 'file') {
+        expect(src.path).toBe('~/.local/share/opencode/auth.json');
+        expect(src.saveAs).toBe('opencode-auth.json');
       }
     }
   );

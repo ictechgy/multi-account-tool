@@ -2,7 +2,7 @@
 
 [한국어](README.ko.md) | English
 
-Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush) from a single TUI. No more `logout` / `login` shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths.
+Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode) from a single TUI. No more `logout` / `login` shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -35,6 +35,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | Kimi CLI | `~/.kimi/config.toml` | File swap |
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | File swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | File swap |
+| OpenCode | `~/.local/share/opencode/auth.json` (OS-agnostic, XDG standard) | File swap |
 
 ### Switch flow (lossless)
 
@@ -205,7 +206,7 @@ Drop a JSON file at `~/.multi-account-tool/cli-defs/<id>.json`. Example template
 }
 ```
 
-mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`) cannot be overridden — id collision is rejected.
+mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`) cannot be overridden — id collision is rejected.
 
 Field rules:
 - `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).

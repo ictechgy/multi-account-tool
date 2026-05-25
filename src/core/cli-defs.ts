@@ -29,6 +29,7 @@ function claudeSource(): Source {
   return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
 }
 
+
 export const BUILTIN_CLI_DEFS: CliDef[] = [
   {
     id: 'claude',
@@ -107,6 +108,32 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.config/crush/crush.json', saveAs: 'crush-config.json' },
       { type: 'file', path: '~/.local/share/crush/crush.json', saveAs: 'crush-data.json' }
+    ]
+  },
+  {
+    // SST OpenCode (https://github.com/sst/opencode). MIT 라이선스 오픈소스 AI 코딩 에이전트.
+    // credential 은 단일 JSON 파일 `auth.json`. 권한 0o600.
+    // provider ID 마다 `{ type: 'api', key: ... }` 또는 OAuth 토큰 객체.
+    //
+    // 경로 — `packages/core/src/global.ts` 가 npm `xdg-basedir` 의 `xdgData` 를 사용:
+    //   `${xdgData}/opencode/auth.json`. xdg-basedir 는 **OS 무관 XDG 표준** 만 따른다
+    //   (Apple Application Support 등 native 경로 분기 없음) → macOS / Linux / BSD / Windows 모두
+    //   기본값 `~/.local/share/opencode/auth.json`. (이전 조사가 etcetera Rust 패턴으로 macOS Apple
+    //   base dir 분기를 가정했으나 npm xdg-basedir 동작과 다름 — PR #28 quad-review 정정 사항).
+    //
+    // mat scope 밖 한계 (PR #28 quad-review Codex HIGH 반영):
+    //   - `XDG_DATA_HOME` env 가 설정되면 OpenCode 는 `$XDG_DATA_HOME/opencode/auth.json` 사용 →
+    //     mat 의 기본 `~/.local/share` 경로 swap 무효 (wrong-account 위험, Crush PR #27 동일 카테고리).
+    //   - `OPENCODE_AUTH_CONTENT` env 가 설정되면 OpenCode 가 파일 대신 env 내용 우선 사용.
+    //   - `OPENCODE_CONFIG_DIR` env 로 디렉토리 자체 override 시 기본 경로 swap 무효.
+    //   - `OPENCODE_CONFIG` / `OPENCODE_CONFIG_CONTENT` 로 config 자체를 주입하면 별도 provider 라우팅 가능.
+    //   - 프로젝트 로컬 `opencode.json` / `opencode.jsonc` / `.opencode/opencode.json` + 프로젝트 `.env` 도
+    //     provider env 참조를 통해 credential 선택에 영향. (cwd 기반은 mat scope 밖)
+    //   - config 내 `"apiKey": "{env:ANTHROPIC_API_KEY}"` env 참조 사용 시 shell env 가 실제 key 결정.
+    id: 'opencode',
+    name: 'OpenCode',
+    sources: [
+      { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
     ]
   }
 ];
