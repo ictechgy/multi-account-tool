@@ -30,10 +30,14 @@
 
 `lterm` README 가 정리한 agent 리스트와 같은 부분 채택:
 
-- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), ~~Kimi~~ ✅ (v0.3.x 빌트인), ~~Qwen~~ ✅ (v0.3.x 빌트인), ~~Crush~~ ✅ (v0.3.x 빌트인), ~~OpenCode~~ ✅ (v0.3.x 빌트인), Goose, Amp
-- **GitHub Copilot CLI** — GitHub 토큰 (`~/.config/gh/` 또는 own store)
-- **Cursor Agent** — `~/Library/Application Support/Cursor/` (큰 디렉토리, 일부만 swap)
-- **Kiro, Jules** — credential 패턴 미조사
+- **file-based ✅ (v0.3.x 빌트인)**: ~~Aider~~, ~~Kimi~~, ~~Qwen~~, ~~Crush~~, ~~OpenCode~~ — 8개 file-based 후보 (PR 1 단계 병렬 조사) 중 mat 의 file source 추상화로 표현 가능한 5개 완료.
+- **mat 추상화 확장 필요 (보류)** — PR #29/#30 quad-review 에서 wrong-account 위험 합의:
+  - **Goose** (PR #29 closed) — macOS Keychain service `goose` 가 generic name (KeychainSource 가 service-only 라 collision/wrong-entry 위험). Linux 기본은 secret-service 백엔드 (mat 미지원). Linux file fallback 도 secrets 가 별도 `~/.config/goose/secrets.yaml` 파일에 저장 (config.yaml 만 swap 시 stale).
+  - **GitHub Copilot CLI** (PR #30 closed) — multi-account 지원 (`/user switch` / `copilot login`) 인데 KeychainSource service-only 라 어느 account 가 swap 대상인지 불명. Linux libsecret + Windows Credential Manager 가 기본 (mat 미지원). `~/.copilot/config.json` 의 `loggedInUsers` 등 application state 도 swap 대상이어야 일관.
+  - **Amp** (Sourcegraph, `@ampcode/cli`) — credential 이 `AMP_API_KEY` env-only + `~/.amp/oauth/` multi-file OAuth 디렉토리. mat 의 file/keychain source 추상화로 표현 불가능.
+  - **후속 PR 묶음**: (1) `KeychainSource` 에 optional `account` 필드 추가 (Goose/Copilot 모두 영향), (2) Linux Secret Service / Windows Credential Manager source type 검토 (Goose Linux + Copilot Linux/Windows 표현), (3) `~/.copilot/` application state 처리 (multi-source), (4) Amp 는 env-only 라 `mat exec` shell hook 흐름이 맞을 가능성. 그 후 Goose/Copilot/Amp 재PR.
+- **Cursor Agent** — keychain service name 공식 미공개 + `~/.cursor/cli-config.json` 만 swap 으로는 credential 격리 안 됨 (실제 token 은 keychain). 공식 service name 확정까지 plugin 권장.
+- **Kiro, Jules** — credential 패턴 미조사.
 
 ### 작업 분해
 

@@ -242,10 +242,10 @@ mat 과 함께 배포되어야 할 커뮤니티 CLI 용. PR 환영.
 
 v0.2+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 
-- ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3: 위 *새 CLI 추가하기* 섹션 참조)
-- ~~Aider 빌트인 지원~~ ✅ (v0.3: claude/codex/gemini 와 함께 빌트인 제공)
+- ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3)
+- ~~Aider 빌트인 지원~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
-- 빌트인 CLI 확장 (Cursor Agent, Goose, Copilot CLI 등)
+- 빌트인 CLI 추가 확장 — Goose / Copilot / Amp 는 mat 추상화 확장 (KeychainSource `account` 필드 + Linux Secret Service / Windows Credential Manager source type) 후 별도 PR 묶음 예정. Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
 - `lterm claude --profile <name>` 같은 shim wrapper
 
 ---
