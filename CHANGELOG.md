@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Kimi CLI 빌트인** — `BUILTIN_CLI_DEFS` 5번째 항목. `~/.kimi/config.toml` file source (saveAs `kimi.toml`). MoonshotAI 공식 Kimi Code CLI (https://github.com/MoonshotAI/kimi-cli) 의 단일 TOML credential 파일 swap. plugin 으로 'kimi' override 차단 회귀 가드 (`cli-defs.test.ts` + `cli-defs-plugin.test.ts`). README / ROADMAP 갱신 (지원 CLI 표 + 확장 universe).
+
 ## [0.3.0] - 2026-05-24
 
 ### Added
