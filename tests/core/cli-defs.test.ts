@@ -2,7 +2,7 @@
  * cli-defs 단위 테스트.
  *
  * 두 가지 영역 검증:
- *  1) BUILTIN_CLI_DEFS 의 구성 (6 CLI, source 정확성, saveAs invariant) +
+ *  1) BUILTIN_CLI_DEFS 의 구성 (7 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
  *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
@@ -14,8 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
-  it('claude/codex/gemini/aider/kimi/qwen 6개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen']);
+  it('claude/codex/gemini/aider/kimi/qwen/crush 7개 정의를 정확히 포함', () => {
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush']);
   });
 
   it.each([
@@ -24,7 +24,8 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ['gemini', 'Gemini / Antigravity'],
     ['aider', 'Aider'],
     ['kimi', 'Kimi CLI'],
-    ['qwen', 'Qwen Code CLI']
+    ['qwen', 'Qwen Code CLI'],
+    ['crush', 'Crush']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
@@ -72,6 +73,14 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
+  it('crush source 는 2개 file (~/.config/crush + ~/.local/share/crush)', () => {
+    const crush = BUILTIN_CLI_DEFS.find((c) => c.id === 'crush');
+    expect(crush?.sources).toEqual([
+      { type: 'file', path: '~/.config/crush/crush.json', saveAs: 'crush-config.json' },
+      { type: 'file', path: '~/.local/share/crush/crush.json', saveAs: 'crush-data.json' }
+    ]);
+  });
+
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
     for (const cli of BUILTIN_CLI_DEFS) {
       for (const src of cli.sources) {
@@ -82,7 +91,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);

@@ -85,6 +85,21 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
       { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' },
       { type: 'file', path: '~/.qwen/.env', saveAs: 'qwen.env' }
     ]
+  },
+  {
+    // Charm.sh 공식 Crush (https://github.com/charmbracelet/crush). Go 기반 TUI AI 코딩 에이전트.
+    // XDG 표준 경로 (macOS/Linux 동일):
+    //   - `~/.config/crush/crush.json` — 전역 설정 (읽기 우선)
+    //   - `~/.local/share/crush/crush.json` — provider/API key 쓰기 대상
+    // 두 파일을 함께 swap 해야 계정 전환이 일관 (단일만 swap 시 한쪽 데이터 stale).
+    // provider key 는 env var (`ANTHROPIC_API_KEY` 등) 직접 지원 + 설정 내 `"$ENV_VAR"` 확장도 가능 —
+    // shell export 와 프로젝트 로컬 `.crush/crush.json` 은 mat scope 밖.
+    id: 'crush',
+    name: 'Crush',
+    sources: [
+      { type: 'file', path: '~/.config/crush/crush.json', saveAs: 'crush-config.json' },
+      { type: 'file', path: '~/.local/share/crush/crush.json', saveAs: 'crush-data.json' }
+    ]
   }
 ];
 
