@@ -68,6 +68,17 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.kimi/config.toml', saveAs: 'kimi.toml' }
     ]
+  },
+  {
+    // Alibaba 공식 Qwen Code CLI (https://github.com/QwenLM/qwen-code, npm `@qwen-code/qwen-code`).
+    // Gemini CLI 의 `~/.gemini/` 패턴을 차용 → `~/.qwen/settings.json` 단일 JSON 에 provider/api_key + env 설정 집중.
+    // OAuth 는 2026-04-15 종료 — 현재는 API key (DASHSCOPE/OpenAI/Anthropic 호환) 기반.
+    // env var (`DASHSCOPE_API_KEY` 등) 가 settings.json `env` 필드보다 우선이지만 mat 의 file swap 은 기본 경로 기준.
+    id: 'qwen',
+    name: 'Qwen Code CLI',
+    sources: [
+      { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' }
+    ]
   }
 ];
 

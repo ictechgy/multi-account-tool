@@ -2,7 +2,7 @@
 
 [English](README.md) | 한국어
 
-여러 AI CLI 계정(Claude Code, Codex, Gemini / Antigravity, Aider, Kimi)을 **하나의 TUI 에서 빠르게 전환**해 사용하는 도구. 매번 `logout` → `login` 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시 등 안전장치를 기본 적용.
+여러 AI CLI 계정(Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen)을 **하나의 TUI 에서 빠르게 전환**해 사용하는 도구. 매번 `logout` → `login` 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시 등 안전장치를 기본 적용.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -33,6 +33,7 @@
 | Gemini / Antigravity | `~/.gemini/oauth_creds.json`, `google_accounts.json` | 파일 swap |
 | Aider | `~/.aider.conf.yml` | 파일 swap |
 | Kimi CLI | `~/.kimi/config.toml` | 파일 swap |
+| Qwen Code CLI | `~/.qwen/settings.json` | 파일 swap |
 
 ### 전환 흐름 (데이터 손실 없음)
 
@@ -203,7 +204,7 @@ lterm send-keys "mat exec claude work -- claude" Enter
 }
 ```
 
-mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`, `aider`, `kimi`) id 와 충돌하면 plugin 이 무시된다 (보안).
+mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`) id 와 충돌하면 plugin 이 무시된다 (보안).
 
 필드 규칙:
 - `id`: 영문 시작 + 영숫자/`_`/`-`, 1~32자 (빌트인 id 와 중복 불가).
