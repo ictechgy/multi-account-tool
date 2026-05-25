@@ -2,9 +2,9 @@
  * cli-defs 단위 테스트.
  *
  * 두 가지 영역 검증:
- *  1) BUILTIN_CLI_DEFS 의 구성 (7 CLI, source 정확성, saveAs invariant) +
+ *  1) BUILTIN_CLI_DEFS 의 구성 (8 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
- *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
+ *  2) claudeSource / opencodeSource 의 platform 분기 (darwin → 다른 경로, 그 외 → 다른 경로) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
  *     → 모든 CI runner OS 에서 양쪽 분기 회귀 감지 가능 (Quad-review #5 P0 A).
  */
@@ -14,8 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
-  it('claude/codex/gemini/aider/kimi/qwen/crush 7개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush']);
+  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode 8개 정의를 정확히 포함', () => {
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode']);
   });
 
   it.each([
@@ -25,7 +25,8 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ['aider', 'Aider'],
     ['kimi', 'Kimi CLI'],
     ['qwen', 'Qwen Code CLI'],
-    ['crush', 'Crush']
+    ['crush', 'Crush'],
+    ['opencode', 'OpenCode']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
@@ -81,6 +82,13 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
+  it('opencode source 는 1개 file (현재 platform 기준), saveAs `opencode-auth.json`', () => {
+    const opencode = BUILTIN_CLI_DEFS.find((c) => c.id === 'opencode');
+    expect(opencode?.sources).toHaveLength(1);
+    expect(opencode!.sources[0].saveAs).toBe('opencode-auth.json');
+    expect(opencode!.sources[0].type).toBe('file');
+  });
+
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
     for (const cli of BUILTIN_CLI_DEFS) {
       for (const src of cli.sources) {
@@ -91,7 +99,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);
@@ -144,6 +152,47 @@ describe('claudeSource — platform 별 분기 (양쪽 분기 검증)', () => {
       if (src.type === 'file') {
         expect(src.path).toBe('~/.claude/.credentials.json');
         expect(src.saveAs).toBe('credentials.json');
+      }
+    }
+  );
+});
+
+/**
+ * opencodeSource 의 platform 분기 검증.
+ * macOS 는 Apple base directories (`~/Library/Application Support/...`),
+ * 그 외는 XDG_DATA_HOME 기본값 (`~/.local/share/...`) 사용.
+ */
+describe('opencodeSource — platform 별 분기 (양쪽 분기 검증)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('platform=darwin → ~/Library/Application Support/opencode/auth.json', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+    vi.resetModules();
+    const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+    const opencode = defs.find((c) => c.id === 'opencode');
+    const src = opencode!.sources[0];
+    expect(src.type).toBe('file');
+    if (src.type === 'file') {
+      expect(src.path).toBe('~/Library/Application Support/opencode/auth.json');
+      expect(src.saveAs).toBe('opencode-auth.json');
+    }
+  });
+
+  it.each(['linux', 'win32', 'freebsd'])(
+    'platform=%s → ~/.local/share/opencode/auth.json',
+    async (platform) => {
+      vi.stubGlobal('process', { ...process, platform });
+      vi.resetModules();
+      const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+      const opencode = defs.find((c) => c.id === 'opencode');
+      const src = opencode!.sources[0];
+      expect(src.type).toBe('file');
+      if (src.type === 'file') {
+        expect(src.path).toBe('~/.local/share/opencode/auth.json');
+        expect(src.saveAs).toBe('opencode-auth.json');
       }
     }
   );

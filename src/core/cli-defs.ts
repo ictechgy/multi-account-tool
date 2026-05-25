@@ -29,6 +29,20 @@ function claudeSource(): Source {
   return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
 }
 
+/**
+ * OpenCode (sst/opencode) 의 자격증명 source.
+ * XDG `data` 디렉토리 기준으로 OS 별 경로가 다르다 — etcetera/xdg 표준.
+ *   - macOS: `~/Library/Application Support/opencode/auth.json` (Apple base directories)
+ *   - 그 외 (Linux/BSD): `~/.local/share/opencode/auth.json` (XDG_DATA_HOME 기본값)
+ * Permission 0o600 의 단일 JSON 파일에 provider 별 OAuth/API key 객체 저장.
+ */
+function opencodeSource(): Source {
+  if (process.platform === 'darwin') {
+    return { type: 'file', path: '~/Library/Application Support/opencode/auth.json', saveAs: 'opencode-auth.json' };
+  }
+  return { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' };
+}
+
 export const BUILTIN_CLI_DEFS: CliDef[] = [
   {
     id: 'claude',
@@ -108,6 +122,19 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
       { type: 'file', path: '~/.config/crush/crush.json', saveAs: 'crush-config.json' },
       { type: 'file', path: '~/.local/share/crush/crush.json', saveAs: 'crush-data.json' }
     ]
+  },
+  {
+    // SST OpenCode (https://github.com/sst/opencode). MIT 라이선스 오픈소스 AI 코딩 에이전트.
+    // credential 은 단일 JSON 파일 `auth.json` (XDG `data` 디렉토리). 권한 0o600.
+    // provider ID 마다 `{ type: 'api', key: ... }` 또는 OAuth 토큰 객체.
+    //
+    // mat scope 밖 한계:
+    //   - `OPENCODE_AUTH_CONTENT` env var 가 설정되면 OpenCode 는 파일 대신 env 내용을 우선 사용 → mat swap 우회.
+    //   - `OPENCODE_CONFIG_DIR` env var 로 디렉토리 자체를 override 하면 mat 의 기본 경로 swap 무효.
+    //   - config 내 `"apiKey": "{env:ANTHROPIC_API_KEY}"` 처럼 env 참조 사용 시 shell env 가 실제 key 결정.
+    id: 'opencode',
+    name: 'OpenCode',
+    sources: [opencodeSource()]
   }
 ];
 
