@@ -33,7 +33,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | Gemini / Antigravity | `~/.gemini/oauth_creds.json`, `google_accounts.json` | File swap |
 | Aider | `~/.aider.conf.yml` | File swap |
 | Kimi CLI | `~/.kimi/config.toml` | File swap |
-| Qwen Code CLI | `~/.qwen/settings.json` | File swap |
+| Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | File swap |
 
 ### Switch flow (lossless)
 

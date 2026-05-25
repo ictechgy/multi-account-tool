@@ -33,7 +33,7 @@
 | Gemini / Antigravity | `~/.gemini/oauth_creds.json`, `google_accounts.json` | 파일 swap |
 | Aider | `~/.aider.conf.yml` | 파일 swap |
 | Kimi CLI | `~/.kimi/config.toml` | 파일 swap |
-| Qwen Code CLI | `~/.qwen/settings.json` | 파일 swap |
+| Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | 파일 swap |
 
 ### 전환 흐름 (데이터 손실 없음)
 

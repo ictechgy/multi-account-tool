@@ -22,7 +22,7 @@
 | `gemini` | `~/.gemini/oauth_creds.json` + `google_accounts.json` |
 | `aider` | `~/.aider.conf.yml` |
 | `kimi` | `~/.kimi/config.toml` |
-| `qwen` | `~/.qwen/settings.json` |
+| `qwen` | `~/.qwen/settings.json` + `~/.qwen/.env` |
 
 ### 확장 대상 universe
 

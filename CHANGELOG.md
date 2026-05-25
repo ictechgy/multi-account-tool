@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Kimi CLI 빌트인** — `BUILTIN_CLI_DEFS` 5번째 항목. `~/.kimi/config.toml` file source (saveAs `kimi.toml`). MoonshotAI 공식 Kimi Code CLI (https://github.com/MoonshotAI/kimi-cli) 의 단일 TOML credential 파일 swap. plugin 으로 'kimi' override 차단 회귀 가드 (`cli-defs.test.ts` + `cli-defs-plugin.test.ts`). README / ROADMAP 갱신 (지원 CLI 표 + 확장 universe).
-- **Qwen Code CLI 빌트인** — `BUILTIN_CLI_DEFS` 6번째 항목. `~/.qwen/settings.json` file source (saveAs `qwen-settings.json`). Alibaba 공식 Qwen Code CLI (https://github.com/QwenLM/qwen-code, npm `@qwen-code/qwen-code`) 의 단일 JSON credential 파일 swap. Gemini CLI 의 `~/.gemini/` 패턴을 차용한 구조 — API key (DASHSCOPE/OpenAI/Anthropic 호환) 가 `env` 필드에 평문 저장. plugin 으로 'qwen' override 차단 회귀 가드. ROADMAP universe 에서 Qwen 후보 → 빌트인 ✅ 로 이동.
+- **Qwen Code CLI 빌트인** — `BUILTIN_CLI_DEFS` 6번째 항목. **multi-source** (`~/.qwen/settings.json` + `~/.qwen/.env`). Alibaba 공식 Qwen Code CLI (https://github.com/QwenLM/qwen-code, npm `@qwen-code/qwen-code`). Qwen 의 credential 우선순위 (shell export > `.env` > `~/.qwen/.env` > `settings.json` `env`) 때문에 `.env` 도 함께 swap — 그렇지 않으면 사용자가 `~/.qwen/.env` 사용 중 mat 가 settings.json 만 swap 해도 잘못된 계정으로 동작 가능 (PR #26 quad-review Codex MEDIUM 반영). Gemini multi-source 패턴 동일 — 부재 source 는 자동 skip. shell export 와 프로젝트 로컬 `.env` 는 mat scope 밖. plugin 으로 'qwen' override 차단 회귀 가드. ROADMAP universe 에서 Qwen 후보 → 빌트인 ✅ 로 이동.
 
 ## [0.3.0] - 2026-05-24
 

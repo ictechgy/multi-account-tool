@@ -64,10 +64,11 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
-  it('qwen source 는 1개 file (~/.qwen/settings.json)', () => {
+  it('qwen source 는 2개 file (~/.qwen/settings.json + ~/.qwen/.env)', () => {
     const qwen = BUILTIN_CLI_DEFS.find((c) => c.id === 'qwen');
     expect(qwen?.sources).toEqual([
-      { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' }
+      { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' },
+      { type: 'file', path: '~/.qwen/.env', saveAs: 'qwen.env' }
     ]);
   });
 

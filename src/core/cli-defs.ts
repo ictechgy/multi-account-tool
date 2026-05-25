@@ -71,13 +71,19 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
   },
   {
     // Alibaba 공식 Qwen Code CLI (https://github.com/QwenLM/qwen-code, npm `@qwen-code/qwen-code`).
-    // Gemini CLI 의 `~/.gemini/` 패턴을 차용 → `~/.qwen/settings.json` 단일 JSON 에 provider/api_key + env 설정 집중.
+    // Gemini CLI 의 `~/.gemini/` 패턴을 차용 → `~/.qwen/settings.json` (provider/API key + 라우팅 설정).
     // OAuth 는 2026-04-15 종료 — 현재는 API key (DASHSCOPE/OpenAI/Anthropic 호환) 기반.
-    // env var (`DASHSCOPE_API_KEY` 등) 가 settings.json `env` 필드보다 우선이지만 mat 의 file swap 은 기본 경로 기준.
+    //
+    // credential 우선순위 (Qwen 공식 docs): shell export > `.env` > `~/.qwen/.env` > settings.json `env`.
+    // mat 는 home 단위 source 두 개 (`settings.json` + `.env`) 를 함께 swap 한다 — 부재 source 는 skip
+    // (Gemini multi-source 패턴 동일). shell export 와 프로젝트 로컬 `.env` 는 mat scope 밖이므로,
+    // README 의 보안/사용 환경 안내에서 swap 적용 한계로 명시한다.
+    // saveAs 에 `qwen-` prefix: ~/.qwen/ 하위 파일들이 mat profile 디렉토리에서도 식별 가능하게 유지.
     id: 'qwen',
     name: 'Qwen Code CLI',
     sources: [
-      { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' }
+      { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' },
+      { type: 'file', path: '~/.qwen/.env', saveAs: 'qwen.env' }
     ]
   }
 ];
