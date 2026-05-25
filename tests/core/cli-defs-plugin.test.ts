@@ -248,6 +248,18 @@ describe('getAllCliDefs / findCliDef — builtin + plugin 통합', () => {
     expect(warnings.some(w => w.includes('qwen') && w.includes('builtin'))).toBe(true);
   });
 
+  it('crush plugin 도 builtin 과 충돌 → 무시 + warning (v0.3.1+ 회귀 가드)', async () => {
+    // crush 빌트인 도입 이후 plugin 의 동일 id 는 skip (builtin 우선).
+    await writePlugin('crush.json', {
+      id: 'crush', name: 'Custom Crush', sources: [{ type: 'file', path: '/custom-crush', saveAs: 'c.json' }]
+    });
+    const defs = getAllCliDefs();
+    expect(defs.filter(d => d.id === 'crush')).toHaveLength(1);  // builtin 만
+    expect(findCliDef('crush')?.name).toBe('Crush');  // builtin name 유지
+    const warnings = getCliDefsWarnings();
+    expect(warnings.some(w => w.includes('crush') && w.includes('builtin'))).toBe(true);
+  });
+
   it('id 가 builtin 과 충돌 → plugin 무시 + warning', async () => {
     // 'claude' 는 builtin id — plugin 의 동일 id 는 skip.
     await writePlugin('claude.json', {
@@ -263,17 +275,17 @@ describe('getAllCliDefs / findCliDef — builtin + plugin 통합', () => {
   it('module-level 캐시: 두 번째 호출은 fs 재읽지 않음 (resetCliDefCache 로만 갱신)', async () => {
     // 1) 처음 호출: plugin 없음 → builtin 만
     const first = getAllCliDefs();
-    expect(first.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen']);
+    expect(first.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush']);
 
     // 2) 캐시 후 plugin 추가 → getAllCliDefs 는 여전히 캐시 반환
     await writePlugin('late.json', { id: 'late', name: 'Late', sources: [{ type: 'file', path: '/l', saveAs: 'l.json' }] });
     const second = getAllCliDefs();
-    expect(second.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen']);  // 캐시
+    expect(second.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush']);  // 캐시
 
     // 3) resetCliDefCache 후 호출 → 새로 로드
     resetCliDefCache();
     const third = getAllCliDefs();
-    expect(third.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'late']);
+    expect(third.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'late']);
   });
 
   it('잘못된 plugin warning 이 getCliDefsWarnings 에 surface 됨', async () => {

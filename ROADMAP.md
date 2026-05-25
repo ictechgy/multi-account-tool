@@ -23,12 +23,13 @@
 | `aider` | `~/.aider.conf.yml` |
 | `kimi` | `~/.kimi/config.toml` |
 | `qwen` | `~/.qwen/settings.json` + `~/.qwen/.env` |
+| `crush` | `~/.config/crush/crush.json` + `~/.local/share/crush/crush.json` |
 
 ### 확장 대상 universe
 
 `lterm` README 가 정리한 agent 리스트와 같은 부분 채택:
 
-- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), ~~Kimi~~ ✅ (v0.3.x 빌트인), ~~Qwen~~ ✅ (v0.3.x 빌트인), OpenCode, Goose, Amp, Crush
+- **즉시 가능 (file-based)**: ~~Aider~~ ✅ (v0.3 빌트인), ~~Kimi~~ ✅ (v0.3.x 빌트인), ~~Qwen~~ ✅ (v0.3.x 빌트인), ~~Crush~~ ✅ (v0.3.x 빌트인), OpenCode, Goose, Amp
 - **GitHub Copilot CLI** — GitHub 토큰 (`~/.config/gh/` 또는 own store)
 - **Cursor Agent** — `~/Library/Application Support/Cursor/` (큰 디렉토리, 일부만 swap)
 - **Kiro, Jules** — credential 패턴 미조사
