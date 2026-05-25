@@ -88,12 +88,20 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
   },
   {
     // Charm.sh 공식 Crush (https://github.com/charmbracelet/crush). Go 기반 TUI AI 코딩 에이전트.
-    // XDG 표준 경로 (macOS/Linux 동일):
+    // mat 의 home 단위 swap 대상 — XDG 표준 경로 (macOS/Linux 동일):
     //   - `~/.config/crush/crush.json` — 전역 설정 (읽기 우선)
     //   - `~/.local/share/crush/crush.json` — provider/API key 쓰기 대상
     // 두 파일을 함께 swap 해야 계정 전환이 일관 (단일만 swap 시 한쪽 데이터 stale).
-    // provider key 는 env var (`ANTHROPIC_API_KEY` 등) 직접 지원 + 설정 내 `"$ENV_VAR"` 확장도 가능 —
-    // shell export 와 프로젝트 로컬 `.crush/crush.json` 은 mat scope 밖.
+    //
+    // Crush 의 config lookup 우선순위 (`internal/config/load.go` 의 lookupConfigs):
+    //   global (위 두 파일) → cwd 의 `.crush.json` / `crush.json` → workspace `.crush/crush.json` (마지막 우선).
+    //   → **mat scope 밖** (mat 는 home 단위 swap 만 — cwd/workspace 단위는 사용자 책임):
+    //     - cwd 의 `.crush.json` / `crush.json` (project-local, git root 까지 upward 탐색)
+    //     - workspace `.crush/crush.json`
+    //     - shell-exported provider env vars (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` 등)
+    //     - Crush 의 path override env vars (`CRUSH_GLOBAL_CONFIG` / `CRUSH_GLOBAL_DATA` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME`) —
+    //       사용자가 이들을 설정하면 mat 가 swap 한 기본 XDG 경로가 무시될 수 있음.
+    //   사용자가 위 경로 중 하나를 활성 credential 으로 쓰고 있다면 mat swap 결과가 의도와 어긋날 수 있다.
     id: 'crush',
     name: 'Crush',
     sources: [
