@@ -242,10 +242,10 @@ See [CHANGELOG.md](./CHANGELOG.md) for release history and notable changes (Keep
 
 See [ROADMAP.md](./ROADMAP.md) for v0.2+ plans:
 
-- ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3: see *Adding a new CLI* above)
-- ~~Aider built-in support~~ ✅ (v0.3: built-in alongside claude/codex/gemini)
+- ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3)
+- ~~Aider built-in support~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - Session-scoped credential isolation (different account per `lterm` session)
-- More built-in CLIs (Cursor Agent, Goose, Copilot CLI, …)
+- More built-in CLIs — Goose / Copilot / Amp are deferred until mat's source abstraction is extended (optional `account` field on `KeychainSource` + Linux Secret Service / Windows Credential Manager source types). Cursor Agent: plugin recommended (keychain service name not publicly documented).
 - `lterm claude --profile <name>` shim wrapper
 
 ---
