@@ -4,9 +4,12 @@
  * 두 가지 영역 검증:
  *  1) BUILTIN_CLI_DEFS 의 구성 (8 CLI, source 정확성, saveAs invariant) +
  *     findCliDef lookup + edge cases (현재 process.platform 기반 invariant 만)
- *  2) claudeSource / opencodeSource 의 platform 분기 (darwin → 다른 경로, 그 외 → 다른 경로) —
+ *  2) claudeSource 의 platform 분기 (darwin → keychain, 그 외 → file) —
  *     vi.stubGlobal('process', ...) + vi.resetModules + dynamic import 로 두 분기 모두 검증
  *     → 모든 CI runner OS 에서 양쪽 분기 회귀 감지 가능 (Quad-review #5 P0 A).
+ *
+ *  주의: OpenCode 는 npm `xdg-basedir` 사용 — OS 무관 단일 XDG 경로 (`~/.local/share/opencode/auth.json`)
+ *  이므로 platform 분기 없음 (PR #28 quad-review 정정 사항).
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -82,11 +85,12 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
-  it('opencode source 는 1개 file (현재 platform 기준), saveAs `opencode-auth.json`', () => {
+  it('opencode source 는 1개 file (~/.local/share/opencode/auth.json, OS 공통)', () => {
+    // OpenCode 는 npm xdg-basedir 사용 → macOS/Linux/BSD/Windows 모두 동일 경로.
     const opencode = BUILTIN_CLI_DEFS.find((c) => c.id === 'opencode');
-    expect(opencode?.sources).toHaveLength(1);
-    expect(opencode!.sources[0].saveAs).toBe('opencode-auth.json');
-    expect(opencode!.sources[0].type).toBe('file');
+    expect(opencode?.sources).toEqual([
+      { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
+    ]);
   });
 
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
@@ -158,31 +162,17 @@ describe('claudeSource — platform 별 분기 (양쪽 분기 검증)', () => {
 });
 
 /**
- * opencodeSource 의 platform 분기 검증.
- * macOS 는 Apple base directories (`~/Library/Application Support/...`),
- * 그 외는 XDG_DATA_HOME 기본값 (`~/.local/share/...`) 사용.
+ * OpenCode 의 경로는 platform 분기 없음 — npm `xdg-basedir` 의 XDG 표준 (`~/.local/share`) 만 사용.
+ * 전체 platform 에서 `~/.local/share/opencode/auth.json` 이 동일하게 적용되는지 검증.
  */
-describe('opencodeSource — platform 별 분기 (양쪽 분기 검증)', () => {
+describe('opencode source — platform 무관 단일 경로 (xdg-basedir 동작)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.resetModules();
   });
 
-  it('platform=darwin → ~/Library/Application Support/opencode/auth.json', async () => {
-    vi.stubGlobal('process', { ...process, platform: 'darwin' });
-    vi.resetModules();
-    const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
-    const opencode = defs.find((c) => c.id === 'opencode');
-    const src = opencode!.sources[0];
-    expect(src.type).toBe('file');
-    if (src.type === 'file') {
-      expect(src.path).toBe('~/Library/Application Support/opencode/auth.json');
-      expect(src.saveAs).toBe('opencode-auth.json');
-    }
-  });
-
-  it.each(['linux', 'win32', 'freebsd'])(
-    'platform=%s → ~/.local/share/opencode/auth.json',
+  it.each(['darwin', 'linux', 'win32', 'freebsd'])(
+    'platform=%s → ~/.local/share/opencode/auth.json (OS 공통)',
     async (platform) => {
       vi.stubGlobal('process', { ...process, platform });
       vi.resetModules();

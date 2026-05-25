@@ -24,7 +24,7 @@
 | `kimi` | `~/.kimi/config.toml` |
 | `qwen` | `~/.qwen/settings.json` + `~/.qwen/.env` |
 | `crush` | `~/.config/crush/crush.json` + `~/.local/share/crush/crush.json` |
-| `opencode` | macOS: `~/Library/Application Support/opencode/auth.json` / Linux: `~/.local/share/opencode/auth.json` |
+| `opencode` | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) |
 
 ### 확장 대상 universe
 

@@ -35,7 +35,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | Kimi CLI | `~/.kimi/config.toml` | File swap |
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | File swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | File swap |
-| OpenCode | macOS: `~/Library/Application Support/opencode/auth.json` / Linux: `~/.local/share/opencode/auth.json` | File swap |
+| OpenCode | `~/.local/share/opencode/auth.json` (OS-agnostic, XDG standard) | File swap |
 
 ### Switch flow (lossless)
 

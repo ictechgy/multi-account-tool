@@ -29,19 +29,6 @@ function claudeSource(): Source {
   return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
 }
 
-/**
- * OpenCode (sst/opencode) 의 자격증명 source.
- * XDG `data` 디렉토리 기준으로 OS 별 경로가 다르다 — etcetera/xdg 표준.
- *   - macOS: `~/Library/Application Support/opencode/auth.json` (Apple base directories)
- *   - 그 외 (Linux/BSD): `~/.local/share/opencode/auth.json` (XDG_DATA_HOME 기본값)
- * Permission 0o600 의 단일 JSON 파일에 provider 별 OAuth/API key 객체 저장.
- */
-function opencodeSource(): Source {
-  if (process.platform === 'darwin') {
-    return { type: 'file', path: '~/Library/Application Support/opencode/auth.json', saveAs: 'opencode-auth.json' };
-  }
-  return { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' };
-}
 
 export const BUILTIN_CLI_DEFS: CliDef[] = [
   {
@@ -125,16 +112,29 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
   },
   {
     // SST OpenCode (https://github.com/sst/opencode). MIT 라이선스 오픈소스 AI 코딩 에이전트.
-    // credential 은 단일 JSON 파일 `auth.json` (XDG `data` 디렉토리). 권한 0o600.
+    // credential 은 단일 JSON 파일 `auth.json`. 권한 0o600.
     // provider ID 마다 `{ type: 'api', key: ... }` 또는 OAuth 토큰 객체.
     //
-    // mat scope 밖 한계:
-    //   - `OPENCODE_AUTH_CONTENT` env var 가 설정되면 OpenCode 는 파일 대신 env 내용을 우선 사용 → mat swap 우회.
-    //   - `OPENCODE_CONFIG_DIR` env var 로 디렉토리 자체를 override 하면 mat 의 기본 경로 swap 무효.
-    //   - config 내 `"apiKey": "{env:ANTHROPIC_API_KEY}"` 처럼 env 참조 사용 시 shell env 가 실제 key 결정.
+    // 경로 — `packages/core/src/global.ts` 가 npm `xdg-basedir` 의 `xdgData` 를 사용:
+    //   `${xdgData}/opencode/auth.json`. xdg-basedir 는 **OS 무관 XDG 표준** 만 따른다
+    //   (Apple Application Support 등 native 경로 분기 없음) → macOS / Linux / BSD / Windows 모두
+    //   기본값 `~/.local/share/opencode/auth.json`. (이전 조사가 etcetera Rust 패턴으로 macOS Apple
+    //   base dir 분기를 가정했으나 npm xdg-basedir 동작과 다름 — PR #28 quad-review 정정 사항).
+    //
+    // mat scope 밖 한계 (PR #28 quad-review Codex HIGH 반영):
+    //   - `XDG_DATA_HOME` env 가 설정되면 OpenCode 는 `$XDG_DATA_HOME/opencode/auth.json` 사용 →
+    //     mat 의 기본 `~/.local/share` 경로 swap 무효 (wrong-account 위험, Crush PR #27 동일 카테고리).
+    //   - `OPENCODE_AUTH_CONTENT` env 가 설정되면 OpenCode 가 파일 대신 env 내용 우선 사용.
+    //   - `OPENCODE_CONFIG_DIR` env 로 디렉토리 자체 override 시 기본 경로 swap 무효.
+    //   - `OPENCODE_CONFIG` / `OPENCODE_CONFIG_CONTENT` 로 config 자체를 주입하면 별도 provider 라우팅 가능.
+    //   - 프로젝트 로컬 `opencode.json` / `opencode.jsonc` / `.opencode/opencode.json` + 프로젝트 `.env` 도
+    //     provider env 참조를 통해 credential 선택에 영향. (cwd 기반은 mat scope 밖)
+    //   - config 내 `"apiKey": "{env:ANTHROPIC_API_KEY}"` env 참조 사용 시 shell env 가 실제 key 결정.
     id: 'opencode',
     name: 'OpenCode',
-    sources: [opencodeSource()]
+    sources: [
+      { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
+    ]
   }
 ];
 

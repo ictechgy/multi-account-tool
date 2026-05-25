@@ -35,7 +35,7 @@
 | Kimi CLI | `~/.kimi/config.toml` | 파일 swap |
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | 파일 swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | 파일 swap |
-| OpenCode | macOS: `~/Library/Application Support/opencode/auth.json` / Linux: `~/.local/share/opencode/auth.json` | 파일 swap |
+| OpenCode | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) | 파일 swap |
 
 ### 전환 흐름 (데이터 손실 없음)
 
