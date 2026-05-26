@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-26
+
+ROADMAP universe 의 file-based 후보 builtin 확장 사이클. PR #25~#28 (4 builtin)
++ PR #31 (ROADMAP 정리). PR #29/#30 (Goose/Copilot) 은 quad-review 결과 mat 의
+`KeychainSource.account` 필드 및 Linux Secret Service / Windows Credential
+Manager source type 도입 후 재PR 예정으로 보류.
+
 ### Added
 
 - **Kimi CLI 빌트인** — `BUILTIN_CLI_DEFS` 5번째 항목. `~/.kimi/config.toml` file source (saveAs `kimi.toml`). MoonshotAI 공식 Kimi Code CLI (https://github.com/MoonshotAI/kimi-cli) 의 단일 TOML credential 파일 swap. plugin 으로 'kimi' override 차단 회귀 가드 (`cli-defs.test.ts` + `cli-defs-plugin.test.ts`). README / ROADMAP 갱신 (지원 CLI 표 + 확장 universe).
@@ -95,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Homebrew**: `ictechgy/homebrew-mat` tap (mat.rb @ 0.2.0) — `brew tap ictechgy/mat && brew install mat`.
 - **GitHub**: https://github.com/ictechgy/multi-account-tool
 
-[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ictechgy/multi-account-tool/releases/tag/v0.2.0
