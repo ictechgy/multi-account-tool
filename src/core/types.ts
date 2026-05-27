@@ -20,11 +20,31 @@ export interface FileSource {
 /**
  * macOS Keychain 기반 자격증명 source.
  * 디스크에는 {@link KeychainStored} JSON 으로 직렬화되어 저장된다.
+ *
+ * `account` 가 정의되면 mat 의 모든 keychain 조작이 `-s service -a account`
+ * 항목 하나로 scope 제한된다 — 동일 service 의 타 account 항목은 영향 없음.
+ * Goose (service `goose` 의 단일 entry account=`secrets`), GitHub Copilot CLI
+ * (multi-account 시 `/user switch`) 등 generic service 또는 multi-account
+ * 시나리오에서 wrong-entry swap 을 차단한다.
+ *
+ * `account` 가 없으면 기존 단일-account 동작 (service 만으로 lookup, acct
+ * 메타를 자동 감지해 정확한 항목 delete → add) 을 유지 — Claude/Codex 같은
+ * 단일 account 사용자는 회귀 없음.
  */
 export interface KeychainSource {
   type: 'keychain';
   /** Keychain 의 service 이름 (예: "Claude Code-credentials") */
   service: string;
+  /**
+   * 선택. Keychain 항목의 account (acct). 지정하면 mat 가 정확히 이 account
+   * 의 항목만 읽고 쓴다. 미지정 시 단일 account 사용자 전제 (현재 동작).
+   *
+   * 빈 문자열은 undefined 와 동치가 아니다 — `cli-defs-plugin.parseSource` 가
+   * 빈 문자열을 명시 거부하고, `sources.ts` 의 `hasAccount` 가드도 length>0 만
+   * 통과시킨다. 이는 internal 호출에 빈 문자열이 새어 들어와 service-only
+   * fallback 으로 multi-account scope 가 silent 하게 깨지는 사고를 차단.
+   */
+  account?: string;
   /** 프로필 디렉토리 내 저장될 파일명. */
   saveAs: string;
 }

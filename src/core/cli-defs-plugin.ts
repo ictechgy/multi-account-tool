@@ -67,7 +67,21 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   if (typeof raw.service !== 'string' || raw.service.length === 0) {
     return { error: `sources[${idx}].service 는 비어있지 않은 문자열이어야 합니다.` };
   }
-  const src: KeychainSource = { type: 'keychain', service: raw.service, saveAs: safeSaveAs };
+  // account 는 선택. 명시되면 typeof string + non-empty + NUL 차단 (방어선).
+  // 화이트리스트는 두지 않음 — 사용자가 email/UUID/임의 식별자를 자유롭게 사용 가능.
+  let account: string | undefined;
+  if (raw.account !== undefined) {
+    if (typeof raw.account !== 'string' || raw.account.length === 0) {
+      return { error: `sources[${idx}].account 는 비어있지 않은 문자열이어야 합니다.` };
+    }
+    if (raw.account.includes('\x00')) {
+      return { error: `sources[${idx}].account 에 NUL 문자가 포함될 수 없습니다.` };
+    }
+    account = raw.account;
+  }
+  const src: KeychainSource = account !== undefined
+    ? { type: 'keychain', service: raw.service, account, saveAs: safeSaveAs }
+    : { type: 'keychain', service: raw.service, saveAs: safeSaveAs };
   return { source: src };
 }
 

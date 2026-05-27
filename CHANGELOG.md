@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`KeychainSource.account` optional 필드** — `src/core/types.ts` 의 `KeychainSource` 인터페이스에 `account?: string` 추가. 정의에 명시되면 mat 의 모든 keychain 조작 (`find` / `delete` / `add` / `exists`) 이 `-s service -a account` 항목 하나로 scope 제한 — 동일 service 의 타 account 항목은 영향 없음. Goose (service `goose`, account `secrets` 단일 entry) / GitHub Copilot CLI (`/user switch` multi-account) 류 generic service · multi-account 도구의 wrong-entry swap 을 차단. 미지정 시 기존 단일-account 동작 유지 (Claude/Codex 등 회귀 없음). `cli-defs-plugin` loader 도 raw JSON 의 `account` (optional) 파싱 — typeof string + non-empty + NUL 차단. 새 항목 add 시 account 우선순위: `src.account` > `stored.account` > `$USER` > `'default'` — 정의에 명시된 account 가 캡처 당시 stored 와 다르더라도 정의가 의도한 account 로 복원. multi-account scope 회귀 가드 12건 (`sources.test.ts` 다른 account 항목 보호 시나리오 + `cli-defs-plugin.test.ts` account 필드 파싱).
+
 ## [0.3.1] - 2026-05-26
 
 ROADMAP universe 의 file-based 후보 builtin 확장 사이클. PR #25~#28 (4 builtin)
