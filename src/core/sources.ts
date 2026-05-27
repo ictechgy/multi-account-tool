@@ -61,20 +61,60 @@ function keychainErr(stage: string, r: CmdResult): Error {
 }
 
 /**
+ * KeychainSource.account 의 유효성 type-guard.
+ * 빈 문자열 / NUL 포함 문자열은 undefined 와 동치가 아니라 "잘못된 입력" 으로 취급.
+ * 외부 입력 (cli-defs-plugin.parseSource) 과 internal 호출 모두 동일 invariant 적용.
+ *
+ * type guard 는 narrowing 외에 "유효 여부" 만 알린다 — `assertValidKeychainSource`
+ * 가 source 진입부에서 명시 throw 로 invariant 누설을 차단한다 (quad-review 합의).
+ */
+function hasAccount(account?: string): account is string {
+  return typeof account === 'string' && account.length > 0 && !account.includes('\x00');
+}
+
+/**
+ * KeychainSource 의 source-boundary 검증.
+ *
+ * `account` 가 정의되었는데 유효한 문자열이 아니면 (빈 문자열, NUL 포함 등)
+ * 명시 throw — 그렇지 않으면 mat 내부 helper 의 `hasAccount` 가드가 false 로
+ * 떨어져 `-a` 인자 없이 service-only lookup 으로 진행, multi-account scope 가
+ * silent 하게 깨진다 (quad-review HIGH 합의).
+ *
+ * read / write / sourceExists 의 keychain 분기 진입부에서 호출한다.
+ */
+function assertValidKeychainSource(src: KeychainSource): void {
+  if (src.account !== undefined && !hasAccount(src.account)) {
+    throw new Error(
+      `KeychainSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${src.service}`
+    );
+  }
+}
+
+/**
  * macOS Keychain 항목의 account (acct) 메타데이터 조회.
+ * `expectedAccount` 가 주어지면 `-a` 인자로 lookup 을 scope — 동일 service 의
+ * 타 account 항목이 자동 감지로 잘못 잡히는 wrong-entry 위험을 차단.
  * 항목이 없거나 acct 가 빈 문자열이면 null.
  */
-async function keychainGetAccount(service: string): Promise<string | null> {
-  const r = await runCommand(SECURITY_BIN, ['find-generic-password', '-s', service]);
+async function keychainGetAccount(service: string, expectedAccount?: string): Promise<string | null> {
+  const args = ['find-generic-password', '-s', service];
+  if (hasAccount(expectedAccount)) args.push('-a', expectedAccount);
+  const r = await runCommand(SECURITY_BIN, args);
   if (r.code !== 0) return null;
   const m = r.stdout.match(/"acct"<blob>="([^"]*)"/);
   const acct = m?.[1];
   return acct && acct.length > 0 ? acct : null;
 }
 
-/** macOS Keychain 항목의 평문 값 조회. 없으면 null, 다른 에러는 throw. */
-async function keychainGetValue(service: string): Promise<string | null> {
-  const r = await runCommand(SECURITY_BIN, ['find-generic-password', '-s', service, '-w']);
+/**
+ * macOS Keychain 항목의 평문 값 조회. 없으면 null, 다른 에러는 throw.
+ * `account` 가 주어지면 `-a` 인자로 항목 lookup 을 scope.
+ */
+async function keychainGetValue(service: string, account?: string): Promise<string | null> {
+  const args = ['find-generic-password', '-s', service];
+  if (hasAccount(account)) args.push('-a', account);
+  args.push('-w');
+  const r = await runCommand(SECURITY_BIN, args);
   if (r.code === 0) return r.stdout.replace(/\n$/, '');
   if (r.code === KEYCHAIN_NOT_FOUND_CODE || KEYCHAIN_NOT_FOUND_RE.test(r.stderr)) return null;
   throw keychainErr('읽기', r);
@@ -88,12 +128,21 @@ async function keychainGetValue(service: string): Promise<string | null> {
  *     타 항목 영구 손실 위험이 있어 swap 자체를 거부한다 (data loss 방지).
  *  3) 새 값 추가. 실패 시 백업으로 롤백 (롤백 결과도 확인해 실패 시 에러에 첨부).
  *
+ * `scopeAccount` 가 지정되면 백업 lookup/삭제 모두 `-a scopeAccount` 항목 하나로
+ * 제한 — 동일 service 의 타 account 항목은 건드리지 않는다 (multi-account 안전).
+ * 미지정 시 단일-account 사용자 전제로 service-only lookup (기존 동작 유지).
+ *
  * `-A` 로 동일 사용자 모든 앱이 접근 가능한 ACL 사용 (Claude 가 토큰을 못 읽는 회귀 방지).
  * argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
  */
-async function keychainSet(service: string, account: string, value: string): Promise<void> {
-  const backupValue = await keychainGetValue(service);
-  const backupAccount = backupValue != null ? await keychainGetAccount(service) : null;
+async function keychainSet(
+  service: string,
+  account: string,
+  value: string,
+  scopeAccount?: string
+): Promise<void> {
+  const backupValue = await keychainGetValue(service, scopeAccount);
+  const backupAccount = backupValue != null ? await keychainGetAccount(service, scopeAccount) : null;
 
   if (backupValue != null) {
     if (!backupAccount) {
@@ -116,11 +165,15 @@ async function keychainSet(service: string, account: string, value: string): Pro
 
   if (addRes.code !== 0) {
     let rollbackNote = '';
-    if (backupValue != null) {
+    // backupValue != null 분기에 진입했다면 117행 가드로 backupAccount 는 truthy 로 보장된다
+    // (null 이면 KeychainAccountMissingError 로 이미 throw — 도달 불가). `backupAccount!` 대신
+    // 명시 truthy 검사로 invariant 를 코드에 남겨, 향후 117행 가드가 약화되어도 wrong-account
+    // (multi-account scope 깨짐) 으로 backup 을 복구하는 사고를 차단한다.
+    if (backupValue != null && backupAccount) {
       const rb = await runCommand(SECURITY_BIN, [
         'add-generic-password',
         '-s', service,
-        '-a', backupAccount || account,
+        '-a', backupAccount,
         '-w', backupValue,
         '-A'
       ]);
@@ -132,9 +185,11 @@ async function keychainSet(service: string, account: string, value: string): Pro
   }
 }
 
-/** Keychain 항목 존재 여부. */
-async function keychainExists(service: string): Promise<boolean> {
-  const r = await runCommand(SECURITY_BIN, ['find-generic-password', '-s', service]);
+/** Keychain 항목 존재 여부. account 지정 시 해당 acct 항목만 검사. */
+async function keychainExists(service: string, account?: string): Promise<boolean> {
+  const args = ['find-generic-password', '-s', service];
+  if (hasAccount(account)) args.push('-a', account);
+  const r = await runCommand(SECURITY_BIN, args);
   return r.code === 0;
 }
 
@@ -143,21 +198,45 @@ async function readKeychainSerialized(src: KeychainSource): Promise<string | nul
   if (process.platform !== 'darwin') {
     throw new Error('keychain source 는 macOS 에서만 지원됩니다.');
   }
-  const value = await keychainGetValue(src.service);
+  assertValidKeychainSource(src);
+  const value = await keychainGetValue(src.service, src.account);
   if (value == null) return null;
-  const account = await keychainGetAccount(src.service);
+  const account = await keychainGetAccount(src.service, src.account);
   const stored: KeychainStored = { value, account: account ?? undefined };
   return JSON.stringify(stored);
 }
 
-/** 직렬화된 JSON 을 받아 Keychain 항목을 복원. */
+/**
+ * 직렬화된 JSON 을 받아 Keychain 항목을 복원.
+ *
+ * 새 항목의 account 우선순위: src.account (정의 명시) > stored.account
+ *   (백업 캡처 시 기록) > $USER > 'default'.
+ *   `src.account` 가 정의된 경우 (Goose/Copilot 류 multi-account 도구), 캡처
+ *   당시 stored.account 가 다르더라도 정의가 의도한 account 로 복원한다.
+ *
+ * 백업/삭제 scope: src.account 가 지정되면 동일 account 항목 하나만 대상.
+ *   동일 service 의 타 account 항목은 보호된다.
+ */
 async function writeKeychainSerialized(src: KeychainSource, serialized: string): Promise<void> {
   if (process.platform !== 'darwin') {
     throw new Error('keychain source 는 macOS 에서만 지원됩니다.');
   }
+  assertValidKeychainSource(src);
   const stored = JSON.parse(serialized) as KeychainStored;
-  const account = stored.account || process.env.USER || 'default';
-  await keychainSet(src.service, account, stored.value);
+  // corrupt / legacy backup 방어: value 가 문자열이 아니면 add-generic-password 의 -w
+  // argv 가 'undefined' 또는 'null' 리터럴로 build 되는 사고를 차단.
+  if (typeof stored.value !== 'string') {
+    throw new Error('keychain backup 이 손상되었습니다: value 필드가 문자열이 아닙니다.');
+  }
+  // 우선순위: src.account (정의 명시) > stored.account (캡처 시 기록) > $USER > 'default'.
+  // hasAccount 로 빈 문자열 fallthrough 방지 — internal 호출에 빈 문자열이 들어와도
+  // service-only fallback 으로 떨어지지 않고 명확히 다음 우선순위로 진행한다.
+  const account = hasAccount(src.account)
+    ? src.account
+    : hasAccount(stored.account)
+      ? stored.account
+      : process.env.USER || 'default';
+  await keychainSet(src.service, account, stored.value, src.account);
 }
 
 /** 파일을 읽어 문자열 반환. 없으면 null. */
@@ -195,5 +274,6 @@ export async function writeSource(src: Source, value: string): Promise<void> {
 /** 임의 source 의 라이브 존재 여부. */
 export async function sourceExists(src: Source): Promise<boolean> {
   if (src.type === 'file') return fileExists(src.path);
-  return keychainExists(src.service);
+  assertValidKeychainSource(src);
+  return keychainExists(src.service, src.account);
 }

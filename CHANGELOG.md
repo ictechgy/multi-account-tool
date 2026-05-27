@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`KeychainSource.account` optional 필드** — `src/core/types.ts` 의 `KeychainSource` 인터페이스에 `account?: string` 추가. 정의에 명시되면 mat 의 모든 keychain 조작 (`find` / `delete` / `add` / `exists`) 이 `-s service -a account` 항목 하나로 scope 제한 — 동일 service 의 타 account 항목은 영향 없음. Goose (service `goose`, account `secrets` 단일 entry) / GitHub Copilot CLI (`/user switch` multi-account) 류 generic service · multi-account 도구의 wrong-entry swap 을 차단. 미지정 시 기존 단일-account 동작 유지 (Claude/Codex 등 회귀 없음). `cli-defs-plugin` loader 도 raw JSON 의 `account` (optional) 파싱 — typeof string + non-empty + NUL 차단. 새 항목 add 시 account 우선순위: `src.account` > `stored.account` > `$USER` > `'default'` — 정의에 명시된 account 가 캡처 당시 stored 와 다르더라도 정의가 의도한 account 로 복원. multi-account scope 회귀 가드 12건 (`sources.test.ts` 다른 account 항목 보호 시나리오 + `cli-defs-plugin.test.ts` account 필드 파싱).
+
+### Security
+
+- **`assertValidKeychainSource` source-boundary 가드** — quad-review 합의 (Claude × 2 + Codex × 2, HIGH) 반영. `src.account` 가 정의되었는데 유효하지 않으면 (빈 문자열 / NUL 포함) `readKeychainSerialized` / `writeKeychainSerialized` / `sourceExists` 의 keychain 분기 진입부에서 명시 throw — 이전엔 `hasAccount('')` 가 false 로 떨어져 `keychainSet` 의 `scopeAccount` 인자가 service-only 로 fallback, 동일 service 의 임의 account 항목을 잘못 잡아 backup/delete 로 영구 삭제할 위험이 있었음 (`cli-defs-plugin` 은 외부 입력을 거르지만 internal API 사용자가 직접 잘못된 source 를 만들면 silent 누설). `hasAccount` type-guard 자체도 NUL 차단으로 강화 (Codex-2 LOW + Claude-2 LOW 부분 합의). `stored.account` 의 NUL 포함도 자동 거부 → USER fallback 으로 controlled 동작. multi-account scope 누설 회귀 가드 +4건 (writeSource/readSource/sourceExists × 빈 문자열·NUL 매트릭스 + stored.account NUL fallback).
+
 ## [0.3.1] - 2026-05-26
 
 ROADMAP universe 의 file-based 후보 builtin 확장 사이클. PR #25~#28 (4 builtin)

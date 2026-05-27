@@ -433,6 +433,227 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     });
   });
 
+  /**
+   * KeychainSource.account 가 명시된 경우 — Goose/Copilot 류 multi-account 시나리오.
+   *
+   * 핵심 invariant:
+   *   1) 모든 find/delete/exists 호출이 `-a src.account` 로 scope → 동일 service 의
+   *      타 account 항목은 영향 없음.
+   *   2) 새 항목 add 의 `-a` 도 src.account 사용 (stored.account 가 달라도 덮어씀).
+   *   3) src.account 항목이 존재하지 않으면 delete skip → 다른 account 항목 보존된 채 신규 add.
+   */
+  describe('KeychainSource.account 명시 — multi-account scope', () => {
+    const SCOPED_SRC: KeychainSource = {
+      type: 'keychain',
+      service: 'goose',
+      account: 'secrets',
+      saveAs: 'goose-secrets.json'
+    };
+
+    function argsAfter(args: string[], flag: string): string | undefined {
+      const i = args.indexOf(flag);
+      return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+    }
+
+    it('readSource: find -s service -a account -w 로 scope (다른 account 항목 미간섭)', async () => {
+      mockSpawn
+        // 1) keychainGetValue (find -s -a -w)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'scoped-token' }))
+        // 2) keychainGetAccount (find -s -a)
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('secrets') }));
+
+      const raw = await readSource(SCOPED_SRC);
+      const parsed = JSON.parse(raw!) as KeychainStored;
+      expect(parsed.value).toBe('scoped-token');
+      expect(parsed.account).toBe('secrets');
+
+      const findCalls = findSpawnCallsByArg('find-generic-password');
+      expect(findCalls).toHaveLength(2);
+      // 두 호출 모두 -a secrets 포함
+      for (const call of findCalls) {
+        expect(call[1]).toContain('-a');
+        expect(argsAfter(call[1] as string[], '-a')).toBe('secrets');
+      }
+    });
+
+    it('sourceExists: -a account 로 scope — 해당 account 항목만 검사', async () => {
+      mockSpawn.mockReturnValueOnce(fakeProc({ code: 0 }));
+      expect(await sourceExists(SCOPED_SRC)).toBe(true);
+
+      const [findCall] = findSpawnCallsByArg('find-generic-password');
+      expect(findCall[1]).toContain('-a');
+      expect(argsAfter(findCall[1] as string[], '-a')).toBe('secrets');
+      expect(findCall[1]).not.toContain('-w');
+    });
+
+    it('writeSource (신규, 같은 service 의 타 account 존재): -a account scoped find → 신규로 인식 → delete skip + add 만 -a src.account', async () => {
+      // 회귀 가드: src.account scope 가 적용되지 않으면 keychainGetValue 가 service-only 로
+      // 다른 account 항목을 잘못 잡아 backup → delete 로 그 항목을 영구 삭제하는 사고 발생.
+      mockSpawn
+        // keychainGetValue (find -s -a secrets -w) → not found (다른 account 항목은 무시)
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+        // add (신규)
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      const stored: KeychainStored = { value: 'new-token' };
+      await writeSource(SCOPED_SRC, JSON.stringify(stored));
+
+      // mutation 명령 검증 — delete 부재, add 1회.
+      const deleteCalls = findSpawnCallsByArg('delete-generic-password');
+      expect(deleteCalls).toEqual([]);
+      const addCalls = findSpawnCallsByArg('add-generic-password');
+      expect(addCalls).toHaveLength(1);
+      expect(argsAfter(addCalls[0][1] as string[], '-a')).toBe('secrets');
+
+      // backup find 도 -a 로 scope 되었는지 검증 (회귀 가드 핵심).
+      const findCalls = findSpawnCallsByArg('find-generic-password');
+      expect(findCalls.every(c => (c[1] as string[]).includes('-a'))).toBe(true);
+      expect(findCalls.every(c => argsAfter(c[1] as string[], '-a') === 'secrets')).toBe(true);
+    });
+
+    it('writeSource (기존 같은 account 항목 존재): scoped backup → delete -a account → add -a account', async () => {
+      mockSpawn
+        // keychainGetValue (find -s -a secrets -w) → 'old-token'
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }))
+        // keychainGetAccount (find -s -a secrets) → 'secrets'
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('secrets') }))
+        // delete -s goose -a secrets
+        .mockReturnValueOnce(fakeProc({ code: 0 }))
+        // add
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      const stored: KeychainStored = { value: 'new-token', account: 'secrets' };
+      await writeSource(SCOPED_SRC, JSON.stringify(stored));
+
+      const [deleteCall] = findSpawnCallsByArg('delete-generic-password');
+      expect(argsAfter(deleteCall[1] as string[], '-a')).toBe('secrets');
+      const [addCall] = findSpawnCallsByArg('add-generic-password');
+      expect(argsAfter(addCall[1] as string[], '-a')).toBe('secrets');
+    });
+
+    it('writeSource: src.account 우선순위 — stored.account 가 달라도 src.account 로 add', async () => {
+      // src.account 가 정의에 명시되어 있으면, 캡처 시점 stored.account 가 다른 값이어도
+      // 정의가 의도한 account 로 복원해야 한다 (multi-account 도구의 명시적 swap 의도 보존).
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      const stored: KeychainStored = { value: 'v', account: 'different-user' };
+      await writeSource(SCOPED_SRC, JSON.stringify(stored));
+
+      const [addCall] = findSpawnCallsByArg('add-generic-password');
+      // src.account ('secrets') 가 우선 — stored.account ('different-user') 가 아닌.
+      expect(argsAfter(addCall[1] as string[], '-a')).toBe('secrets');
+      expect(addCall[1]).not.toContain('different-user');
+    });
+
+    it.each([
+      ['빈 문자열', ''],
+      ['NUL 포함', 'has\x00nul']
+    ])('writeSource: src.account 가 유효하지 않으면 (%s) throw — security CLI 호출 0회 (quad-review 합의 HIGH)', async (_label, badAccount) => {
+      // 회귀 가드 (quad-review Codex 합의 high confidence): 이전 동작은 빈 문자열 fallthrough 로
+      // `keychainSet` 의 `scopeAccount` 인자가 빈 문자열이 되어 backup lookup/delete 가
+      // service-only 로 떨어졌다 — 동일 service 의 임의 account 항목을 잘못 잡아 영구
+      // 삭제할 위험. 새 정책은 `assertValidKeychainSource` 가 source 진입부에서 throw 한다.
+      // parseSource 가 외부 입력은 거르지만, internal API 사용자나 corrupt 정의가 직접
+      // 잘못된 account 를 넣어도 silent fallback 으로 떨어지지 않게 차단.
+      const badSrc: KeychainSource = {
+        type: 'keychain',
+        service: 'goose',
+        account: badAccount,
+        saveAs: 'goose-secrets.json'
+      };
+
+      const stored: KeychainStored = { value: 'v', account: 'stored-user' };
+      await expect(writeSource(badSrc, JSON.stringify(stored)))
+        .rejects.toThrow(/KeychainSource\.account 가 유효하지 않습니다/);
+
+      // security CLI 가 호출되어선 안 됨 — 검증은 spawn 보다 먼저.
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('readSource: src.account 가 유효하지 않으면 throw — backup find scope 누설 차단', async () => {
+      // 회귀 가드: readKeychainSerialized 도 동일 검증 (sourceExists 와 함께 모든 keychain 진입점).
+      const badSrc: KeychainSource = {
+        type: 'keychain', service: 'goose', account: '', saveAs: 'a.json'
+      };
+      await expect(readSource(badSrc))
+        .rejects.toThrow(/KeychainSource\.account 가 유효하지 않습니다/);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('sourceExists: src.account 가 유효하지 않으면 throw — find 호출 0회', async () => {
+      const badSrc: KeychainSource = {
+        type: 'keychain', service: 'goose', account: '\x00', saveAs: 'a.json'
+      };
+      await expect(sourceExists(badSrc))
+        .rejects.toThrow(/KeychainSource\.account 가 유효하지 않습니다/);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('writeSource: stored.account 에 NUL 포함 시 hasAccount 가 거부 → USER fallback (NUL 일관성)', async () => {
+      // 회귀 가드 (quad-review Codex-2 LOW 합의): stored.account 가 corrupt 로 NUL 포함시
+      // 이전엔 hasAccount("\x00user") 가 truthy → spawn argv 에 NUL 전달 → 실패.
+      // 새 정책: hasAccount 가 NUL 차단 → stored.account 우선순위 통과 못 함 → USER fallback.
+      const origUser = process.env.USER;
+      process.env.USER = 'env-user';
+      try {
+        mockSpawn
+          .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+          .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+        // src.account 미지정 (legacy 단일-account source), stored.account 가 NUL 포함.
+        const stored: KeychainStored = { value: 'v', account: 'has\x00nul' };
+        await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
+
+        const [addCall] = findSpawnCallsByArg('add-generic-password');
+        // NUL 거부 → 다음 우선순위 USER 채택.
+        expect(argsAfter(addCall[1] as string[], '-a')).toBe('env-user');
+        expect(addCall[1]).not.toContain('has\x00nul');
+      } finally {
+        if (origUser === undefined) delete process.env.USER;
+        else process.env.USER = origUser;
+      }
+    });
+
+    it('writeSource: corrupt KeychainStored (value 가 문자열 아님) → throw, security CLI 호출 0회', async () => {
+      // 회귀 가드: legacy/corrupt backup 파일이 들어와도 -w undefined argv build 사고 차단.
+      const corrupt = JSON.stringify({ value: 42, account: 'x' });  // value: number
+      await expect(writeSource(KEYCHAIN_SRC, corrupt))
+        .rejects.toThrow(/keychain backup 이 손상되었습니다/);
+      // security CLI 자체가 호출되어선 안 됨 — corrupt 검증은 parse 직후.
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('keychainSet rollback: add 실패 시 backupAccount 명시 사용 — wrong-account 복구 회귀 가드', async () => {
+      // 117행 가드(KeychainAccountMissingError)로 backupAccount 는 backup 분기 진입 시
+      // 항상 truthy 보장. rollback 의 -a 인자는 새 항목 account 가 아닌 backupAccount.
+      // 회귀 가드: 미래에 117행 가드가 약화되어도 rollback 이 wrong-account 로 복구 안 함.
+      mockSpawn
+        // backup value 있음
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old-token' }))
+        // backup account = bob
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }))
+        // delete OK
+        .mockReturnValueOnce(fakeProc({ code: 0 }))
+        // add 실패 — 새 account 는 'alice'
+        .mockReturnValueOnce(fakeProc({ code: 5, stderr: 'add failed' }))
+        // 롤백 add — backupAccount(bob) 사용해야 함, alice 가 아니라.
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      const stored: KeychainStored = { value: 'new', account: 'alice' };
+      await expect(writeSource(KEYCHAIN_SRC, JSON.stringify(stored)))
+        .rejects.toThrow(/keychain 쓰기 실패/);
+
+      const addCalls = findSpawnCallsByArg('add-generic-password');
+      expect(addCalls).toHaveLength(2);
+      const [, rollbackCall] = addCalls;
+      // rollback 의 -a 는 정확히 backupAccount('bob') — `|| account` fallback 으로 'alice' 가 새지 않음.
+      expect(argsAfter(rollbackCall[1] as string[], '-a')).toBe('bob');
+      expect(rollbackCall[1]).not.toContain('alice');
+    });
+  });
+
   describe('runCommand 의 spawn error/close race', () => {
     it('spawn error 이벤트 → code -1 으로 settle (keychain 읽기 실패 throw)', async () => {
       mockSpawn.mockReturnValueOnce(

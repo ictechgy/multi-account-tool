@@ -98,6 +98,45 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.def?.sources[0].type).toBe('file');
     expect(r.def?.sources[1].type).toBe('keychain');
   });
+
+  describe('keychain source 의 account optional 필드', () => {
+    it('account 미지정 → keychain source 에 account 필드 없음 (기존 동작 유지)', () => {
+      const r = validateCliDefRaw({
+        id: 'plain', name: 'Plain',
+        sources: [{ type: 'keychain', service: 'svc', saveAs: 'a.json' }]
+      });
+      expect(r.error).toBeUndefined();
+      const src = r.def!.sources[0];
+      expect(src.type).toBe('keychain');
+      expect((src as { account?: string }).account).toBeUndefined();
+    });
+
+    it('account 정상 문자열 → KeychainSource.account 에 반영', () => {
+      const r = validateCliDefRaw({
+        id: 'scoped', name: 'Scoped',
+        sources: [{ type: 'keychain', service: 'svc', account: 'user@example.com', saveAs: 'a.json' }]
+      });
+      expect(r.error).toBeUndefined();
+      const src = r.def!.sources[0] as { type: string; account?: string };
+      expect(src.account).toBe('user@example.com');
+    });
+
+    it.each([
+      [42, '비어있지 않은 문자열'],
+      [null, '비어있지 않은 문자열'],
+      [true, '비어있지 않은 문자열'],
+      ['', '비어있지 않은 문자열'],
+      ['has\x00nul', 'NUL']
+    ])('account 가 %j → error "%s" 포함', (badAccount, expectedKeyword) => {
+      const r = validateCliDefRaw({
+        id: 'bad', name: 'Bad',
+        sources: [{ type: 'keychain', service: 'svc', account: badAccount, saveAs: 'a.json' }]
+      });
+      expect(r.def).toBeUndefined();
+      expect(r.error).toContain('account');
+      expect(r.error).toContain(expectedKeyword as string);
+    });
+  });
 });
 
 describe('loadUserCliDefs — fs 통합', () => {
