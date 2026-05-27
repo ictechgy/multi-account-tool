@@ -17,8 +17,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
-  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode 8개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode']);
+  it('claude/codex/gemini/aider/kimi/qwen/crush/opencode/goose 9개 정의를 정확히 포함', () => {
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose']);
   });
 
   it.each([
@@ -29,7 +29,8 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ['kimi', 'Kimi CLI'],
     ['qwen', 'Qwen Code CLI'],
     ['crush', 'Crush'],
-    ['opencode', 'OpenCode']
+    ['opencode', 'OpenCode'],
+    ['goose', 'Goose']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
@@ -93,6 +94,19 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
+  it('goose source 수는 현재 platform 에 따라 darwin=3 / 그 외=2', () => {
+    // 본 테스트는 process.platform 그대로 사용. 양쪽 분기 상세는 아래 별도 describe 에서 stub.
+    const goose = BUILTIN_CLI_DEFS.find((c) => c.id === 'goose');
+    expect(goose).toBeDefined();
+    if (process.platform === 'darwin') {
+      expect(goose!.sources).toHaveLength(3);
+      expect(goose!.sources[0].type).toBe('keychain');
+    } else {
+      expect(goose!.sources).toHaveLength(2);
+      expect(goose!.sources.every((s) => s.type === 'file')).toBe(true);
+    }
+  });
+
   it('모든 source 의 saveAs 는 비어있지 않음', () => {
     for (const cli of BUILTIN_CLI_DEFS) {
       for (const src of cli.sources) {
@@ -103,7 +117,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);
@@ -184,6 +198,49 @@ describe('opencode source — platform 무관 단일 경로 (xdg-basedir 동작)
         expect(src.path).toBe('~/.local/share/opencode/auth.json');
         expect(src.saveAs).toBe('opencode-auth.json');
       }
+    }
+  );
+});
+
+/**
+ * Goose 의 platform 분기 — Block 의 오픈소스 AI agent.
+ *  - darwin: macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml`
+ *    + `~/.config/goose/config.yaml` 의 3-source.
+ *  - 그 외 (linux/win32/freebsd): yaml 2-source 만 (Linux 의 기본 secret-service 백엔드는 mat 미지원
+ *    이라 file fallback 만 표현). 사용자가 secret-service 사용 중이면 mat swap 결과 무효 — README 명시.
+ *
+ * PR-A 의 `KeychainSource.account` 필드를 사용하는 첫 builtin — service `goose` 가 generic 단어라
+ * scope 가 필수. account 누락 시 (PR #29 closed 사유) wrong-entry 위험.
+ */
+describe('gooseSources — platform 별 분기 (multi-source + account scope 검증)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('platform=darwin → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+    vi.resetModules();
+    const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+    const goose = defs.find((c) => c.id === 'goose');
+    expect(goose!.sources).toEqual([
+      { type: 'keychain', service: 'goose', account: 'secrets', saveAs: 'goose-keyring.json' },
+      { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
+      { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+    ]);
+  });
+
+  it.each(['linux', 'win32', 'freebsd'])(
+    'platform=%s → file source 2개 (secrets.yaml + config.yaml, keychain 미포함)',
+    async (platform) => {
+      vi.stubGlobal('process', { ...process, platform });
+      vi.resetModules();
+      const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+      const goose = defs.find((c) => c.id === 'goose');
+      expect(goose!.sources).toEqual([
+        { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
+        { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+      ]);
     }
   );
 });
