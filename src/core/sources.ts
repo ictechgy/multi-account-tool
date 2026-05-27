@@ -62,13 +62,32 @@ function keychainErr(stage: string, r: CmdResult): Error {
 
 /**
  * KeychainSource.account 의 유효성 type-guard.
- * 빈 문자열은 undefined 와 동치가 아니라 "잘못된 입력" 으로 취급 — internal call 로
- * 빈 문자열이 새어 들어오면 service-only fallback 으로 multi-account scope 가
- * silent 하게 깨질 수 있으므로 모든 헬퍼가 이 guard 로 통일 검사한다.
- * 외부 입력 (cli-defs-plugin.parseSource) 도 동일 invariant 를 거른다 (defense-in-depth).
+ * 빈 문자열 / NUL 포함 문자열은 undefined 와 동치가 아니라 "잘못된 입력" 으로 취급.
+ * 외부 입력 (cli-defs-plugin.parseSource) 과 internal 호출 모두 동일 invariant 적용.
+ *
+ * type guard 는 narrowing 외에 "유효 여부" 만 알린다 — `assertValidKeychainSource`
+ * 가 source 진입부에서 명시 throw 로 invariant 누설을 차단한다 (quad-review 합의).
  */
 function hasAccount(account?: string): account is string {
-  return typeof account === 'string' && account.length > 0;
+  return typeof account === 'string' && account.length > 0 && !account.includes('\x00');
+}
+
+/**
+ * KeychainSource 의 source-boundary 검증.
+ *
+ * `account` 가 정의되었는데 유효한 문자열이 아니면 (빈 문자열, NUL 포함 등)
+ * 명시 throw — 그렇지 않으면 mat 내부 helper 의 `hasAccount` 가드가 false 로
+ * 떨어져 `-a` 인자 없이 service-only lookup 으로 진행, multi-account scope 가
+ * silent 하게 깨진다 (quad-review HIGH 합의).
+ *
+ * read / write / sourceExists 의 keychain 분기 진입부에서 호출한다.
+ */
+function assertValidKeychainSource(src: KeychainSource): void {
+  if (src.account !== undefined && !hasAccount(src.account)) {
+    throw new Error(
+      `KeychainSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${src.service}`
+    );
+  }
 }
 
 /**
@@ -179,6 +198,7 @@ async function readKeychainSerialized(src: KeychainSource): Promise<string | nul
   if (process.platform !== 'darwin') {
     throw new Error('keychain source 는 macOS 에서만 지원됩니다.');
   }
+  assertValidKeychainSource(src);
   const value = await keychainGetValue(src.service, src.account);
   if (value == null) return null;
   const account = await keychainGetAccount(src.service, src.account);
@@ -201,6 +221,7 @@ async function writeKeychainSerialized(src: KeychainSource, serialized: string):
   if (process.platform !== 'darwin') {
     throw new Error('keychain source 는 macOS 에서만 지원됩니다.');
   }
+  assertValidKeychainSource(src);
   const stored = JSON.parse(serialized) as KeychainStored;
   // corrupt / legacy backup 방어: value 가 문자열이 아니면 add-generic-password 의 -w
   // argv 가 'undefined' 또는 'null' 리터럴로 build 되는 사고를 차단.
@@ -253,5 +274,6 @@ export async function writeSource(src: Source, value: string): Promise<void> {
 /** 임의 source 의 라이브 존재 여부. */
 export async function sourceExists(src: Source): Promise<boolean> {
   if (src.type === 'file') return fileExists(src.path);
+  assertValidKeychainSource(src);
   return keychainExists(src.service, src.account);
 }

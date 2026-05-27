@@ -547,30 +547,73 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(addCall[1]).not.toContain('different-user');
     });
 
-    it('writeSource: src.account 가 빈 문자열이면 service-only fallback 이 아닌 stored.account/USER 로 진행 (multi-account scope 누설 가드)', async () => {
-      // 빈 문자열은 undefined 와 동치가 아니다 (types.ts JSDoc 명시).
-      // parseSource 가 외부 입력을 거르지만 internal API 사용자가 직접 빈 문자열을 넣어도
-      // hasAccount type-guard 가 false 로 평가 → 다음 우선순위 (stored.account → USER → default) 로.
-      // 만약 truthy 체크만 했다면 `if ("")` 가 false 라 동일 결과지만, 의도를 명시 회귀 가드로 잠근다.
-      const emptyAccountSrc: KeychainSource = {
+    it.each([
+      ['빈 문자열', ''],
+      ['NUL 포함', 'has\x00nul']
+    ])('writeSource: src.account 가 유효하지 않으면 (%s) throw — security CLI 호출 0회 (quad-review 합의 HIGH)', async (_label, badAccount) => {
+      // 회귀 가드 (quad-review Codex 합의 high confidence): 이전 동작은 빈 문자열 fallthrough 로
+      // `keychainSet` 의 `scopeAccount` 인자가 빈 문자열이 되어 backup lookup/delete 가
+      // service-only 로 떨어졌다 — 동일 service 의 임의 account 항목을 잘못 잡아 영구
+      // 삭제할 위험. 새 정책은 `assertValidKeychainSource` 가 source 진입부에서 throw 한다.
+      // parseSource 가 외부 입력은 거르지만, internal API 사용자나 corrupt 정의가 직접
+      // 잘못된 account 를 넣어도 silent fallback 으로 떨어지지 않게 차단.
+      const badSrc: KeychainSource = {
         type: 'keychain',
         service: 'goose',
-        account: '',  // 빈 문자열
+        account: badAccount,
         saveAs: 'goose-secrets.json'
       };
-      mockSpawn
-        // service-only lookup 이 됐다면 mock 호출 시퀀스가 단순 신규 add 와 다름.
-        // hasAccount 통과 못 함 → keychainGetValue(service, undefined-처럼) → service-only.
-        // 본 테스트는 stored.account 가 채택되는지 확인.
-        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
-        .mockReturnValueOnce(fakeProc({ code: 0 }));
 
       const stored: KeychainStored = { value: 'v', account: 'stored-user' };
-      await writeSource(emptyAccountSrc, JSON.stringify(stored));
+      await expect(writeSource(badSrc, JSON.stringify(stored)))
+        .rejects.toThrow(/KeychainSource\.account 가 유효하지 않습니다/);
 
-      const [addCall] = findSpawnCallsByArg('add-generic-password');
-      // src.account 빈 문자열 → 폴스루 → stored.account ('stored-user') 사용.
-      expect(argsAfter(addCall[1] as string[], '-a')).toBe('stored-user');
+      // security CLI 가 호출되어선 안 됨 — 검증은 spawn 보다 먼저.
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('readSource: src.account 가 유효하지 않으면 throw — backup find scope 누설 차단', async () => {
+      // 회귀 가드: readKeychainSerialized 도 동일 검증 (sourceExists 와 함께 모든 keychain 진입점).
+      const badSrc: KeychainSource = {
+        type: 'keychain', service: 'goose', account: '', saveAs: 'a.json'
+      };
+      await expect(readSource(badSrc))
+        .rejects.toThrow(/KeychainSource\.account 가 유효하지 않습니다/);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('sourceExists: src.account 가 유효하지 않으면 throw — find 호출 0회', async () => {
+      const badSrc: KeychainSource = {
+        type: 'keychain', service: 'goose', account: '\x00', saveAs: 'a.json'
+      };
+      await expect(sourceExists(badSrc))
+        .rejects.toThrow(/KeychainSource\.account 가 유효하지 않습니다/);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('writeSource: stored.account 에 NUL 포함 시 hasAccount 가 거부 → USER fallback (NUL 일관성)', async () => {
+      // 회귀 가드 (quad-review Codex-2 LOW 합의): stored.account 가 corrupt 로 NUL 포함시
+      // 이전엔 hasAccount("\x00user") 가 truthy → spawn argv 에 NUL 전달 → 실패.
+      // 새 정책: hasAccount 가 NUL 차단 → stored.account 우선순위 통과 못 함 → USER fallback.
+      const origUser = process.env.USER;
+      process.env.USER = 'env-user';
+      try {
+        mockSpawn
+          .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+          .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+        // src.account 미지정 (legacy 단일-account source), stored.account 가 NUL 포함.
+        const stored: KeychainStored = { value: 'v', account: 'has\x00nul' };
+        await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
+
+        const [addCall] = findSpawnCallsByArg('add-generic-password');
+        // NUL 거부 → 다음 우선순위 USER 채택.
+        expect(argsAfter(addCall[1] as string[], '-a')).toBe('env-user');
+        expect(addCall[1]).not.toContain('has\x00nul');
+      } finally {
+        if (origUser === undefined) delete process.env.USER;
+        else process.env.USER = origUser;
+      }
     });
 
     it('writeSource: corrupt KeychainStored (value 가 문자열 아님) → throw, security CLI 호출 0회', async () => {
