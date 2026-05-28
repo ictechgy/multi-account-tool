@@ -7,8 +7,11 @@
 
 import { createHash } from 'node:crypto';
 
+/** maskIdentifier 의 fingerprint 길이 (hex 자리수). 정책 변경 시 단일 source. */
+const MASK_FINGERPRINT_LENGTH = 12;
+
 /**
- * 사용자 식별자 (email / accountId 등) 를 stable 8-자 SHA-256 fingerprint 로 마스킹.
+ * 사용자 식별자 (email / accountId 등) 를 stable SHA-256 fingerprint 로 마스킹.
  *
  * adapter detail / `mat freshness` stdout / `--json` 출력에 raw identifier 가
  * 노출되면 CI logs / shell history / support bundle 로 누설된다 (quad-review MED
@@ -17,12 +20,23 @@ import { createHash } from 'node:crypto';
  *
  * 빈 문자열은 `<empty>` (hash collision 회피).
  *
+ * fingerprint 길이 (PR-U): 8 hex → **12 hex (48-bit)**.
+ *  - 옛 8 hex (32-bit) 는 birthday bound ~65K identifier collision 가능성 → 단일
+ *    사용자의 여러 계정 (예: 5~10 계정) 에선 안전했지만 fleet 단위 (수천 사용자
+ *    aggregate) 에선 충돌 위험 명확.
+ *  - 12 hex (48-bit) 는 birthday bound ~16M → fleet/audit scenario 에서도 충돌
+ *    실용 무시 가능.
+ *  - UI 표시 폭 trade-off: `<hash:00000000>` → `<hash:000000000000>` 4 chars 증가.
+ *    detail 열 폭이 약 20 chars → 24 chars 로 늘지만 사용자 가독성 영향 미미.
+ *
  * 단방향 — 비교 가능하지만 역추적 불가. 단 사전 공격에는 약함 (짧은 fingerprint).
  * 본 함수는 audit-grade 비밀 보호 용도가 아닌 UI 누설 방지 용도 (defense in depth).
+ *
+ * 정식 마스킹 규칙은 `tests/fixtures/oauth/MASKING_RULES.md` 참고.
  */
 export function maskIdentifier(value: string): string {
   if (!value) return '<empty>';
-  const hash = createHash('sha256').update(value).digest('hex').slice(0, 8);
+  const hash = createHash('sha256').update(value).digest('hex').slice(0, MASK_FINGERPRINT_LENGTH);
   return `<hash:${hash}>`;
 }
 

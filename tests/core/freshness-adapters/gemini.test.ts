@@ -71,7 +71,7 @@ describe('geminiAdapter — google_accounts.json', () => {
     expect(r.detail).not.toContain('alice');
     expect(r.detail).not.toContain('bob');
     expect(r.detail).not.toContain('example.com');
-    expect(r.detail).toMatch(/<hash:[0-9a-f]{8}>/);
+    expect(r.detail).toMatch(/<hash:[0-9a-f]{12}>/);
   });
 
   it('active 필드 부재 → medium confidence rotated', () => {
