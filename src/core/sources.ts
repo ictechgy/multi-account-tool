@@ -121,18 +121,19 @@ async function keychainGetValue(service: string, account?: string): Promise<stri
 }
 
 /**
- * Keychain 항목을 안전하게 쓴다.
- *  1) 기존 값/account 메모리 백업
- *  2) 백업 acct 와 정확히 매칭되는 항목만 삭제 (-a 명시).
- *     백업이 있는데 acct 를 못 잡으면 throw — service-only 삭제는 동일 service 의
- *     타 항목 영구 손실 위험이 있어 swap 자체를 거부한다 (data loss 방지).
- *  3) 새 값 추가. 실패 시 백업으로 롤백 (롤백 결과도 확인해 실패 시 에러에 첨부).
+ * Keychain 항목을 안전하게 쓴다 — orchestrator. 실제 4 책임은 3 helper 로 분리됨
+ * (PR-P: 책임 ≤10 lines 가이드 + 컴파일타임 invariant 강제).
+ *  1) `loadKeychainBackup`: 기존 값+account 메모리 백업. account 미식별 시 throw —
+ *     service-only 삭제로 인한 타 entry 영구 손실 차단 (data loss 방지).
+ *  2) `deleteKeychainEntry`: 백업 acct 와 정확히 매칭되는 항목만 삭제 (-a 명시).
+ *  3) `addKeychainEntryOrRollback`: 새 값 add. 실패 시 backup 으로 자동 rollback,
+ *     rollback 도 실패하면 양쪽 에러 동시 surface.
  *
  * `scopeAccount` 가 지정되면 백업 lookup/삭제 모두 `-a scopeAccount` 항목 하나로
  * 제한 — 동일 service 의 타 account 항목은 건드리지 않는다 (multi-account 안전).
  * 미지정 시 단일-account 사용자 전제로 service-only lookup (기존 동작 유지).
  *
- * `-A` 로 동일 사용자 모든 앱이 접근 가능한 ACL 사용 (Claude 가 토큰을 못 읽는 회귀 방지).
+ * 보안 invariant (helper 도 보존): `-A` ACL (Claude 가 토큰을 못 읽는 회귀 방지),
  * argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
  */
 async function keychainSet(
@@ -141,48 +142,80 @@ async function keychainSet(
   value: string,
   scopeAccount?: string
 ): Promise<void> {
-  const backupValue = await keychainGetValue(service, scopeAccount);
-  const backupAccount = backupValue != null ? await keychainGetAccount(service, scopeAccount) : null;
-
-  if (backupValue != null) {
-    if (!backupAccount) {
-      throw new KeychainAccountMissingError(service);
-    }
-    const delArgs = ['delete-generic-password', '-s', service, '-a', backupAccount];
-    const delRes = await runCommand(SECURITY_BIN, delArgs);
-    if (delRes.code !== 0) {
-      throw keychainErr('백업 항목 삭제', delRes);
-    }
+  const backup = await loadKeychainBackup(service, scopeAccount);
+  if (backup) {
+    await deleteKeychainEntry(service, backup.account);
   }
+  await addKeychainEntryOrRollback(service, account, value, backup);
+}
 
-  const addRes = await runCommand(SECURITY_BIN, [
-    'add-generic-password',
-    '-s', service,
-    '-a', account,
-    '-w', value,
-    '-A'
+/** 백업 메타 — 존재하는 항목의 value + account. KeychainAccountMissingError 차단 동반. */
+interface KeychainBackup {
+  value: string;
+  account: string;
+}
+
+/**
+ * 기존 keychain 항목의 backup 로드 (PR-P 책임 1 — read backup).
+ *
+ * value 가 존재하지만 account 를 식별할 수 없으면 `KeychainAccountMissingError` —
+ * blind delete 로 wrong-entry 삭제할 위험 차단 (PR #10 보안 fix 의 invariant).
+ */
+async function loadKeychainBackup(
+  service: string,
+  scopeAccount?: string
+): Promise<KeychainBackup | null> {
+  const value = await keychainGetValue(service, scopeAccount);
+  if (value == null) return null;
+  const account = await keychainGetAccount(service, scopeAccount);
+  if (!account) throw new KeychainAccountMissingError(service);
+  return { value, account };
+}
+
+/** keychain 항목 삭제 (PR-P 책임 2 — delete). 실패 시 keychainErr 로 surface. */
+async function deleteKeychainEntry(service: string, account: string): Promise<void> {
+  const delRes = await runCommand(SECURITY_BIN, [
+    'delete-generic-password', '-s', service, '-a', account
   ]);
-
-  if (addRes.code !== 0) {
-    let rollbackNote = '';
-    // backupValue != null 분기에 진입했다면 117행 가드로 backupAccount 는 truthy 로 보장된다
-    // (null 이면 KeychainAccountMissingError 로 이미 throw — 도달 불가). `backupAccount!` 대신
-    // 명시 truthy 검사로 invariant 를 코드에 남겨, 향후 117행 가드가 약화되어도 wrong-account
-    // (multi-account scope 깨짐) 으로 backup 을 복구하는 사고를 차단한다.
-    if (backupValue != null && backupAccount) {
-      const rb = await runCommand(SECURITY_BIN, [
-        'add-generic-password',
-        '-s', service,
-        '-a', backupAccount,
-        '-w', backupValue,
-        '-A'
-      ]);
-      if (rb.code !== 0) {
-        rollbackNote = ` / 백업 복구도 실패 (code=${rb.code}): ${redactMessage(rb.stderr)}`;
-      }
-    }
-    throw new Error(`keychain 쓰기 실패 (code=${addRes.code}): ${redactMessage(addRes.stderr || addRes.stdout)}${rollbackNote}`);
+  if (delRes.code !== 0) {
+    throw keychainErr('백업 항목 삭제', delRes);
   }
+}
+
+/**
+ * 새 keychain 항목 add + 실패 시 backup 복구 (PR-P 책임 3+4 — add + rollback).
+ *
+ * `-A` 로 동일 사용자 모든 앱 접근 가능한 ACL 사용 (Claude 가 토큰을 못 읽는 회귀 방지).
+ * argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
+ *
+ * backup 이 있고 add 가 실패하면 backup 을 같은 명령으로 재기록 — rollback 도 실패하면
+ * 양쪽 에러 동시 surface (단일 throw 에 rollbackNote append).
+ */
+async function addKeychainEntryOrRollback(
+  service: string,
+  account: string,
+  value: string,
+  backup: KeychainBackup | null
+): Promise<void> {
+  const addRes = await runCommand(SECURITY_BIN, [
+    'add-generic-password', '-s', service, '-a', account, '-w', value, '-A'
+  ]);
+  if (addRes.code === 0) return;
+
+  // backup 이 있으면 자동 rollback 시도. KeychainBackup 의 invariant (account truthy) 는
+  // loadKeychainBackup 이 KeychainAccountMissingError 로 이미 검증.
+  let rollbackNote = '';
+  if (backup) {
+    const rb = await runCommand(SECURITY_BIN, [
+      'add-generic-password', '-s', service, '-a', backup.account, '-w', backup.value, '-A'
+    ]);
+    if (rb.code !== 0) {
+      rollbackNote = ` / 백업 복구도 실패 (code=${rb.code}): ${redactMessage(rb.stderr)}`;
+    }
+  }
+  throw new Error(
+    `keychain 쓰기 실패 (code=${addRes.code}): ${redactMessage(addRes.stderr || addRes.stdout)}${rollbackNote}`
+  );
 }
 
 /** Keychain 항목 존재 여부. account 지정 시 해당 acct 항목만 검사. */
