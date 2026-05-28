@@ -57,13 +57,14 @@
 
 fixture 의 secret 값은 **가짜** 여야 한다 — 실제 토큰을 사용하면 git history 누설.
 
-규칙 (PR-U 후속에서 MASKING_RULES.md 로 분리 예정):
-- API key: `sk-fake-{provider}-{4hex}` 패턴 — 예: `sk-fake-anthropic-0001`
-- JWT: runtime concat 없이 그대로 사용 시 base64 prefix `eyJ` 만 포함 + payload 는 `fake.payload.signature` 같은 placeholder
-- account_id / email: 도메인 `@fixture.example` 사용 (RFC 2606 reserved)
-- refresh_token: `refresh-fake-{4hex}` 패턴
+정식 규칙은 **`MASKING_RULES.md`** (PR-U) 참고 — fake token patterns + 금지 패턴 +
+정적 분석 우회 가이드 + 변경 시 동기화 매트릭스 포함.
 
-본 정책은 PR-T 의 최초 fixture 셋에서 사용하고 PR-U 에서 정식 문서화.
+요약:
+- API key: `sk-fake-{provider}-{4hex}` — 예: `sk-fake-anthropic-0001`
+- JWT: source 직접 포함 금지 (`eyJ` 정적 매치 회피). runtime concat 권장.
+- account_id / email: 도메인 `@fixture.example` (RFC 2606 reserved)
+- refresh / access token: `refresh-fake-{4hex}` 또는 `{provider}fake-{access|refresh}-{4hex}`
 
 ## 신규 fixture 추가
 
