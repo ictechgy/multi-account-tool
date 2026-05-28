@@ -30,10 +30,11 @@ const USAGE =
   `사용법:\n` +
   `  mat                                            TUI 실행\n` +
   `  mat exec <cli> <profile> -- <cmd...>          <profile> 로 swap 후 <cmd> 실행, 종료 후 원복\n` +
-  `  mat freshness [<cli>] [--profile <name>] [--json]\n` +
+  `  mat freshness [<cli>] [--profile <name>] [--json] [--check-only]\n` +
   `                                                 라이브 vs 활성 프로필 자격증명 비교 (OAuth\n` +
   `                                                 refresh rotation 안전성 점검). cli 미지정 시\n` +
-  `                                                 모든 builtin/plugin CLI 보고.\n` +
+  `                                                 모든 builtin/plugin CLI 보고. --check-only 면\n` +
+  `                                                 stale 감지해도 exit 0 (read-only 모니터링).\n` +
   `  mat --help                                     이 도움말 출력\n` +
   `  mat --version                                  버전 출력\n`;
 
@@ -148,12 +149,15 @@ async function handleExec(rest: string[]): Promise<void> {
 }
 
 /**
- * `mat freshness [<cli>] [--profile <name>] [--json]` 핸들러.
+ * `mat freshness [<cli>] [--profile <name>] [--json] [--check-only]` 핸들러.
  *
  * cli 미지정 시 모든 builtin + plugin CLI 의 active 프로필을 보고 (active 없는 cli skip).
  * cli 지정 시 active 부재면 사용자 에러 (exit 2).
  * --profile 로 active 와 다른 프로필 강제 가능.
  * --json 으로 stdout JSON 출력 (기본은 사람-친화 표).
+ * --check-only 면 unsafe (stale / low-conf rotated / inflight) 감지해도 exit 0 —
+ *   read-only 모니터링 케이스 (status line widget / dashboard 등) 가 CI chain 의
+ *   exit 1 차단을 받지 않도록.
  */
 async function handleFreshness(rest: string[]): Promise<void> {
   const parsed = parseFreshnessArgs(rest);
@@ -167,6 +171,7 @@ async function handleFreshness(rest: string[]): Promise<void> {
       // UnknownCliError 는 사용자 입력 에러 → exit 2 (UsageError 상속, exitCode 2).
       // 그 외 (fs 에러 등) → 내부 검사 실패 (74). instanceof 분기로 message 정규식
       // brittleness 제거 (quad-review MED fix).
+      // --check-only 는 inspect 실패 (74) 까지는 우회 안 함 — fs error 는 진짜 문제.
       process.exit(err instanceof UnknownCliError ? 2 : EXIT_FRESHNESS_INSPECT_FAILED);
     }
   }
@@ -175,6 +180,9 @@ async function handleFreshness(rest: string[]): Promise<void> {
   } else {
     process.stdout.write(formatFreshnessTable(reports));
   }
+  if (parsed.checkOnly) {
+    process.exit(0);
+  }
   process.exit(hasUnsafe(reports) ? EXIT_STALE_DETECTED : 0);
 }
 
@@ -182,14 +190,19 @@ interface FreshnessArgs {
   cliId?: string;
   profileOverride?: string;
   asJson: boolean;
+  checkOnly: boolean;
 }
 
 function parseFreshnessArgs(rest: string[]): FreshnessArgs {
-  const out: FreshnessArgs = { asJson: false };
+  const out: FreshnessArgs = { asJson: false, checkOnly: false };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === '--json') {
       out.asJson = true;
+      continue;
+    }
+    if (a === '--check-only') {
+      out.checkOnly = true;
       continue;
     }
     if (a === '--profile') {
