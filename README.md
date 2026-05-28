@@ -2,7 +2,7 @@
 
 [한국어](README.ko.md) | English
 
-Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode) from a single TUI. No more `logout` / `login` shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths.
+Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. No more `logout` / `login` shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths, OAuth refresh-token rotation awareness with TUI dialog (recapture / discard / cancel).
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -57,6 +57,7 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 
 ### Switch flow (lossless)
 
+0. **Pre-swap freshness check** — if the live credentials drifted from the active profile (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before steps 1–3 below. See "OAuth Rotation Safety Matrix" above for per-CLI classification.
 1. The current live credentials are snapshotted into the currently active profile (automatic backup).
 2. The target profile's stored credentials are atomically restored to the live location.
 3. The active-profile pointer is updated.
@@ -107,7 +108,7 @@ If the CLI's live credentials are already present, `mat` offers to import them a
 ### Adding a new account
 
 1. `mat` → pick a CLI → press `a` → enter a profile name (e.g., `work`)
-2. Press `Enter` on the new profile to make it active
+2. Press `Enter` on the new profile to make it active. If the live credentials drifted from the **active profile**'s stored snapshot (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before swapping — see Switch flow + OAuth Rotation Safety Matrix above.
 3. In a separate terminal, log in to the CLI itself (`claude`, `codex`, `gemini`, …). This overwrites the live credentials with the new account.
 4. Back in `mat`, press `c` on the same profile to **capture** the new live credentials into it
 5. From now on, switch freely between profiles with `Enter`
@@ -124,6 +125,9 @@ If the CLI's live credentials are already present, `mat` offers to import them a
 | Profiles | `c` | Capture live credentials into the focused profile |
 | Profiles | `r` | Rename |
 | Profiles | `d` | Delete |
+| Freshness dialog | `r` / `Enter` | Recapture (save live into active profile before swap) |
+| Freshness dialog | `d` | Discard (skip auto-snapshot — data loss) |
+| Freshness dialog | `c` / `Esc` | Cancel swap |
 
 ### `mat exec` — one-shot swap around a command
 
@@ -146,9 +150,53 @@ Behaviour:
 - Requires an active profile for `<cli>` already set (use the TUI to capture live credentials first).
 - A per-CLI lockfile (`~/.multi-account-tool/locks/<cli>.lock`) prevents two `mat exec` runs from racing on the same CLI. Stale locks from crashed processes are auto-recovered.
 - Signals (`SIGINT` / `SIGTERM` / `SIGHUP`) are forwarded to the child; the child's exit code and signal are propagated back.
-- The restore step runs in a `finally` block so normal exit, errors, and forwarded signals all trigger it. **A `SIGKILL` to `mat` itself bypasses restore** — the active pointer would then remain on `<profile>` until you switch back via the TUI.
+- **On exit, `mat` re-captures the live credentials into `<profile>` first** (so rotation triggered by `<cmd>` is preserved), then restores the previous active profile. The recapture has a default 10s timeout (`MAT_EXEC_RECAPTURE_TIMEOUT_MS` env override) to bound keychain-prompt hangs.
+- The restore step runs in a `finally` block so normal exit, errors, and forwarded signals all trigger it. **A `SIGKILL` (or other untrappable signal: `SIGSEGV` / `SIGBUS`) to `mat` itself bypasses restore** — on the next `mat` invocation, the stale lock is auto-recovered and `mat` writes a stderr warning indicating the live credentials may still belong to `<profile>` rather than the previous active profile (policy B: warn + drop).
 
 This is **temporal isolation**, not session isolation: while the child runs, the OS-global credentials are the `<profile>` ones. Two terminals running different `mat exec` commands serialise via the lock; true per-session isolation is on the roadmap.
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Child exited 0 (and restore succeeded) |
+| `2` | Usage error (`UsageError` — pre-spawn validation) |
+| `74` | `mat`-side restore failed (`restoreError` set) — child result preserved on stdout/stderr |
+| `75` | Another `mat exec` holds the per-CLI lock (`LockHeldError` — pre-spawn) |
+| `128+N` | Child terminated by signal `N` (e.g., `130` for `SIGINT`) |
+| `1` | Either: child exited non-zero with code `1`, OR `mat` itself hit an unexpected error before/after child execution |
+| _other (e.g., `3`, `42`)_ | Child's own non-zero exit code is propagated as-is |
+
+Note: `2` / `74` / `75` are reserved by `mat`'s own error model (pre-spawn validation, lock contention, post-spawn restore failure). Any other non-zero code below `128` is the child's own exit code propagated transparently. Use `restoreError` log lines on stderr to distinguish `74` from a child exit `74` (unlikely but possible).
+
+### `mat freshness` — pre-swap safety check
+
+```bash
+mat freshness [<cli>] [--profile <name>] [--json]
+```
+
+Compare live credentials with the active (or specified) profile snapshot and report drift before you swap. Useful in CI chains (`mat freshness && deploy.sh`) to block stale-restore incidents (e.g., OAuth `refresh_token` revocation after wrong-profile restore).
+
+```bash
+# Quick safety check before a long Claude session
+mat freshness claude
+
+# Inspect a specific profile (machine-readable JSON for CI)
+mat freshness codex --profile work --json
+```
+
+Each source is classified into one of four states — `fresh` (byte-identical), `rotated` (token rotated but identity preserved; safe to swap), `stale` (identity changed — a different account; **swap will revoke**), `inflight` (multi-source CLI partially updated — retry shortly).
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | All sources are `fresh` or high-confidence `rotated` — safe to swap |
+| `1` | One or more sources are `stale`, low-confidence `rotated`, or `inflight` — **fix before swap** |
+| `2` | Usage error |
+| `74` | Internal check failed (e.g., source read error) |
+
+See the OAuth Rotation Safety Matrix at the top of this README for per-CLI classification confidence.
 
 ---
 
@@ -175,7 +223,7 @@ Files are created with `0600`, directories with `0700`.
 
 ### Accepted trade-offs (by design)
 
-- **Keychain ACL relaxation** — Claude credentials are normally protected by a Keychain ACL that allows only the Claude binary. To avoid Claude losing read access after a swap, `mat` rewrites the entry with `security add-generic-password -A`, which allows any process running as the same user to read it. Any process under your UID (including a malicious `npm postinstall`) could read it silently. An opt-in `-T <path>` whitelist mode is planned for v0.2.
+- **Keychain ACL relaxation** — All Keychain-backed sources (Claude Code credentials, Goose `goose`/`secrets` entry) are normally protected by a Keychain ACL that limits access to specific binaries. To avoid breaking the upstream CLI after a swap, `mat` rewrites the entry with `security add-generic-password -A`, which allows any process running as the same user to read it. Any process under your UID (including a malicious `npm postinstall`) could then read it silently. An opt-in `-T <path>` whitelist mode is planned for a future release.
 
 - **Plaintext credential backups** — OAuth tokens are stored as plaintext JSON under `~/.multi-account-tool/profiles/`. Files are `0600` and directories `0700`, but they can still be picked up by disk backups. **Exclude the data directory from Time Machine / iCloud / cloud-synced folders**:
 
@@ -233,6 +281,7 @@ Field rules:
 - `sources[].saveAs`: ASCII filename, 1~64 chars (`[a-zA-Z0-9._-]`).
 - `sources[].path` (file): any non-empty string (your filesystem path, `~/` expanded).
 - `sources[].service` (keychain): any non-empty string (Keychain service name).
+- `sources[].account` (keychain, **optional**): scope `mat` to a specific `-s <service> -a <account>` entry. Required for **generic / multi-account services** (e.g., Goose's `goose`/`secrets` or any CLI with multiple Keychain entries under the same service) — without it, `mat` may match the wrong account. Validation: non-empty string, no NUL chars. Omit for single-account services (default behaviour preserved).
 
 ### 2. Built-in addition — requires mat repo PR
 
@@ -258,12 +307,12 @@ See [CHANGELOG.md](./CHANGELOG.md) for release history and notable changes (Keep
 
 ## Roadmap
 
-See [ROADMAP.md](./ROADMAP.md) for v0.2+ plans:
+See [ROADMAP.md](./ROADMAP.md) for v0.4+ plans:
 
 - ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3)
 - ~~Aider built-in support~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - Session-scoped credential isolation (different account per `lterm` session)
-- More built-in CLIs — ~~Goose~~ ✅ (v0.4-pre, account-scoped Keychain). Copilot / Amp are deferred until mat's source abstraction is further extended (Linux Secret Service / Windows Credential Manager source types). Cursor Agent: plugin recommended (keychain service name not publicly documented).
+- More built-in CLIs — ~~Goose~~ ✅ (v0.4.0, account-scoped Keychain). Copilot / Amp are deferred until mat's source abstraction is further extended (Linux Secret Service / Windows Credential Manager source types). Cursor Agent: plugin recommended (keychain service name not publicly documented).
 - **Goose limitation**: mat swaps only macOS Keychain (`goose`/`secrets`) and the `~/.config/goose/*.yaml` files. If you run Goose on Linux with the default `secret-service` backend (libsecret, GNOME Keyring/KWallet), mat cannot reach it — disable Goose's keyring (`GOOSE_DISABLE_KEYRING=1` or file backend in `~/.config/goose/config.yaml`) so credentials land in `secrets.yaml`.
 - `lterm claude --profile <name>` shim wrapper
 
