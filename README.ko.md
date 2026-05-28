@@ -38,6 +38,23 @@
 | OpenCode | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) | 파일 swap |
 | Goose | macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account scoped Keychain; Linux 는 `GOOSE_DISABLE_KEYRING=1` 필요 — 아래 참고) |
 
+### OAuth Rotation 안전성 매트릭스
+
+일부 CLI 는 **OAuth refresh token rotation** (RFC 6749 권장 보안 정책) 을 사용한다 — refresh token 은 한 번 사용되면 invalidate 되어 같은 token 을 다시 쓸 수 없다. `mat` 이 옛 token 스냅샷을 복원하면 provider 가 "이미 사용된 token" 으로 거부 (`refresh_token_reused` 401) → 사용자가 강제 재로그인해야 한다. 본 매트릭스는 mat 지원 CLI 중 영향 받는 도구와 mat 의 안전 모드를 정리한다.
+
+| CLI | 인증 방식 | rotation 위험 | mat 안전 모드 |
+| --- | --- | --- | --- |
+| Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 높음 — token revoke 재현됨 | swap 전 `mat freshness codex` 점검 / 일회성은 `mat exec` |
+| Gemini / Antigravity | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 높음 | Codex 와 동일 |
+| OpenCode | provider 별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex 와 동일 |
+| Claude Code | macOS Keychain (Anthropic OAuth) | 🟠 중간-높음 (rotation 추정, identity 필드 `acct`) | `mat exec` 또는 `mat freshness claude` (Claude adapter 도입 전엔 byte-diff fallback) |
+| Goose | provider 라우팅 (OAuth 또는 API key) | 🟠 중간 | `mat freshness goose` 가 source 별 최악 결과 보고 |
+| Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap 으로 충분 |
+
+`mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = `stale` 감지 (identity 변경 또는 프로필 부재). 장기 실행 세션은 `mat exec` 사용을 권장 — 명령 종료 후 자동으로 이전 프로필 복원. 단 mat 자체가 `SIGKILL` 을 받으면 복원이 일어나지 않는다 (보안 섹션 참조).
+
+> **현재 한계 (PR-F\* 단독 머지 후):** TUI 의 swap 흐름이 `SwitchResult.preSwapLiveFreshness` 로 freshness 를 보고하지만 **대화형 dialog 는 아직 없다**. PR-G 머지 전까지는 rotation 위험 CLI 의 swap 전 `mat freshness <cli>` 를 **수동으로** 호출하길 권장. Goose/Claude 는 전용 adapter 미도입 — byte-diff fallback (`confidence: low`) 으로만 동작 (PR-H 후속). `mat exec` 도 종료 시 라이브 갱신본을 재캡처하지 않으므로, 장시간 실행 중 rotation 이 일어나면 새 토큰이 손실될 수 있다 (PR-I\* 후속).
+
 ### 전환 흐름 (데이터 손실 없음)
 
 1. 현재 라이브 자격증명을 **현재 활성 프로필**에 자동 스냅샷

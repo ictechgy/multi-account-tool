@@ -14,28 +14,45 @@ import React from 'react';
 import { render } from 'ink';
 
 import App from './app.js';
-import { runExec } from './core/exec.js';
+import { getAllCliDefs } from './core/cli-defs.js';
+import { getActiveProfile } from './core/config.js';
 import { describeError } from './core/errors.js';
+import { runExec } from './core/exec.js';
+import { registerAllBuiltinAdapters } from './core/freshness-adapters/index.js';
+import {
+  inspectLiveFreshness,
+  type CompareResult,
+  type FreshnessReport
+} from './core/freshness.js';
 import { migrateLegacyDataDir } from './core/migrate.js';
 
 const USAGE =
   `사용법:\n` +
-  `  mat                                       TUI 실행\n` +
-  `  mat exec <cli> <profile> -- <cmd...>     <profile> 로 swap 후 <cmd> 실행, 종료 후 원복\n` +
-  `  mat --help                                이 도움말 출력\n` +
-  `  mat --version                             버전 출력\n`;
+  `  mat                                            TUI 실행\n` +
+  `  mat exec <cli> <profile> -- <cmd...>          <profile> 로 swap 후 <cmd> 실행, 종료 후 원복\n` +
+  `  mat freshness [<cli>] [--profile <name>] [--json]\n` +
+  `                                                 라이브 vs 활성 프로필 자격증명 비교 (OAuth\n` +
+  `                                                 refresh rotation 안전성 점검). cli 미지정 시\n` +
+  `                                                 모든 builtin/plugin CLI 보고.\n` +
+  `  mat --help                                     이 도움말 출력\n` +
+  `  mat --version                                  버전 출력\n`;
 
 /**
  * Exit code 규약:
- *   0  성공 (자식 0 종료 + restore 성공)
- *   1  예상치 못한 에러 (spawn 실패, 알 수 없는 throw)
+ *   0  성공 (자식 0 종료 + restore 성공 / freshness 모두 fresh·rotated)
+ *   1  예상치 못한 에러 또는 freshness stale 감지 (사용자 액션 필요)
  *   2  사용법/검증 실패 (UsageError, argv 파싱 실패)
- *   74 restore 실패 (자식은 끝났지만 활성 프로필 원복 불가 — 자동화가 감지 가능)
+ *   74 restore 실패 또는 freshness 내부 검사 실패 (자동화가 감지 가능)
  *   75 다른 mat exec 가 lock 보유 중 (LockHeldError, 재시도 가능)
  *   128+N 자식이 시그널 N 으로 종료 → 동일 시그널 self-raise
  *   <child code>  자식 non-zero exit 그대로 전파
+ *
+ * `mat freshness` 의 exit 1 (stale) 은 의도된 design — `mat freshness && deploy.sh`
+ * 같이 chain 시 stale 감지로 자동 차단. 사용자가 mat TUI 로 swap/capture 후 재실행.
  */
 const EXIT_RESTORE_FAILED = 74;
+const EXIT_FRESHNESS_INSPECT_FAILED = 74;
+const EXIT_STALE_DETECTED = 1;
 
 main().catch((err) => {
   process.stderr.write(`mat: ${describeError(err)}\n`);
@@ -46,6 +63,8 @@ main().catch((err) => {
 async function main(): Promise<void> {
   // v0.1 (~/.multi-sub-terminal) → v0.2 (~/.multi-account-tool) 일회성 데이터 마이그레이션.
   migrateLegacyDataDir();
+  // OAuth refresh rotation 인지용 freshness adapter (Codex/Gemini/OpenCode) 등록.
+  registerAllBuiltinAdapters();
 
   const args = process.argv.slice(2);
   const [first, ...rest] = args;
@@ -64,6 +83,10 @@ async function main(): Promise<void> {
   }
   if (first === 'exec') {
     await handleExec(rest);
+    return;
+  }
+  if (first === 'freshness') {
+    await handleFreshness(rest);
     return;
   }
 
@@ -122,6 +145,131 @@ async function handleExec(rest: string[]): Promise<void> {
     process.exit(code);
   }
   process.exit(restoreError ? EXIT_RESTORE_FAILED : (code ?? 1));
+}
+
+/**
+ * `mat freshness [<cli>] [--profile <name>] [--json]` 핸들러.
+ *
+ * cli 미지정 시 모든 builtin + plugin CLI 의 active 프로필을 보고 (active 없는 cli skip).
+ * cli 지정 시 active 부재면 사용자 에러 (exit 2).
+ * --profile 로 active 와 다른 프로필 강제 가능.
+ * --json 으로 stdout JSON 출력 (기본은 사람-친화 표).
+ */
+async function handleFreshness(rest: string[]): Promise<void> {
+  const parsed = parseFreshnessArgs(rest);
+  const targets = await resolveFreshnessTargets(parsed);
+  const reports: FreshnessReport[] = [];
+  for (const { cliId, profileName } of targets) {
+    try {
+      reports.push(await inspectLiveFreshness(cliId, profileName));
+    } catch (err) {
+      process.stderr.write(`mat freshness ${cliId}: ${describeError(err)}\n`);
+      // "알 수 없는 CLI" 는 사용자 입력 에러 → exit 2 (usage). 그 외는 내부 실패 (74).
+      const isUsageError = err instanceof Error && /알 수 없는 CLI/.test(err.message);
+      process.exit(isUsageError ? 2 : EXIT_FRESHNESS_INSPECT_FAILED);
+    }
+  }
+  if (parsed.asJson) {
+    process.stdout.write(`${JSON.stringify(reports, null, 2)}\n`);
+  } else {
+    process.stdout.write(formatFreshnessTable(reports));
+  }
+  process.exit(hasStale(reports) ? EXIT_STALE_DETECTED : 0);
+}
+
+interface FreshnessArgs {
+  cliId?: string;
+  profileOverride?: string;
+  asJson: boolean;
+}
+
+function parseFreshnessArgs(rest: string[]): FreshnessArgs {
+  const out: FreshnessArgs = { asJson: false };
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === '--json') {
+      out.asJson = true;
+      continue;
+    }
+    if (a === '--profile') {
+      const value = rest[++i];
+      if (value == null) {
+        process.stderr.write(`mat freshness: --profile 에 값이 필요합니다.\n`);
+        process.exit(2);
+      }
+      out.profileOverride = value;
+      continue;
+    }
+    if (a.startsWith('--')) {
+      process.stderr.write(`mat freshness: 알 수 없는 옵션: ${a}\n`);
+      process.exit(2);
+    }
+    if (out.cliId == null) {
+      out.cliId = a;
+      continue;
+    }
+    process.stderr.write(`mat freshness: 인자 과다 (예상 1 cli, 실제 2+): ${a}\n`);
+    process.exit(2);
+  }
+  return out;
+}
+
+async function resolveFreshnessTargets(
+  args: FreshnessArgs
+): Promise<{ cliId: string; profileName: string }[]> {
+  const cliIds = args.cliId != null ? [args.cliId] : getAllCliDefs().map((c) => c.id);
+  const targets: { cliId: string; profileName: string }[] = [];
+  for (const cliId of cliIds) {
+    const profileName = args.profileOverride ?? (await getActiveProfile(cliId));
+    if (profileName == null) {
+      if (args.cliId != null) {
+        process.stderr.write(
+          `mat freshness ${cliId}: active profile 미설정. --profile <name> 으로 지정하세요.\n`
+        );
+        process.exit(2);
+      }
+      continue;
+    }
+    targets.push({ cliId, profileName });
+  }
+  return targets;
+}
+
+function hasStale(reports: FreshnessReport[]): boolean {
+  return reports.some((r) => r.sources.some((s) => s.result.kind === 'stale'));
+}
+
+/** 4 컬럼 표 (사람-친화). 빈 reports / 빈 sources 모두 안내 한 줄. */
+function formatFreshnessTable(reports: FreshnessReport[]): string {
+  if (reports.length === 0) {
+    return '(보고할 CLI 없음 — active profile 미설정. mat TUI 로 capture 후 재실행하세요.)\n';
+  }
+  const rows: string[][] = [['CLI', 'Profile', 'Source', 'Status', 'Detail']];
+  for (const report of reports) {
+    for (const src of report.sources) {
+      rows.push([
+        report.cliId,
+        report.profileName,
+        src.saveAs,
+        formatStatus(src.result),
+        src.result.detail ?? ''
+      ]);
+    }
+  }
+  // 모든 report 의 sources 가 비어있어도 (이론상 — 모든 builtin 은 sources 1+) header
+  // 만 출력되지 않도록 가드. 한 줄 안내 출력.
+  if (rows.length === 1) {
+    return '(모든 CLI 의 source 정의가 비어있음 — cli-defs 점검 필요)\n';
+  }
+  const widths = rows[0].map((_, col) => Math.max(...rows.map((row) => row[col].length)));
+  return `${rows.map((row) => row.map((cell, idx) => cell.padEnd(widths[idx])).join('  ')).join('\n')}\n`;
+}
+
+function formatStatus(result: CompareResult): string {
+  const base = result.kind === 'rotated' && result.subtype
+    ? `${result.kind}(${result.subtype})`
+    : result.kind;
+  return result.confidence === 'low' ? `${base} [low conf]` : base;
 }
 
 async function printVersion(): Promise<void> {

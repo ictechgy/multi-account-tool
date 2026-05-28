@@ -38,6 +38,23 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | OpenCode | `~/.local/share/opencode/auth.json` (OS-agnostic, XDG standard) | File swap |
 | Goose | macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain; Linux needs `GOOSE_DISABLE_KEYRING=1` — see below) |
 
+### OAuth Rotation Safety Matrix
+
+Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refresh token may only be used once, after which the provider invalidates it. If `mat` restores an older snapshot of such a token, the provider rejects it as "already used" and the user is forced to re-login. The table below summarises which `mat`-supported CLIs are affected.
+
+| CLI | Auth type | Rotation risk | `mat` safe modes |
+| --- | --- | --- | --- |
+| Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 High — confirmed token revocation after stale restore | `mat freshness codex` before swap; `mat exec` for one-shot sessions |
+| Gemini / Antigravity | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 High | Same as Codex |
+| OpenCode | OAuth per provider (`provider.refresh`, `provider.accountId`) | 🔴 High | Same as Codex |
+| Claude Code | macOS Keychain (Anthropic OAuth) | 🟠 Medium-High (rotation suspected) | `mat exec`, and `mat freshness claude` (byte-diff fallback until Claude adapter lands) |
+| Goose | provider-routed (OAuth or API key) | 🟠 Medium | `mat freshness goose` reports the worst per-source result |
+| Aider / Kimi / Qwen / Crush | Static API key | 🟢 None | Standard swap is sufficient |
+
+Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live credentials versus the active profile before you swap. Exit code 0 means safe, exit code 1 means `mat` detected `stale` (identity changed or profile missing). For long-running sessions prefer `mat exec`, which automatically restores the previous profile after the command finishes — note that a `SIGKILL` to `mat` itself bypasses restore (see Security section).
+
+> **Current limitation (PR-F\* only):** the TUI swap path reports freshness in `SwitchResult.preSwapLiveFreshness` but does **not yet show an interactive dialog**. Until PR-G lands, you should run `mat freshness <cli>` manually before swapping when the CLI is in the rotation-risk tier. Goose/Claude do not yet have a dedicated adapter — they fall back to byte-diff with `confidence: low` (PR-H follow-up). `mat exec` does not re-capture the live credentials on exit, so a long-running command that triggers a rotation can still lose the new token (PR-I\* follow-up).
+
 ### Switch flow (lossless)
 
 1. The current live credentials are snapshotted into the currently active profile (automatic backup).

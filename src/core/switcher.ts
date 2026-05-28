@@ -14,6 +14,7 @@
 
 import { findCliDef } from './cli-defs.js';
 import { getActiveProfile, setActiveProfile } from './config.js';
+import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
 import {
   createProfile,
   profileExists,
@@ -144,6 +145,17 @@ export interface SwitchResult {
   fromSnapshot?: SnapshotResult;
   /** 새 프로필로의 복원 결과 */
   restore: RestoreResult;
+  /**
+   * swap 직전 활성 프로필의 라이브 vs 저장본 비교 결과 (info-only).
+   *
+   * 활성 프로필이 있고 toProfile 과 다를 때만 보고된다. mat 자체는 본 정보를
+   * 동작에 사용하지 않음 — TUI/CLI 호출자가 OAuth refresh rotation 등으로 인한
+   * stale 상태를 사용자에게 안내하기 위한 surface. dialog/액션은 후속 PR.
+   *
+   * inspect 가 예외를 던지면 swap 자체를 막지 않고 본 필드만 누락된다 (swap 의
+   * atomic 보장은 유지). 호출자가 freshness 부재를 "정보 없음" 으로 해석.
+   */
+  preSwapLiveFreshness?: FreshnessReport;
 }
 
 /**
@@ -151,6 +163,9 @@ export interface SwitchResult {
  *  1) 기존 활성 프로필이 있다면 라이브 → 그 프로필로 캡처
  *  2) 대상 프로필을 라이브 위치로 복원 (부분 실패 롤백 포함)
  *  3) 활성 포인터 업데이트
+ *
+ * 활성 프로필이 있고 toProfile 과 다를 때 swap 직전 freshness inspect 결과를
+ * 보고 (info-only — PR-F*). inspect 실패는 swap 을 중단시키지 않는다.
  */
 export async function switchProfile(
   cliId: string,
@@ -158,15 +173,35 @@ export async function switchProfile(
 ): Promise<SwitchResult> {
   const current = await getActiveProfile(cliId);
   let fromSnapshot: SnapshotResult | undefined;
+  let preSwapLiveFreshness: FreshnessReport | undefined;
+  const shouldSnapshot =
+    current != null && current !== toProfile && (await profileExists(cliId, current));
   // 활성 포인터가 가리키는 프로필 디렉토리가 외부에서 삭제됐을 경우 좀비 부활 방지:
   // snapshotLiveToProfile 의 auto-create 를 건너뛰고 restore 만 진행한다.
-  if (current && current !== toProfile && (await profileExists(cliId, current))) {
+  if (shouldSnapshot && current != null) {
+    // freshness inspect 와 직후 snapshot 은 라이브를 별도 2회 read. 두 read 사이에
+    // CLI 가 rotation 하면 보고는 시점 t1 의 상태, snapshot 은 t2 의 갱신본 ⇒
+    // 결과 불일치 가능. info-only PR-F* 의 의미상 race 는 알려진 한계 — 정합성 보장은
+    // PR-I* 의 LockBody 일관화 후 보강 예정 (plan Scenario 4).
+    preSwapLiveFreshness = await safeInspectFreshness(cliId, current);
     fromSnapshot = await snapshotLiveToProfile(cliId, current);
   }
   const restore = await restoreProfileToLive(cliId, toProfile);
   await setActiveProfile(cliId, toProfile);
   await touchProfile(cliId, toProfile);
-  return { fromSnapshot, restore };
+  return { fromSnapshot, restore, preSwapLiveFreshness };
+}
+
+/** freshness inspect 의 예외는 swap 을 막지 않도록 swallow — 호출자가 absence 로 해석. */
+async function safeInspectFreshness(
+  cliId: string,
+  profileName: string
+): Promise<FreshnessReport | undefined> {
+  try {
+    return await inspectLiveFreshness(cliId, profileName);
+  } catch {
+    return undefined;
+  }
 }
 
 function mustFindCli(cliId: string): CliDef {

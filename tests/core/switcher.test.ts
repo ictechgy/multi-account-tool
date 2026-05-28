@@ -399,4 +399,66 @@ describe('switcher', () => {
       await expect(switchProfile('unknown-cli', 'p')).rejects.toThrow(/알 수 없는 CLI/);
     });
   });
+
+  /**
+   * PR-F* preSwapLiveFreshness — swap 직전 freshness 보고가 SwitchResult 에 포함된다.
+   *
+   * 정책 invariant:
+   *  - active 가 있고 toProfile 과 다르면 inspectLiveFreshness 결과 포함
+   *  - active 미설정 시 미포함
+   *  - active === toProfile (no-op 흐름) 시 미포함
+   *  - inspect 예외는 swallow — swap 자체는 진행, preSwapLiveFreshness 만 absent
+   */
+  describe('switchProfile — preSwapLiveFreshness (PR-F*)', () => {
+    beforeEach(async () => {
+      await setupProfile('codex', 'work');
+      await setupProfile('codex', 'home');
+      await writeProfileFile('codex', 'home', 'auth.json', 'home-stored');
+      mockWriteSource.mockResolvedValue(undefined);
+    });
+
+    it('active 있음 + toProfile 다름 → preSwapLiveFreshness 보고', async () => {
+      await setActiveProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'work-stored');
+      mockReadSource.mockResolvedValue('work-live-changed');  // live ≠ stored
+
+      const result = await switchProfile('codex', 'home');
+      expect(result.preSwapLiveFreshness).toBeDefined();
+      expect(result.preSwapLiveFreshness?.cliId).toBe('codex');
+      expect(result.preSwapLiveFreshness?.profileName).toBe('work');
+      expect(result.preSwapLiveFreshness?.sources[0].saveAs).toBe('auth.json');
+    });
+
+    it('active 미설정 → preSwapLiveFreshness 미포함 (보고 불필요)', async () => {
+      // active 미설정 상태에서 home 으로 swap
+      mockReadSource.mockResolvedValue('any');
+      const result = await switchProfile('codex', 'home');
+      expect(result.preSwapLiveFreshness).toBeUndefined();
+    });
+
+    it('active === toProfile (no-op) → preSwapLiveFreshness 미포함', async () => {
+      await setActiveProfile('codex', 'home');
+      mockReadSource.mockResolvedValue('live');
+      const result = await switchProfile('codex', 'home');
+      expect(result.preSwapLiveFreshness).toBeUndefined();
+    });
+
+    it('inspectFreshness 예외 swallow → swap 정상 진행, freshness 만 absent', async () => {
+      await setActiveProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'work-stored');
+      // readSource 첫 호출 (snapshot — Snapshot 단계는 stored 캡처 위해 또 호출됨)
+      // mockImplementationOnce 로 첫 호출만 throw, 그 뒤는 success
+      mockReadSource
+        .mockRejectedValueOnce(new Error('freshness read boom'))
+        .mockResolvedValue('captured');
+
+      // snapshot 단계가 readSource 를 또 부르므로 throw 가 snapshot 으로 전파될 위험.
+      // safeInspectFreshness 는 readSource 의 첫 호출에서 잡혀야 한다 — swap 자체는 정상 동작.
+      const result = await switchProfile('codex', 'home');
+      // freshness 는 absent (예외 swallow)
+      expect(result.preSwapLiveFreshness).toBeUndefined();
+      // restore 는 정상 진행 — active 가 home 으로 갱신
+      expect(await getActiveProfile('codex')).toBe('home');
+    });
+  });
 });
