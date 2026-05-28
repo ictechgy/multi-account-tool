@@ -120,4 +120,11 @@ describe('opencodeAdapter — 미지원 saveAs / parse 실패', () => {
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
   });
+
+  it('JSON array → rotated both (low) — _shared.parseJsonObject array reject 회귀 가드', () => {
+    const r = opencodeAdapter.compare(SAVE_AS, '[]', '{}');
+    expect(r.kind).toBe('rotated');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/parse 실패/);
+  });
 });

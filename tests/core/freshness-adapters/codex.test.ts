@@ -69,6 +69,15 @@ describe('codexAdapter — identity-aware 비교', () => {
     expect(r.detail).toMatch(/parse 실패/);
   });
 
+  it('JSON array (object 아님) → rotated both (low) — parseJsonObject 의 array reject 회귀 가드', () => {
+    // 옛 local parse 는 typeof === 'object' 만 검사해 array 가 통과됐다.
+    // _shared.parseJsonObject 로 마이그레이션 후 array 는 null 반환 → low conf.
+    const r = codexAdapter.compare(SAVE_AS, '[]', '{"tokens":{}}');
+    expect(r.kind).toBe('rotated');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/parse 실패/);
+  });
+
   it('미지원 saveAs → low confidence fallback (다른 source 보호)', () => {
     const r = codexAdapter.compare('unknown.json', '{}', '{}');
     expect(r.confidence).toBe('low');

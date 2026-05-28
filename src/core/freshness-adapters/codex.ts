@@ -15,6 +15,7 @@
  */
 
 import type { CompareResult, SourceAdapter } from '../freshness.js';
+import { parseJsonObject } from './_shared.js';
 
 interface CodexAuth {
   tokens?: {
@@ -26,22 +27,12 @@ interface CodexAuth {
   OPENAI_API_KEY?: string | null;
 }
 
-function parse(raw: string): CodexAuth | null {
-  try {
-    const v: unknown = JSON.parse(raw);
-    if (v === null || typeof v !== 'object') return null;
-    return v as CodexAuth;
-  } catch {
-    return null;
-  }
-}
-
 function compareCodex(stored: string, live: string): CompareResult {
   if (stored === live) {
     return { kind: 'fresh', confidence: 'high' };
   }
-  const s = parse(stored);
-  const l = parse(live);
+  const s = parseJsonObject<CodexAuth>(stored);
+  const l = parseJsonObject<CodexAuth>(live);
   if (!s || !l) {
     return {
       kind: 'rotated',
