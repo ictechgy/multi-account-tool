@@ -119,11 +119,16 @@ interface YamlParseResult {
  *   외이므로 skip — 향후 nested 지원 follow-up.
  * - DANGEROUS_KEYS (`__proto__`/`constructor`/`prototype`) 무조건 skip + 결과 객체는
  *   `Object.create(null)` (M3 fix — freshness.ts DANGEROUS_KEYS 와 대칭).
- * - yaml lib 의 strict 옵션 미사용 (default lenient) — 옛 flat parser 의 관용도
- *   유지하기 위함. 단 spec 위반 (invalid escape 등) 은 throw → catch 로 surface.
+ * - yaml v2 의 default 는 YAML 1.2 strict parse — spec 위반 (invalid escape /
+ *   닫히지 않은 quote / malformed indentation 등) 은 throw 발생 → catch 로 surface
+ *   해 hasParseError 로 표시. lenient 보장 안 함 (옛 flat parser 가 silent skip
+ *   하던 케이스를 yaml lib 가 throw 할 가능성 있음).
  * - **`maxAliasCount: 100`** (yaml lib default 와 동일하나 explicit 으로 lock-in) —
  *   billion laughs / YAML bomb (anchor/alias exponential expansion) 방어. 향후
  *   yaml lib default 변경에 대비.
+ * - **`logLevel: 'error'`** — yaml lib 의 warning 을 stderr 로 출력하지 않도록.
+ *   compare() 가 순수한 CompareResult 반환만 하고 side effect 차단 (test/CI 노이즈
+ *   감소). PR-M Codex-2 iter 1 MED fix.
  * - block scalar (`|`/`>`) / quoted / anchor / alias 는 yaml lib 가 정식 해석 →
  *   resolved string value 가 entries 에 그대로 들어감 (옛 parser 의 confidence 강등 제거).
  */
@@ -131,7 +136,7 @@ function parseGooseYaml(raw: string): YamlParseResult {
   const entries = Object.create(null) as Record<string, string>;
   let parsed: unknown;
   try {
-    parsed = parseYaml(raw, { maxAliasCount: 100 });
+    parsed = parseYaml(raw, { maxAliasCount: 100, logLevel: 'error' });
   } catch {
     return { entries, hasParseError: true };
   }

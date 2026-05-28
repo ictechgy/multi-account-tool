@@ -2,16 +2,21 @@
  * Goose adapter 단위 테스트 — `goose-keyring.json` (macOS keychain wrapper) +
  * `goose-secrets.yaml` + `goose-config.yaml` 3-source 분기.
  *
- * 핵심 invariant (iter 1 quad-review fix 반영):
+ * 핵심 invariant (PR-H iter 1 quad-review + PR-M yaml lib 도입 fix 반영):
  *  - byte-identical → fresh (high)
  *  - YAML provider 키 set 변경 → stale (medium)
  *  - 키 set 동일 + 값 변경 → rotated value-only (medium)
  *  - 키 set+값 동일 + 외 필드 변경 → rotated meta-only (medium)
  *  - 매트릭스 추출 0/0 (empty whitelist) → low-conf rotated both (H1)
- *  - block scalar 감지 → confidence 강등 (H2)
+ *  - block scalar (`|`/`>`) 정식 parse — yaml lib v2 가 resolved string 으로 추출.
+ *    옛 flat parser 시절의 'block scalar 감지 → 강등' 동작은 PR-M 에서 제거됨 (H2 fix 의 후속).
+ *  - YAML parse 실패 (spec 위반) → low-conf 강등 (PR-M).
+ *  - block scalar chomping 차이 (`|` clip vs `|-` strip) 정규화 — trailing newline strip
+ *    으로 false-positive value-only 방지 (PR-M HIGH fix).
+ *  - numeric / boolean primitive 도 `String()` coerce 후 매트릭스 진입 (PR-M MED fix).
  *  - config.yaml routing 키 (GOOSE_PROVIDER__TYPE/MODEL) 변경 → value-only/stale (M1)
  *  - _TOKEN$ generic 제거 — DEBUG_TOKEN 등 misclassify 안 됨 (M2)
- *  - parseFlatYaml `__proto__`/`constructor`/`prototype` 키 skip (M3)
+ *  - parseGooseYaml `__proto__`/`constructor`/`prototype` 키 skip (M3)
  *  - keyring wrapper account XOR → stale low (H4)
  *  - keyring wrapper parse 실패/value 부재 → rotated both low
  *  - 미지원 saveAs → low confidence fallback
