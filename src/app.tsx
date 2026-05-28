@@ -21,6 +21,7 @@ import React, { useEffect, useReducer, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
 import { promises as fs } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { findCliDef, getAllCliDefs } from './core/cli-defs.js';
 import {
@@ -820,15 +821,18 @@ async function appendAppLogBestEffort(message: string): Promise<void> {
     await fs.appendFile(appLogPath(), line, { mode: 0o600 });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      // dataDir 미생성 케이스 — mkdir 후 1회 재시도.
+      // dataDir 미생성 케이스 — mkdir 후 1회 재시도. node:path 의 dirname 으로
+      // cross-platform 디렉토리 추출 (옛 슬래시-only slice 는 Windows 부적합 —
+      // 현재 mat 는 macOS/Linux 전용이나 cli-defs 의 join() 과 일관).
       try {
         const path = appLogPath();
-        const dir = path.slice(0, path.lastIndexOf('/'));
-        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+        await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
         await fs.appendFile(path, line, { mode: 0o600 });
         return;
       } catch (retryErr) {
-        process.stderr.write(`[mat] appLog 쓰기 실패: ${errorMessage(retryErr)}\n`);
+        process.stderr.write(
+          `[mat] appLog 쓰기 실패 (mkdir retry): ${errorMessage(retryErr)}\n`
+        );
         return;
       }
     }
