@@ -17,6 +17,7 @@
     "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

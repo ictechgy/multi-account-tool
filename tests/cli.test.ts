@@ -44,8 +44,9 @@ describe('mat freshness — exit code 정책', () => {
   });
 
   it('PR-Q: --check-only 면 stale 감지해도 exit 0 (read-only 모니터링 케이스)', async () => {
-    // 프로필 저장본만 존재하고 라이브 부재 → stale 분류.
-    // 일반: exit 1, --check-only: exit 0.
+    // 프로필 저장본만 존재하고 라이브 부재 → freshness.ts:355 의 `live==null` 단축
+    // 분기로 stale 분류 (adapter.compare 미경유). 향후 setup 변경 시 adapter 의
+    // identity-diff stale 로 의도 바꾸려면 라이브에 다른 account_id 의 auth.json 도 작성 필요.
     const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');
     await fs.mkdir(profileDir, { recursive: true });
     await fs.writeFile(join(profileDir, 'auth.json'), '{"v":1}');
@@ -98,8 +99,10 @@ describe('mat freshness — exit code 정책', () => {
       tmp.home
     );
     expect(result.code).toBe(0);
-    // JSON parse 가능 + stale 보고 포함.
+    // JSON parse 가능 + 길이 보장 후 stale 보고 포함 (인덱싱 TypeError 방어).
     const reports = JSON.parse(result.stdout) as Array<{ sources: Array<{ result: { kind: string } }> }>;
+    expect(reports).toHaveLength(1);
+    expect(reports[0].sources).toHaveLength(1);
     expect(reports[0].sources[0].result.kind).toBe('stale');
   });
 });
