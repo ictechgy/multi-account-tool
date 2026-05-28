@@ -85,6 +85,13 @@ describe('geminiAdapter — google_accounts.json', () => {
     const raw = JSON.stringify({ active: 'a@example.com' });
     expect(geminiAdapter.compare(SAVE_AS, raw, raw)).toEqual({ kind: 'fresh', confidence: 'high' });
   });
+
+  it('JSON array → rotated both (low) — _shared.parseJsonObject array reject 대칭 가드', () => {
+    const r = geminiAdapter.compare(SAVE_AS, '[]', '{"active":"a@example.com"}');
+    expect(r.kind).toBe('rotated');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/parse 실패/);
+  });
 });
 
 describe('geminiAdapter — 미지원 saveAs', () => {
