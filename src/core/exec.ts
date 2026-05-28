@@ -68,10 +68,14 @@ const FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
  * 시 stderr 안내 후 swallow → restore 는 정상 진행.
  *
  * 환경변수 `MAT_EXEC_RECAPTURE_TIMEOUT_MS` 로 override 가능 (양의 유한수만 허용).
+ *
+ * lazy 평가 (PR-N): module-load 시점 1회 평가 → 호출 시점 평가로 전환.
+ *  - test 가 process.env 를 dynamic 으로 set/reset 한 뒤 mat exec 호출 시 env 즉시 반영
+ *  - daemon/TUI 가 mat exec 를 여러 번 spawn 할 때 사용자 env 변경이 다음 exec 부터 적용
+ *  - module-load 시점에 env 가 미설정이어서 default 로 고정되던 회귀 차단
+ *  (PR-I* quad-review iter 2 Claude-3 LOW finding)
  */
-const RECAPTURE_TIMEOUT_MS = parseRecaptureTimeoutMs();
-
-function parseRecaptureTimeoutMs(): number {
+function getRecaptureTimeoutMs(): number {
   const raw = process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
   if (!raw) return 10_000;
   const n = Number(raw);
@@ -262,7 +266,7 @@ async function recaptureAndRestoreBestEffort(
  *
  * timeout 도입 (quad-review iter 1 Strong MED): `snapshotLiveToProfile` 가 keychain
  * prompt / NFS stall 등으로 무한 대기하면 finally 전체가 막혀 mat 이 종료되지 않는
- * 문제. {@link RECAPTURE_TIMEOUT_MS} 으로 bound.
+ * 문제. {@link getRecaptureTimeoutMs} 으로 bound (호출 시점 env 평가).
  *
  * 사용자 후속 action 안내 (quad-review iter 1 Split LOW): restore 실패 / stale
  * recovery 안내와 일관되게 `mat freshness <cli>` 권장을 stderr 에 명시.
@@ -271,7 +275,7 @@ async function recaptureLiveToTarget(cliId: string, swapTarget: string): Promise
   try {
     await withTimeout(
       snapshotLiveToProfile(cliId, swapTarget),
-      RECAPTURE_TIMEOUT_MS,
+      getRecaptureTimeoutMs(),
       'recapture(snapshotLiveToProfile)'
     );
   } catch (err) {

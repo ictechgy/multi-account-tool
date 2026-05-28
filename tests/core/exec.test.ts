@@ -580,6 +580,40 @@ describe('runExec', () => {
     }
   });
 
+  it('PR-N: MAT_EXEC_RECAPTURE_TIMEOUT_MS 의 lazy 평가 — module-load 후 set 한 env 도 즉시 반영', async () => {
+    // 옛 코드: const RECAPTURE_TIMEOUT_MS = parseRecaptureTimeoutMs() 가 module load 시점
+    // 1회 평가 → test setup 이 env 변경해도 무효, 항상 default 10s 사용.
+    // PR-N: getRecaptureTimeoutMs() 호출 시점 평가 → env 변경 즉시 반영. daemon/TUI
+    // 통합 시 다음 mat exec 부터 새 timeout 적용.
+    vi.useFakeTimers();
+    const originalEnv = process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
+    process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = '500';
+    try {
+      mockSnapshot.mockImplementationOnce(() => new Promise(() => { /* never settle */ }));
+      mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      const runPromise = runExec({
+        cliId: 'codex', profileName: 'work', command: 'sleep', args: []
+      });
+      // override 한 500ms 만 지나도 timeout reject 가 발생해야 함 (옛 코드면 10s 까지 안 됨).
+      await vi.advanceTimersByTimeAsync(600);
+      const result = await runPromise;
+
+      expect(result.code).toBe(0);
+      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(stderr).toMatch(/timeout after 500ms/);
+      stderrSpy.mockRestore();
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
+      } else {
+        process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = originalEnv;
+      }
+      vi.useRealTimers();
+    }
+  });
+
   it('PR-I*: spawn error 후에도 재캡처 + restore 모두 시도됨 (rotation 손실 방지)', async () => {
     // spawn error (예: 자식 ENOENT) 라도 swap 은 이미 완료된 상태. 라이브에 cmd 가 일부 토큰을
     // 갱신했을 수 있으므로 재캡처는 시도해야 함. 그 후 restore 도 진행.
