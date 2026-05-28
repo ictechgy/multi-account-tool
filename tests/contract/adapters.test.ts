@@ -49,6 +49,9 @@ const FIXTURE_ROOT = join(__dirname, '../fixtures/oauth');
 /**
  * 모든 fixture 디렉토리 (README.md 제외) 의 *.json 을 로드. 비어 있는 디렉토리는
  * skip — 각 cli 별 fixture 가 누락돼도 다른 cli 검증은 계속 진행.
+ *
+ * 에러 surface: JSON parse 실패 / 필드 누락 시 fixture path 를 message 에 포함 →
+ * 신규 fixture 작성자가 어느 파일의 문제인지 즉시 식별 가능 (PR-T Codex iter 1 HIGH fix).
  */
 function loadAllFixtures(): LoadedFixture[] {
   const out: LoadedFixture[] = [];
@@ -58,12 +61,44 @@ function loadAllFixtures(): LoadedFixture[] {
     const cliDir = join(FIXTURE_ROOT, entry.name);
     const files = readdirSync(cliDir).filter((f) => f.endsWith('.json'));
     for (const file of files) {
+      const path = `${entry.name}/${file}`;
       const raw = readFileSync(join(cliDir, file), 'utf8');
-      const fixture = JSON.parse(raw) as FixtureCase;
-      out.push({ ...fixture, file: `${entry.name}/${file}` });
+      let fixture: FixtureCase;
+      try {
+        fixture = JSON.parse(raw) as FixtureCase;
+      } catch (err) {
+        throw new Error(
+          `fixture ${path}: JSON parse 실패 — ${(err as Error).message}`
+        );
+      }
+      assertFixtureShape(fixture, path);
+      out.push({ ...fixture, file: path });
     }
   }
   return out;
+}
+
+/**
+ * fixture 스키마 invariant 검증 (PR-T Codex iter 1 MED fix):
+ *  - kind 항상 필수
+ *  - kind === 'rotated' 이면 subtype 필수 (분류 강도 변경 가드)
+ *  - rotated/stale 이면 confidence 필수 (user-visible 안전성)
+ */
+function assertFixtureShape(fixture: FixtureCase, path: string): void {
+  if (!fixture.expected || !fixture.expected.kind) {
+    throw new Error(`fixture ${path}: expected.kind 필수`);
+  }
+  if (fixture.expected.kind === 'rotated' && !fixture.expected.subtype) {
+    throw new Error(`fixture ${path}: kind='rotated' 일 때 expected.subtype 필수`);
+  }
+  if (
+    (fixture.expected.kind === 'rotated' || fixture.expected.kind === 'stale') &&
+    !fixture.expected.confidence
+  ) {
+    throw new Error(
+      `fixture ${path}: kind='${fixture.expected.kind}' 일 때 expected.confidence 필수`
+    );
+  }
 }
 
 describe('adapter contract — fixture 기반 회귀 가드 (PR-T)', () => {

@@ -3,7 +3,7 @@
 각 freshness adapter (codex / gemini / opencode / claude / goose) 의 분류 행동을
 **고정된 입력 → 기대 출력** 으로 contract test 하기 위한 fixture 모음.
 
-## 파일 형식
+## 파일 형식 (v1 — single-source)
 
 각 fixture 는 JSON:
 
@@ -22,9 +22,36 @@
 }
 ```
 
-- `stored` / `live` 는 **문자열** (adapter.compare 가 raw 받기 때문). YAML 도 단순 문자열.
-- `expected.subtype` / `expected.confidence` 는 옵션 — 명시한 필드만 검증.
-- `expected.kind` 는 필수.
+필수 필드 (PR-T Codex iter 1 MED fix):
+- `name`, `cli`, `saveAs`, `stored`, `live`, `expected.kind` **필수**.
+- `kind === 'rotated'` 이면 `expected.subtype` **필수** (분류 강도 변경 회귀 가드).
+- `kind === 'rotated'` 또는 `'stale'` 이면 `expected.confidence` **필수** (user-visible 안전성 판정 — high/medium 이 자동 swap 허용 vs low 가 dialog 차단).
+- `kind === 'fresh'` 이면 `confidence` 는 옵션 (기본 high 가정).
+
+검증 invariant 는 `tests/contract/adapters.test.ts` 의 `assertFixtureShape` 가 강제 — 잘못된 fixture 는 loader 단계에서 실패.
+
+### confidence 선택 가이드
+
+- `high`: adapter 가 identity 필드 (account_id / subscriptionType / keychain account) 로 명시 분류.
+- `medium`: identity 필드 부재거나 byte-diff 매트릭스 기반 (Goose flat YAML 매트릭스 등).
+- `low`: parse 실패 / 매트릭스 추출 0/0 / wrapper 손상 / fallback byte-diff.
+
+### v2 (예약) — multi-source aggregate fixture
+
+`inflight` 케이스 (multi-source CLI 의 한 source 만 갱신된 race) 는 현재 v1 schema 의 단일 (saveAs, stored, live) 로 표현 불가. PR-S (inflight cross-source aggregation) 에서 다음 형식 도입:
+
+```json
+{
+  "cli": "gemini",
+  "sources": [
+    { "saveAs": "oauth_creds.json", "stored": "...", "live": "..." },
+    { "saveAs": "google_accounts.json", "stored": "...", "live": "..." }
+  ],
+  "expected": { "kind": "inflight", "confidence": "medium" }
+}
+```
+
+`sources` 가 있으면 v2 (aggregate), 없으면 v1 (single-source) — loader 가 자동 분기.
 
 ## 마스킹 규칙
 
