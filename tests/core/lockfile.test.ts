@@ -534,6 +534,116 @@ describe('lockfile.acquireCliLock — PR-I* LockBody 확장', () => {
     }
   });
 
+  it('정책 B 정밀화 — execMode="exec" + previousActive 부재 (손상) → "손상된 흔적" 분기 stderr (옛 버전 분기 아님)', async () => {
+    // quad-review iter 1 Strong MED (Claude-1 + Codex-2 + Claude-2 합의):
+    // 신규 형식 lock 의 손상 케이스. execMode='exec' 로 신규 형식임은 확인되지만
+    // previousActive 가 누락 (호출자가 옵션 일부만 전달 또는 외부 손상). 옛 버전 분기로
+    // 잘못 안내되면 안 되고, 별도 "손상" 분기로 분류돼야 한다.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'work',
+        token: 'foreign-token',
+        execMode: 'exec',
+        // previousActive 의도적 누락
+        affectsCliIds: ['codex']
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'new');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(calls).toMatch(/mat exec lock 의 손상된 흔적/);
+      expect(calls).toMatch(/활성 정보가 누락되어/);
+      expect(calls).toMatch(/mat freshness codex/);
+      // 옛 버전 분기 / 신규 정상 분기 문구 둘 다 등장 금지.
+      expect(calls).not.toMatch(/이전 mat 버전의 exec lock/);
+      expect(calls).not.toMatch(/활성 프로필 '/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('정책 B 정밀화 — execMode="foreground" lock 의 stale 회수 시 "TUI/foreground" 분기 stderr', async () => {
+    // execMode='foreground' 는 향후 TUI 가 직접 lock 잡을 때 사용 예약된 모드. 본 PR 시점
+    // 호출자는 없지만 스키마상 별도 분기로 안내해 옛 버전 / exec 분기와 구분.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'work',
+        token: 'tui-token',
+        execMode: 'foreground'
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'new');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(calls).toMatch(/이전 mat TUI\/foreground 작업의 비정상 종료 흔적/);
+      expect(calls).toMatch(/mat freshness codex/);
+      expect(calls).not.toMatch(/mat exec lock/);
+      expect(calls).not.toMatch(/이전 mat 버전의 exec lock/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('stderr sanitize — info.json 의 control char / 매우 긴 문자열을 stderr 보간 전 strip + 200자 cap', async () => {
+    // quad-review iter 1 Strong LOW security (Codex-2 + Claude-2 합의): info.json 의
+    // raw string 이 ANSI escape / 매우 긴 입력이면 terminal escape injection 위험.
+    // trust boundary 가 self 라 LOW 지만 defense in depth.
+    //
+    // 본 케이스는 신규 lock 의 profile/previousActive 에 control char 와 200+자 입력을
+    // 주입해 stderr 출력 본문이 (1) control char 가 '?' 로 replace 되고 (2) 200자 cap
+    // 적용됨을 검증. validateProfileName 은 일반 호출에서 차단하지만, lock 파일이
+    // 외부 손상된 경우를 가정.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    const longProfile = 'A'.repeat(300);
+    const ansiPrev = '\x1b[31mEVIL\x1b[0m';
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: '2026-05-28T20:00:00Z',
+        profile: longProfile,
+        token: 'tok',
+        execMode: 'exec',
+        previousActive: ansiPrev
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'new');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      // ANSI ESC (\x1b) 가 stderr 본문에 그대로 노출되면 안 됨.
+      expect(calls).not.toMatch(/\x1b\[/);
+      // long profile 은 200자 cap 후에도 'A' 가 등장하나 300자 그대로는 아님.
+      expect(calls).toMatch(/AAAAAA/);
+      // ANSI 의 control char (\x1b) 는 '?' 로 replace 됐어야.
+      expect(calls).toMatch(/\?\[31mEVIL\?\[0m/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
   it('readInfo: affectsCliIds 가 비-문자열 원소 포함 → undefined 로 normalize (손상 간주)', async () => {
     // pickStringArray 의 every typeof 'string' 가드 회귀 가드. 손상된 값은 LockBody 자체는 valid
     // 하지만 (execMode/previousActive 도 모두 부재) 신규 옵션 필드만 normalize 되어야.

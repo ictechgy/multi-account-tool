@@ -199,32 +199,75 @@ async function handleConflict(lockDir: string, cliId: string): Promise<void> {
 /**
  * stale lock 회수 시 사용자에게 라이브 자격증명 상태 안내 (정책 B — warn + drop).
  *
- * - 신규 lock (`previousActive` 보유): mat exec 가 ${previousActive} 에서 swap 한
- *   ${profile} 의 자격증명이 라이브에 남아 있을 수 있음. mat freshness 권장.
- * - 옛 lock (`previousActive` 부재, pre-PR-I*): 어떤 활성에서 swap 했는지 정보 없음.
- *   일반 안내만 표시 후 폐기.
+ * 분기 (quad-review iter 1 Strong MED — execMode 기반 정밀화):
+ * - `execMode='exec'` + `previousActive` 보유 → 신규 mat exec 의 비정상 종료. 안내문에
+ *   "라이브 = swap-target / 의도된 활성 = previousActive" surface.
+ * - `execMode='exec'` + `previousActive` 부재 → 신규 exec lock 의 손상 (필드 누락 또는
+ *   readInfo normalize 결과). 활성 정보 없이 swap-target 만 안내.
+ * - `execMode='foreground'` → 향후 TUI 가 잡은 lock 의 비정상 종료. 현재 호출자 없음
+ *   이지만 schema 명시상 분기 (forward-compat).
+ * - `execMode` 부재 (옛 mat 버전) → 모든 신규 필드 부재. 일반 안내.
  *
- * stderr 만 사용 — TUI 호출자가 stale recovery 를 알아채야 alt-buffer 와 충돌 없이
- * 안내 가능. mat exec 호출자도 동일 stderr 로 흐름이 일관.
+ * stderr 출력 전 모든 lock-derived string 은 {@link sanitizeForStderr} 로 control char
+ * strip + length cap (quad-review iter 1 Strong LOW security — terminal escape injection
+ * 방어). trust boundary 가 self 라 LOW 지만 defense in depth.
  */
 function warnStaleLockRecovery(cliId: string, info: LockBody): void {
-  const swappedTo = info.profile || '<unknown>';
-  if (info.previousActive) {
+  const safeCli = sanitizeForStderr(cliId);
+  const swappedTo = sanitizeForStderr(info.profile || '<unknown>');
+  const startedAt = sanitizeForStderr(info.startedAt || '<unknown>');
+
+  if (info.execMode === 'exec' && info.previousActive) {
+    const safePrev = sanitizeForStderr(info.previousActive);
     process.stderr.write(
       `[mat] 이전 mat exec 가 비정상 종료된 흔적을 발견했습니다 ` +
-      `(cli=${cliId}, pid=${info.pid}, since=${info.startedAt}).\n` +
-      `[mat] 라이브 자격증명이 활성 프로필 '${info.previousActive}' 이 아닌 ` +
+      `(cli=${safeCli}, pid=${info.pid}, since=${startedAt}).\n` +
+      `[mat] 라이브 자격증명이 활성 프로필 '${safePrev}' 이 아닌 ` +
       `'${swappedTo}' 의 것일 수 있습니다.\n` +
-      `[mat] 'mat freshness ${cliId}' 또는 mat TUI 로 상태를 확인하세요.\n`
+      `[mat] 'mat freshness ${safeCli}' 또는 mat TUI 로 상태를 확인하세요.\n`
+    );
+    return;
+  }
+  if (info.execMode === 'exec') {
+    process.stderr.write(
+      `[mat] mat exec lock 의 손상된 흔적을 발견했습니다 ` +
+      `(cli=${safeCli}, pid=${info.pid}, profile=${swappedTo}).\n` +
+      `[mat] 활성 정보가 누락되어 라이브 자격증명이 의도된 활성 프로필과 다를 수 있습니다.\n` +
+      `[mat] 'mat freshness ${safeCli}' 또는 mat TUI 로 확인하세요.\n`
+    );
+    return;
+  }
+  if (info.execMode === 'foreground') {
+    process.stderr.write(
+      `[mat] 이전 mat TUI/foreground 작업의 비정상 종료 흔적을 발견했습니다 ` +
+      `(cli=${safeCli}, pid=${info.pid}, profile=${swappedTo}).\n` +
+      `[mat] 'mat freshness ${safeCli}' 또는 mat TUI 로 확인하세요.\n`
     );
     return;
   }
   process.stderr.write(
     `[mat] 이전 mat 버전의 exec lock 을 발견했습니다 ` +
-    `(cli=${cliId}, pid=${info.pid}, profile=${swappedTo}).\n` +
+    `(cli=${safeCli}, pid=${info.pid}, profile=${swappedTo}).\n` +
     `[mat] 라이브 자격증명이 의도된 활성 프로필과 다를 수 있습니다. ` +
-    `'mat freshness ${cliId}' 또는 mat TUI 로 확인하세요.\n`
+    `'mat freshness ${safeCli}' 또는 mat TUI 로 확인하세요.\n`
   );
+}
+
+/**
+ * stderr 출력 전 untrusted lock-derived string 의 control char strip + length cap.
+ *
+ * info.json 은 lock 디렉토리 (`~/.multi-account-tool/locks/`, mode 0o700) 의 사용자
+ * 본인이 작성한 파일이지만, 외부 도구가 손상시켰거나 잘못 편집된 경우 ANSI escape
+ * sequence / 매우 긴 문자열을 포함할 수 있다. terminal escape injection 방어 — trust
+ * boundary 가 self 라 위험도 LOW 지만 defense in depth (quad-review iter 1 Strong
+ * LOW security, Codex-2 + Claude-2 합의).
+ *
+ * 200자 cap 은 안내 메시지 1행 길이와 일치 — 정상 입력 (cliId ≤ 32 / profileName
+ * ≤ 40 / ISO timestamp 등) 은 모두 무손실 통과.
+ */
+function sanitizeForStderr(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1f\x7f-\x9f]/g, '?').slice(0, 200);
 }
 
 /** info.json 읽기. 없거나 손상되면 null. 신규 optional 필드는 type guard 후 보존. */

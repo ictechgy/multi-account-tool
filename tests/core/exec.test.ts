@@ -492,10 +492,12 @@ describe('runExec', () => {
       // restore 는 여전히 호출됨 — switch 호출 횟수 = swap + restore = 2
       expect(mockSwitch).toHaveBeenCalledTimes(2);
       expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
-      // 사용자 안내 stderr 확인
+      // 사용자 안내 stderr 확인 — quad-review iter 1 Split LOW (Claude-1/2 합의) fix:
+      // restore 실패 안내와 일관되게 후속 action (`mat freshness <cli>`) 권장 문구 포함.
       const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
       expect(stderr).toMatch(/swap 프로필\(work\) 의 라이브 재캡처 실패/);
       expect(stderr).toMatch(/keychain locked during recapture/);
+      expect(stderr).toMatch(/mat freshness codex/);
       // restore 자체는 성공이므로 restoreError 는 undefined
       expect(result.restoreError).toBeUndefined();
     } finally {
@@ -514,29 +516,68 @@ describe('runExec', () => {
     expect(mockSwitch).not.toHaveBeenCalled();
   });
 
-  it('PR-I*: SIGTERM forwarder 도 자식에게 신호 전달 후 재캡처 + restore (SIGINT 와 동일 mechanism)', async () => {
-    // plan §198 의 trap 가능 signal (SIGINT/SIGTERM/SIGHUP) 매트릭스 회귀 가드. FORWARD_SIGNALS
-    // 배열 변경 시 즉시 감지. 핵심: signal 후에도 finally chain 이 정상 실행되어 라이브 재캡처
-    // (rotation 흡수) 가 일어남.
-    const child = fakeChild({});
-    mockSpawn.mockImplementation(() => {
-      setImmediate(() => {
-        latestSignalListener('SIGTERM')('SIGTERM');
-        setImmediate(() => child.emit('exit', null, 'SIGTERM'));
+  it.each<NodeJS.Signals>(['SIGINT', 'SIGTERM', 'SIGHUP'])(
+    'PR-I*: %s forwarder 도 자식에게 신호 전달 후 재캡처 + restore (FORWARD_SIGNALS 매트릭스, quad-review Split LOW fix)',
+    async (sig) => {
+      // plan §198 의 trap 가능 signal (SIGINT/SIGTERM/SIGHUP) 매트릭스 회귀 가드.
+      // table-driven 으로 FORWARD_SIGNALS 변경 시 자동 감지. 기존 SIGINT 단일 케이스
+      // (listener identity 검증) 와 별개로, 본 매트릭스는 finally invariant (재캡처 +
+      // restore) 가 모든 trap 가능 signal 에서 보존됨을 검증.
+      const child = fakeChild({});
+      mockSpawn.mockImplementation(() => {
+        setImmediate(() => {
+          latestSignalListener(sig)(sig);
+          setImmediate(() => child.emit('exit', null, sig));
+        });
+        return asChildProcess(child);
       });
-      return asChildProcess(child);
-    });
 
-    const result = await runExec({
-      cliId: 'codex', profileName: 'work', command: 'sleep', args: ['100']
-    });
+      const result = await runExec({
+        cliId: 'codex', profileName: 'work', command: 'sleep', args: ['100']
+      });
 
-    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
-    expect(result.signal).toBe('SIGTERM');
-    // SIGTERM 이후에도 재캡처 + restore 가 모두 실행됨 (PR-I* 의 finally invariant)
-    expect(mockSnapshot).toHaveBeenCalledOnce();
-    expect(mockSwitch).toHaveBeenCalledTimes(2);  // swap + restore
-    expect(release).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith(sig);
+      expect(result.signal).toBe(sig);
+      // signal 이후에도 재캡처 + restore 가 모두 실행됨 (PR-I* finally invariant)
+      expect(mockSnapshot).toHaveBeenCalledOnce();
+      expect(mockSwitch).toHaveBeenCalledTimes(2);  // swap + restore
+      expect(release).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('PR-I*: snapshotLiveToProfile 가 hang 하면 RECAPTURE_TIMEOUT_MS 후 timeout → stderr 안내 + restore 진행 (quad-review Strong MED fix)', async () => {
+    // quad-review iter 1 Strong MED (Codex-2 + Claude-2 합의): recapture 가 keychain
+    // prompt / NFS stall 등으로 hang 시 finally 전체 차단 → mat 종료 안 됨. timeout
+    // 도입으로 bounded — timeout 후 stderr 안내 + restore 정상 진행.
+    //
+    // fake timers 로 RECAPTURE_TIMEOUT_MS (10s default) advance. snapshotLiveToProfile
+    // mock 는 영원히 pending → withTimeout race 의 timeoutPromise 가 먼저 reject.
+    vi.useFakeTimers();
+    try {
+      mockSnapshot.mockImplementationOnce(() => new Promise(() => { /* never settle */ }));
+      mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      const runPromise = runExec({
+        cliId: 'codex', profileName: 'work', command: 'sleep', args: []
+      });
+      // RECAPTURE_TIMEOUT_MS (10s) 충분히 초과해 timeout reject 유발.
+      await vi.advanceTimersByTimeAsync(11_000);
+      const result = await runPromise;
+
+      expect(result.code).toBe(0);
+      // restore 는 timeout 후에도 호출됨 — swap + restore = 2회.
+      expect(mockSwitch).toHaveBeenCalledTimes(2);
+      expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
+
+      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(stderr).toMatch(/swap 프로필\(work\) 의 라이브 재캡처 실패/);
+      expect(stderr).toMatch(/timeout after 10000ms/);
+      expect(stderr).toMatch(/mat freshness codex/);
+      stderrSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('PR-I*: spawn error 후에도 재캡처 + restore 모두 시도됨 (rotation 손실 방지)', async () => {

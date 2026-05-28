@@ -60,6 +60,36 @@ export interface ExecResult {
 const FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 /**
+ * 라이브 재캡처 단계 (snapshotLiveToProfile) 의 타임아웃 (ms, default 10s).
+ *
+ * sources 의 keychain `security` CLI 가 macOS 인증 prompt 를 띄우거나 NFS 등이
+ * stall 하면 무한 대기 → finally 의 restore/release/dispose 가 모두 막혀 mat 자체가
+ * 종료되지 않는다 (quad-review iter 1 Strong MED, Codex-2 + Claude-2 합의). timeout
+ * 시 stderr 안내 후 swallow → restore 는 정상 진행.
+ *
+ * 환경변수 `MAT_EXEC_RECAPTURE_TIMEOUT_MS` 로 override 가능 (양의 유한수만 허용).
+ */
+const RECAPTURE_TIMEOUT_MS = parseRecaptureTimeoutMs();
+
+function parseRecaptureTimeoutMs(): number {
+  const raw = process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
+  if (!raw) return 10_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 10_000;
+}
+
+/** Promise.race timeout — timer cleanup 보장 (Promise 가 먼저 resolve 해도). */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([p, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/**
  * mat exec 메인. 검증 실패는 UsageError throw, 자식 실행 결과는 ExecResult 로 반환.
  * spawn 실패 시 throw — restore 는 throw 전에 best-effort 로 시도된다.
  */
@@ -227,14 +257,28 @@ async function recaptureAndRestoreBestEffort(
   return restoreToActive(cliId, previousActive);
 }
 
-/** swap-target profile 로 라이브 재캡처. 실패는 stderr 안내 후 swallow (best-effort). */
+/**
+ * swap-target profile 로 라이브 재캡처. 실패/타임아웃은 stderr 안내 후 swallow.
+ *
+ * timeout 도입 (quad-review iter 1 Strong MED): `snapshotLiveToProfile` 가 keychain
+ * prompt / NFS stall 등으로 무한 대기하면 finally 전체가 막혀 mat 이 종료되지 않는
+ * 문제. {@link RECAPTURE_TIMEOUT_MS} 으로 bound.
+ *
+ * 사용자 후속 action 안내 (quad-review iter 1 Split LOW): restore 실패 / stale
+ * recovery 안내와 일관되게 `mat freshness <cli>` 권장을 stderr 에 명시.
+ */
 async function recaptureLiveToTarget(cliId: string, swapTarget: string): Promise<void> {
   try {
-    await snapshotLiveToProfile(cliId, swapTarget);
+    await withTimeout(
+      snapshotLiveToProfile(cliId, swapTarget),
+      RECAPTURE_TIMEOUT_MS,
+      'recapture(snapshotLiveToProfile)'
+    );
   } catch (err) {
     process.stderr.write(
       `\n[mat] swap 프로필(${swapTarget}) 의 라이브 재캡처 실패: ${errorMessage(err)}\n` +
-      `[mat] cmd 가 자격증명을 갱신했다면 새 토큰이 손실될 수 있습니다.\n`
+      `[mat] cmd 가 자격증명을 갱신했다면 새 토큰이 손실될 수 있습니다.\n` +
+      `[mat] 'mat freshness ${cliId}' 로 라이브 상태를 확인하세요.\n`
     );
   }
 }
