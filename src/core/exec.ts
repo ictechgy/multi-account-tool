@@ -4,10 +4,16 @@
  * 흐름:
  *   1. 인자 검증 (cli/profile 유효성, cmd 비어있지 않음, 활성 프로필 존재)
  *   2. 신호 forwarder 를 runExec 진입부에 등록 (swap/spawn/restore 전 구간 보호)
- *   3. cli 별 lock 획득 (동일 cli 의 동시 swap 방지)
+ *   3. cli 별 lock 획득 (동일 cli 의 동시 swap 방지). LockBody 에 execMode='exec' +
+ *      previousActive 기록 → 비정상 종료 후 다음 mat 호출의 stale recovery 가 surface
+ *      (PR-I*).
  *   4. profile 로 swap (switchProfile 의 안전 시퀀스 사용)
  *   5. 자식 프로세스 spawn (stdio inherit, 셸 미경유) + settled-guard 로 error/exit race 보호
- *   6. spawn 의 성공/실패와 무관하게 swap 했으면 previousActive 로 restore 시도
+ *   6. spawn 의 성공/실패와 무관하게 swap 했으면:
+ *      a) 라이브 재캡처 (snapshotLiveToProfile) — cmd 가 OAuth refresh rotation 으로
+ *         자체 토큰을 갱신했다면 새 토큰을 swap-target profile 에 저장 (PR-I*).
+ *      b) previousActive 로 restore (switchProfile, skipPreSwapSnapshot=true) — 라이브
+ *         재캡처를 이미 했으므로 switchProfile 내부 snapshot 중복 회피.
  *   7. lock release
  *   8. 신호 forwarder 해제, 자식 결과 + restoreError 를 ExecResult 로 반환
  *
@@ -19,8 +25,10 @@
  *
  * 한계:
  *  - 자식이 시작 시점에 자격증명을 읽어 메모리에 보관하는 경우에만 시간 격리가 유효.
- *  - SIGKILL 로 mat 자체가 강제 종료되면 finally 가 실행되지 않아 원복/lock release 모두 누락.
- *    (이 경우 다음 호출의 stale lock recovery 가 정리하고, 활성 포인터는 swap profile 에 남는다.)
+ *  - SIGKILL / SIGSEGV / SIGBUS 는 OS 보장상 trap 불가 — finally 도 signal handler 도
+ *    실행되지 않아 라이브 재캡처/restore/lock release 모두 누락. 회복은 다음 mat 호출의
+ *    stale lock recovery (정책 B — warn + drop) 에 전적으로 의존한다. 활성 포인터는
+ *    swap profile 에 남고, LockBody.previousActive 가 사용자에게 안내된다 (PR-I*).
  */
 
 import { ChildProcess, spawn } from 'node:child_process';
@@ -30,7 +38,7 @@ import { getActiveProfile } from './config.js';
 import { UsageError, errorMessage } from './errors.js';
 import { acquireCliLock } from './lockfile.js';
 import { profileExists, validateProfileName } from './profile-store.js';
-import { switchProfile } from './switcher.js';
+import { snapshotLiveToProfile, switchProfile } from './switcher.js';
 
 export interface ExecOptions {
   cliId: string;
@@ -65,7 +73,13 @@ export async function runExec(opts: ExecOptions): Promise<ExecResult> {
   const forwarders = registerForwarders(childRef);
 
   try {
-    const release = await acquireCliLock(opts.cliId, profileName);
+    // PR-I*: previousActive 를 LockBody 에 기록 → 비정상 종료 후 다음 mat 호출의
+    // stale recovery 가 "라이브가 어떤 swap 의 결과물인지" 사용자에게 안내 가능.
+    const release = await acquireCliLock(opts.cliId, profileName, {
+      execMode: 'exec',
+      previousActive,
+      affectsCliIds: [opts.cliId]
+    });
     try {
       return await runUnderLock(opts, profileName, previousActive, childRef);
     } finally {
@@ -126,7 +140,7 @@ async function runUnderLock(
   }
 
   const restoreError = swapped
-    ? await restoreBestEffort(opts.cliId, previousActive)
+    ? await recaptureAndRestoreBestEffort(opts.cliId, profileName, previousActive)
     : undefined;
 
   if (spawnError) throw spawnError;
@@ -186,15 +200,53 @@ function registerForwarders(
 }
 
 /**
- * previousActive 로 swap 원복.
- * 성공 시 undefined, 실패 시 stderr 안내 + Error 반환 (호출자가 exit code 결정).
+ * PR-I*: cmd 종료 시점 라이브 재캡처 후 previousActive 로 원복.
+ *
+ * 동기: `mat exec <cli> <P> -- <cmd>` 의 cmd 가 자체적으로 OAuth refresh rotation 을
+ * 수행해 라이브 자격증명을 갱신했을 수 있다. 단순히 previousActive 로 restore 만
+ * 하면 그 새 토큰이 옛 토큰으로 덮어써져 손실된다 (provider 가 옛 refresh_token 을
+ * 다음 사용 시 revoke → 강제 재로그인).
+ *
+ * 흐름:
+ *  1) snapshotLiveToProfile(cliId, swapTarget) — 라이브 → swap-target 프로필 저장본
+ *     덮어쓰기. cmd 가 갱신한 토큰이 있다면 그대로 보존.
+ *  2) switchProfile(cliId, previousActive, { skipPreSwapSnapshot: true }) — restore +
+ *     setActive. skip 옵션으로 switchProfile 내부 자동 snapshot 중복 회피 (1 에서 이미
+ *     했으므로). PR-G 의 폐기 path 와 동일 mechanism 활용.
+ *
+ * 재캡처 실패는 best-effort — stderr 안내 후 restore 진행. cmd 가 rotation 했다면
+ * 새 토큰이 옛 토큰으로 덮어써져 손실될 수 있다는 사용자 인지. restore 실패는 기존
+ * 동작 동일 — 활성 포인터가 swap profile 에 남고 호출자가 exit 74 매핑.
  */
-async function restoreBestEffort(
+async function recaptureAndRestoreBestEffort(
+  cliId: string,
+  swapTarget: string,
+  previousActive: string
+): Promise<Error | undefined> {
+  await recaptureLiveToTarget(cliId, swapTarget);
+  return restoreToActive(cliId, previousActive);
+}
+
+/** swap-target profile 로 라이브 재캡처. 실패는 stderr 안내 후 swallow (best-effort). */
+async function recaptureLiveToTarget(cliId: string, swapTarget: string): Promise<void> {
+  try {
+    await snapshotLiveToProfile(cliId, swapTarget);
+  } catch (err) {
+    process.stderr.write(
+      `\n[mat] swap 프로필(${swapTarget}) 의 라이브 재캡처 실패: ${errorMessage(err)}\n` +
+      `[mat] cmd 가 자격증명을 갱신했다면 새 토큰이 손실될 수 있습니다.\n`
+    );
+  }
+}
+
+/** previousActive 로 원복. 성공 시 undefined, 실패 시 stderr 안내 + Error 반환. */
+async function restoreToActive(
   cliId: string,
   previousActive: string
 ): Promise<Error | undefined> {
   try {
-    await switchProfile(cliId, previousActive);
+    // skipPreSwapSnapshot: recapture 단계에서 이미 라이브를 스냅샷했으므로 중복 회피.
+    await switchProfile(cliId, previousActive, { skipPreSwapSnapshot: true });
     return undefined;
   } catch (err) {
     process.stderr.write(
