@@ -3,10 +3,11 @@
  * 입력 처리는 자기 자신만 하고, 액션은 콜백으로 위임한다.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 
+import type { CompareResult, FreshnessReport } from '../core/freshness.js';
 import type { CliDef, Profile } from '../core/types.js';
 
 /**
@@ -186,4 +187,135 @@ function formatRelative(iso: string): string {
   if (days < 30) return `${days}일 전`;
   const months = Math.floor(days / 30);
   return `${months}달 전`;
+}
+
+interface FreshnessDialogProps {
+  mode: 'switch' | 'create';
+  fromProfile: string;
+  toProfile: string;
+  report: FreshnessReport;
+  /** 첫 표시 시 true — 한국어 onboarding 패널 함께 출력. */
+  showOnboarding: boolean;
+  onRecapture: () => void;
+  onDiscard: () => void;
+  onCancel: () => void;
+}
+
+/**
+ * PR-G: 라이브 자격증명이 활성 프로필 저장본과 다를 때 (OAuth refresh rotation 등)
+ * 사용자에게 재캡처 / 폐기 / 취소 3-옵션을 묻는 dialog.
+ *
+ * 키바인딩:
+ *  - r 또는 ↵: 재캡처 (라이브를 활성 프로필에 저장 후 진행)
+ *  - d: 폐기 (라이브 무시 — 데이터 손실 위험)
+ *  - c 또는 esc: 취소
+ *
+ * submittedRef 가드로 사용자 더블 Enter 시 단일 액션만 발사된다 (race 방지 — Confirm
+ * 위젯과 동일 패턴).
+ */
+export function FreshnessDialog({
+  mode,
+  fromProfile,
+  toProfile,
+  report,
+  showOnboarding,
+  onRecapture,
+  onDiscard,
+  onCancel
+}: FreshnessDialogProps) {
+  const submittedRef = useRef(false);
+
+  function fire(fn: () => void): void {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    fn();
+  }
+
+  useInput((input, key) => {
+    if (key.escape || input === 'c' || input === 'C') { fire(onCancel); return; }
+    if (input === 'd' || input === 'D') { fire(onDiscard); return; }
+    if (input === 'r' || input === 'R' || key.return) { fire(onRecapture); return; }
+  });
+
+  const hasStale = report.sources.some((s) => s.result.kind === 'stale');
+  const headerColor = hasStale ? 'red' : 'yellow';
+  const title = hasStale
+    ? '라이브 자격증명이 저장본과 크게 다릅니다 (다른 계정 추정)'
+    : '라이브 자격증명이 갱신되었습니다 (refresh rotation)';
+
+  return (
+    <Box flexDirection="column">
+      <Text bold color={headerColor}>{title}</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text>  활성 프로필: <Text bold>{fromProfile}</Text></Text>
+        <Text>
+          {'  대상: '}
+          <Text bold>{toProfile}</Text>
+          <Text color="gray">
+            {mode === 'switch' ? ' (전환 중)' : ' (새 프로필 생성 중)'}
+          </Text>
+        </Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        {report.sources.map((s) => (
+          <Text key={s.saveAs} color={statusColor(s.result)}>
+            {`  ${s.saveAs.padEnd(28)} ${formatDialogStatus(s.result)}`}
+          </Text>
+        ))}
+      </Box>
+      {showOnboarding ? <OnboardingPanel /> : null}
+      <Box marginTop={1} flexDirection="column">
+        <Text color="green">  [R/↵] 재캡처</Text>
+        <Text color="gray">
+          {`        라이브를 '${fromProfile}' 에 저장한 뒤 ${mode === 'switch' ? '전환' : '새 프로필 생성'} (권장)`}
+        </Text>
+        <Text color={hasStale ? 'red' : 'yellow'}>  [D] 폐기</Text>
+        <Text color="gray">
+          {mode === 'switch'
+            ? `        라이브를 백업 없이 폐기하고 '${toProfile}' 로 전환 (데이터 손실)`
+            : `        라이브를 '${fromProfile}' 에 저장하지 않고 '${toProfile}' 만 생성 (현재 저장본 stale 유지)`}
+        </Text>
+        <Text color="gray">  [C/esc] 취소</Text>
+      </Box>
+    </Box>
+  );
+}
+
+/**
+ * 첫 표시 시 한국어 onboarding 패널 — 왜 dialog 가 나오는지 + 권장 선택을 설명.
+ * 두 번째 표시부터는 본 패널 생략 (markFirstFreshnessPromptShown 플래그 기반).
+ */
+function OnboardingPanel() {
+  return (
+    <Box marginTop={1} flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+      <Text bold color="cyan">처음 보시는 안내</Text>
+      <Text color="gray">
+        OAuth 기반 CLI 는 사용 중 refresh token rotation 으로 라이브 자격증명을 자동 갱신합니다.
+      </Text>
+      <Text color="gray">
+        mat 의 저장본은 그 갱신을 모르므로 그대로 전환하면 옛 토큰이 라이브로 복원되어
+      </Text>
+      <Text color="gray">
+        provider 가 강제 재로그인을 요구할 수 있습니다.
+      </Text>
+      <Text color="gray">
+        보통은 <Text bold color="green">재캡처</Text>가 안전합니다. 본 안내는 다음 표시부터 생략됩니다.
+      </Text>
+    </Box>
+  );
+}
+
+function statusColor(result: CompareResult): string | undefined {
+  if (result.kind === 'fresh') return 'green';
+  if (result.kind === 'stale') return 'red';
+  if (result.kind === 'inflight') return 'yellow';
+  // rotated
+  return 'yellow';
+}
+
+function formatDialogStatus(result: CompareResult): string {
+  const subtype = result.kind === 'rotated' && result.subtype ? `(${result.subtype})` : '';
+  const conf = result.confidence === 'low' ? ' [low conf]' : '';
+  const detail = result.detail ? ` — ${result.detail}` : '';
+  return `${result.kind}${subtype}${conf}${detail}`;
 }

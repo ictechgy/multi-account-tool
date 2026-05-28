@@ -91,6 +91,13 @@ export interface Config {
    * true 가 되면 다음 실행부터 자동 프롬프트를 띄우지 않는다 (수동 캡처는 항상 가능).
    */
   firstImportPromptShown?: boolean;
+  /**
+   * PR-G: TUI 에서 freshness dialog (재캡처/폐기/취소) 가 처음 표시되었을 때
+   * 한국어 onboarding 패널을 함께 출력한 적이 있는지. 이후 표시부터는 dialog
+   * 본문만 보여 사용자 noise 를 최소화한다. 값이 true 가 되어도 dialog 자체는
+   * 매번 표시됨 — 본 플래그는 onboarding 패널 1회 표시만 제어한다.
+   */
+  firstFreshnessPromptShown?: boolean;
 }
 
 /**

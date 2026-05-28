@@ -151,12 +151,33 @@ export interface SwitchResult {
    *
    * 활성 프로필이 있고 toProfile 과 다를 때만 보고된다. mat 자체는 본 정보를
    * 동작에 사용하지 않음 — TUI/CLI 호출자가 OAuth refresh rotation 등으로 인한
-   * stale 상태를 사용자에게 안내하기 위한 surface. dialog/액션은 후속 PR.
+   * stale 상태를 사용자에게 안내하기 위한 surface. dialog/액션은 PR-G.
    *
    * inspect 가 예외를 던지면 swap 자체를 막지 않고 본 필드만 누락된다 (swap 의
    * atomic 보장은 유지). 호출자가 freshness 부재를 "정보 없음" 으로 해석.
+   *
+   * `skipPreSwapSnapshot: true` 호출 (PR-G 폐기 path) 의 경우 본 필드도 누락된다 —
+   * 사용자가 이미 freshness 결과를 보고 폐기 결정한 직후이므로 재보고 불필요.
    */
   preSwapLiveFreshness?: FreshnessReport;
+}
+
+/**
+ * `switchProfile` 의 동작 옵션.
+ *
+ * PR-G 의 TUI dialog 가 "폐기" (라이브 무시 + active 그대로 복원) 선택을 표현하기
+ * 위해 도입. mat exec 등 기존 호출자는 옵션 미지정으로 backward-compat (자동 snapshot).
+ */
+export interface SwitchOptions {
+  /**
+   * 전환 직전 현재 활성 프로필로의 자동 snapshot 을 건너뛴다. 결과적으로 라이브
+   * 자격증명 (refresh rotation 이 일어났다면 새 토큰을 포함) 은 어디에도 저장되지
+   * 않고 toProfile 의 저장본으로 덮어써진다.
+   *
+   * 사용자에게 의도된 데이터 손실 — `mat freshness` 의 rotated 보고를 보고도 명시
+   * 폐기를 선택한 경우에만 사용. 일반 swap 은 반드시 자동 snapshot 을 보존.
+   */
+  skipPreSwapSnapshot?: boolean;
 }
 
 /**
@@ -167,16 +188,25 @@ export interface SwitchResult {
  *
  * 활성 프로필이 있고 toProfile 과 다를 때 swap 직전 freshness inspect 결과를
  * 보고 (info-only — PR-F*). inspect 실패는 swap 을 중단시키지 않는다.
+ *
+ * `options.skipPreSwapSnapshot === true` (PR-G 폐기 path) 면 1) 단계 전체 (snapshot
+ * 및 freshness inspect) 를 생략하고 곧장 restore + setActive 로 진행. 라이브가
+ * 덮어써져 사라지는 의도된 mutation.
  */
 export async function switchProfile(
   cliId: string,
-  toProfile: string
+  toProfile: string,
+  options?: SwitchOptions
 ): Promise<SwitchResult> {
   const current = await getActiveProfile(cliId);
   let fromSnapshot: SnapshotResult | undefined;
   let preSwapLiveFreshness: FreshnessReport | undefined;
+  const skipSnapshot = options?.skipPreSwapSnapshot === true;
   const shouldSnapshot =
-    current != null && current !== toProfile && (await profileExists(cliId, current));
+    !skipSnapshot &&
+    current != null &&
+    current !== toProfile &&
+    (await profileExists(cliId, current));
   // 활성 포인터가 가리키는 프로필 디렉토리가 외부에서 삭제됐을 경우 좀비 부활 방지:
   // snapshotLiveToProfile 의 auto-create 를 건너뛰고 restore 만 진행한다.
   if (shouldSnapshot && current != null) {

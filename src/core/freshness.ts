@@ -120,6 +120,30 @@ export function getAdapter(cliId: string): SourceAdapter | undefined {
 }
 
 /**
+ * 사용자 액션 (재캡처/폐기/취소 dialog) 이 필요한 보고인지 판정.
+ *
+ * 분류 기준 (plan §188):
+ *  - `fresh` (모든 source) → 사용자 액션 불필요 (false).
+ *  - `rotated` 또는 `stale` 하나라도 → dialog 표시 필요 (true).
+ *  - `inflight` 하나라도 → dialog 표시 필요 (true, 재시도 안내 톤).
+ *
+ * `mat freshness` CLI 의 exit 1 (`hasUnsafe` in cli.tsx) 와는 별도 — 본 predicate
+ * 는 TUI dialog 의 표시 여부 결정에만 사용. CLI 의 unsafe 판정은 chain 차단을
+ * 위해 더 엄격하다 (low-confidence rotated 도 unsafe).
+ */
+export function needsUserAttention(report: FreshnessReport): boolean {
+  return report.sources.some((s) => s.result.kind !== 'fresh');
+}
+
+/**
+ * `inflight` 보고 — multi-source CLI 의 부분 갱신 race. 재시도 안내가 적절.
+ * TUI 가 일반 3-옵션 dialog 대신 "잠시 후 재시도" 안내로 분기할 수 있도록 별도 헬퍼.
+ */
+export function hasInflight(report: FreshnessReport): boolean {
+  return report.sources.some((s) => s.result.kind === 'inflight');
+}
+
+/**
  * byte-diff fallback 의 normalize 화이트리스트.
  *
  * OAuth/API key 류 회전 후보 필드만 비교. `last_refresh` / `expiry_date` /

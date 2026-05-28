@@ -461,4 +461,106 @@ describe('switcher', () => {
       expect(await getActiveProfile('codex')).toBe('home');
     });
   });
+
+  /**
+   * PR-G — switchProfile.skipPreSwapSnapshot 옵션 (TUI 폐기 dialog path).
+   *
+   * 폐기 path 는 사용자가 "라이브 자격증명 (refresh-rotated 토큰) 을 의도적으로
+   * 폐기" 한다고 명시 선택한 경우만 사용된다. 결과: snapshotLiveToProfile 호출 없음,
+   * readSource(snapshot 용) 호출 없음, freshness inspect 도 미수행 (이미 사용자가
+   * dialog 에서 확인했으므로 재보고 불필요), restore + setActive 만 수행.
+   *
+   * 회귀 위험: 옵션 부재 (기존 호출자) 는 기존 동작 (snapshot 수행) 그대로 — 본
+   * describe 의 첫 테스트가 명시.
+   */
+  describe('switchProfile — skipPreSwapSnapshot (PR-G)', () => {
+    beforeEach(async () => {
+      await setupProfile('codex', 'work');
+      await setupProfile('codex', 'home');
+      await writeProfileFile('codex', 'home', 'auth.json', 'home-stored');
+      mockWriteSource.mockResolvedValue(undefined);
+    });
+
+    it('옵션 미지정 (기존 호출자) → snapshot 수행 + preSwapLiveFreshness 보고', async () => {
+      await setActiveProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'work-stored');
+      mockReadSource.mockResolvedValue('work-live');
+
+      const result = await switchProfile('codex', 'home');
+      expect(result.fromSnapshot).toBeDefined();
+      expect(result.fromSnapshot?.captured).toEqual(['auth.json']);
+      // freshness 는 swap 직전 1회 보고
+      expect(result.preSwapLiveFreshness).toBeDefined();
+    });
+
+    it('skipPreSwapSnapshot=true → snapshot 미수행 + freshness 보고 부재', async () => {
+      await setActiveProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'work-stored');
+      mockReadSource.mockResolvedValue('work-live-rotated');
+
+      const result = await switchProfile('codex', 'home', { skipPreSwapSnapshot: true });
+      // 폐기 — snapshot 결과 없음
+      expect(result.fromSnapshot).toBeUndefined();
+      // 사용자가 이미 dialog 에서 확인했으므로 재보고 불필요
+      expect(result.preSwapLiveFreshness).toBeUndefined();
+      // restore + setActive 는 정상 수행
+      expect(result.restore.restored).toEqual(['auth.json']);
+      expect(await getActiveProfile('codex')).toBe('home');
+      // 라이브 자격증명은 home 의 저장본으로 덮어써짐 (writeSource 1회 호출 = restore)
+      expect(mockWriteSource).toHaveBeenCalledTimes(1);
+    });
+
+    it('skipPreSwapSnapshot=false → 기본 동작과 동일 (snapshot 수행)', async () => {
+      // 명시 false 는 undefined 와 동등 — 안전한 backward-compat.
+      await setActiveProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'work-stored');
+      mockReadSource.mockResolvedValue('work-live');
+
+      const result = await switchProfile('codex', 'home', { skipPreSwapSnapshot: false });
+      expect(result.fromSnapshot).toBeDefined();
+      expect(result.fromSnapshot?.captured).toEqual(['auth.json']);
+    });
+
+    it('skipPreSwapSnapshot=true 는 snapshot 의 readSource 2회 (freshness+snapshot) 를 생략', async () => {
+      // 폐기 path 의 핵심 invariant — snapshot 단계 readSource (freshness inspect 1회
+      // + snapshotLiveToProfile 1회 = 2회) 가 생략된다. restore 단계의 collectRestorePlan
+      // 은 rollback 용 liveBackup 캡처로 readSource 를 호출하므로 1회는 유지.
+      // 비교를 위해 두 호출 시나리오를 같은 테스트에서 측정.
+      await setActiveProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'work-stored');
+      mockReadSource.mockResolvedValue('any');
+
+      // baseline: 기존 동작 (snapshot 수행) — 3회 호출 (freshness + snapshot + liveBackup)
+      await switchProfile('codex', 'home');
+      const baselineCalls = mockReadSource.mock.calls.length;
+      expect(baselineCalls).toBe(3);
+
+      // reset + 폐기 path
+      mockReadSource.mockClear();
+      await setActiveProfile('codex', 'work');  // home 으로 갔던 active 되돌리기
+      await switchProfile('codex', 'home', { skipPreSwapSnapshot: true });
+      // 폐기 — restore 의 liveBackup 1회만 남음 (snapshot/freshness 2회 생략)
+      expect(mockReadSource.mock.calls.length).toBe(1);
+    });
+
+    it('skipPreSwapSnapshot=true + active === toProfile → restore 도 무의미 but 정상 종료', async () => {
+      // 사용자가 같은 프로필로 폐기 swap 을 시도하는 edge — TUI 에서 차단되지만
+      // API contract 로는 idempotent 종료 보장.
+      await setActiveProfile('codex', 'home');
+      mockReadSource.mockResolvedValue('any');
+
+      const result = await switchProfile('codex', 'home', { skipPreSwapSnapshot: true });
+      expect(result.fromSnapshot).toBeUndefined();
+      expect(result.preSwapLiveFreshness).toBeUndefined();
+      expect(await getActiveProfile('codex')).toBe('home');
+    });
+
+    it('active 미설정 + skipPreSwapSnapshot=true → 단순 restore (snapshot 불가능)', async () => {
+      mockReadSource.mockResolvedValue('any');
+      const result = await switchProfile('codex', 'home', { skipPreSwapSnapshot: true });
+      expect(result.fromSnapshot).toBeUndefined();
+      expect(result.restore.restored).toEqual(['auth.json']);
+      expect(await getActiveProfile('codex')).toBe('home');
+    });
+  });
 });

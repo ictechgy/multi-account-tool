@@ -25,11 +25,18 @@ import {
   cleanupTmpFiles,
   getActiveProfile,
   loadConfig,
+  markFirstFreshnessPromptShown,
   markFirstImportPromptShown,
   setActiveProfile
 } from './core/config.js';
 import { detectAll, type DetectionResult } from './core/detector.js';
 import { describeError, errorMessage } from './core/errors.js';
+import {
+  hasInflight,
+  inspectLiveFreshness,
+  needsUserAttention,
+  type FreshnessReport
+} from './core/freshness.js';
 import {
   deleteProfile,
   listProfiles,
@@ -45,7 +52,7 @@ import {
 } from './core/switcher.js';
 import type { CliDef, Profile } from './core/types.js';
 import { Busy, Confirm, Header, Message, TextPrompt } from './ui/widgets.js';
-import { HomeScreen, ProfilesScreen, type CliRow, type ProfileItem } from './ui/screens.js';
+import { FreshnessDialog, HomeScreen, ProfilesScreen, type CliRow, type ProfileItem } from './ui/screens.js';
 
 // --- 화면 타입 ---
 
@@ -68,6 +75,25 @@ type Screen =
       yesLabel?: string;
       noLabel?: string;
     }
+  | {
+      // PR-G: 라이브 자격증명이 활성 프로필 저장본과 다를 때 (OAuth refresh rotation
+      // 등) 사용자에게 재캡처 / 폐기 / 취소 3-옵션을 묻는 dialog.
+      //
+      // - mode='switch': switch action 전 표시. recapture 후 swap, discard 시
+      //   skipPreSwapSnapshot=true 로 swap, cancel 시 swap 미실행.
+      // - mode='create': 새 프로필 생성 전 표시. recapture 후 active 프로필에 라이브
+      //   저장 → 그 후 새 프로필 생성. discard 는 그냥 생성 (active 저장본 stale 유지).
+      kind: 'freshness';
+      mode: 'switch' | 'create';
+      cliId: string;
+      fromProfile: string;
+      toProfile: string;
+      report: FreshnessReport;
+      onRecapture: () => void;
+      onDiscard: () => void;
+      onCancel: () => void;
+      showOnboarding: boolean;
+    }
   | { kind: 'busy'; message: string }
   | {
       kind: 'message';
@@ -84,13 +110,15 @@ interface AppData {
   activeByCli: Record<string, string | undefined>;
   profilesByCli: Record<string, { name: string; meta?: Profile }[]>;
   firstImportPromptShown: boolean;
+  firstFreshnessPromptShown: boolean;
 }
 
 const EMPTY_DATA: AppData = {
   detection: [],
   activeByCli: {},
   profilesByCli: {},
-  firstImportPromptShown: false
+  firstImportPromptShown: false,
+  firstFreshnessPromptShown: false
 };
 
 // --- 액션 / 리듀서 ---
@@ -200,7 +228,8 @@ async function loadAllData(): Promise<AppData> {
     detection,
     activeByCli: config.active,
     profilesByCli,
-    firstImportPromptShown: !!config.firstImportPromptShown
+    firstImportPromptShown: !!config.firstImportPromptShown,
+    firstFreshnessPromptShown: !!config.firstFreshnessPromptShown
   };
 }
 
@@ -253,6 +282,19 @@ function renderScreen(
           noLabel={screen.noLabel}
           onYes={screen.onYes}
           onNo={screen.onNo ?? (() => dispatch({ type: 'pop' }))}
+        />
+      );
+    case 'freshness':
+      return (
+        <FreshnessDialog
+          mode={screen.mode}
+          fromProfile={screen.fromProfile}
+          toProfile={screen.toProfile}
+          report={screen.report}
+          showOnboarding={screen.showOnboarding}
+          onRecapture={screen.onRecapture}
+          onDiscard={screen.onDiscard}
+          onCancel={screen.onCancel}
         />
       );
     case 'busy':
@@ -314,7 +356,7 @@ function renderProfiles(
       cli={cli}
       active={active}
       profiles={profiles}
-      onSwitch={(name) => onSwitchAction(cli, name, active, dispatch, refresh)}
+      onSwitch={(name) => onSwitchAction(cli, name, active, data, dispatch, refresh)}
       onAdd={() => dispatch({ type: 'push', screen: { kind: 'add', cliId: cli.id } })}
       onRename={(name) =>
         dispatch({ type: 'push', screen: { kind: 'rename', cliId: cli.id, oldName: name } })
@@ -340,7 +382,7 @@ function renderAdd(
       label={`${cli.name} — 새 프로필 이름 (현재 라이브 자격증명이 캡처되어 시작 상태가 됩니다)`}
       placeholder="personal / work / ..."
       validate={(v) => validateNewName(v, existing)}
-      onSubmit={(name) => onAddSubmit(cli.id, name, dispatch, refresh)}
+      onSubmit={(name) => onAddSubmit(cli, name, data, dispatch, refresh)}
       onCancel={() => dispatch({ type: 'pop' })}
     />
   );
@@ -579,6 +621,7 @@ function onSwitchAction(
   cli: CliDef,
   to: string,
   currentActive: string | undefined,
+  data: AppData,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): void {
@@ -594,6 +637,13 @@ function onSwitchAction(
     });
     return;
   }
+  // PR-G: 활성 프로필이 있을 때만 freshness 체크 의미 있음 — 없으면 백업 불필요.
+  // current === to 케이스는 위에서 차단됨.
+  if (currentActive != null) {
+    void checkFreshnessThenSwitch(cli, currentActive, to, data, dispatch, refresh);
+    return;
+  }
+  // 활성 미설정: 단순 confirm 후 swap (백업 불필요).
   dispatch({
     type: 'push',
     screen: {
@@ -603,6 +653,99 @@ function onSwitchAction(
       onYes: () => void doSwitch(cli, to, dispatch, refresh)
     }
   });
+}
+
+/**
+ * PR-G: swap 직전 freshness inspect → 라이브 vs 저장본 차이 감지 시 dialog 분기.
+ *
+ * 시퀀스:
+ *  1) inspectLiveFreshness(cli, currentActive) — read-only.
+ *  2) 모든 source `fresh` → 일반 confirm 후 swap (기존 동작 보존).
+ *  3) inflight 포함 → 재시도 안내 후 작업 취소.
+ *  4) rotated/stale → 3-옵션 dialog (재캡처/폐기/취소).
+ *
+ * inspect 실패 (UnknownCliError, fs 권한 등) 는 swap 중단 — 사용자가 원인을
+ * 확인해야 함. PR-F* 의 switchProfile 자체 safeInspect 와 달리 본 경로는 사용자가
+ * 결정 전 상태이므로 silent swallow 부적절.
+ */
+async function checkFreshnessThenSwitch(
+  cli: CliDef,
+  currentActive: string,
+  to: string,
+  data: AppData,
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): Promise<void> {
+  dispatch({ type: 'push', screen: { kind: 'busy', message: '자격증명 상태 확인 중...' } });
+  let report: FreshnessReport;
+  try {
+    report = await inspectLiveFreshness(cli.id, currentActive);
+  } catch (err) {
+    dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'message',
+        tone: 'error',
+        title: '자격증명 확인 실패',
+        body: describeError(err)
+      }
+    });
+    return;
+  }
+  if (!needsUserAttention(report)) {
+    dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'confirm',
+        title: `${cli.name} 프로필 전환`,
+        body: formatSwitchConfirmBody(currentActive, to),
+        onYes: () => void doSwitch(cli, to, dispatch, refresh)
+      }
+    });
+    return;
+  }
+  if (hasInflight(report)) {
+    dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'message',
+        tone: 'warning',
+        title: '자격증명 갱신 중 (재시도 권장)',
+        body:
+          `라이브 자격증명이 갱신 중간 상태로 보입니다 (multi-source 부분 갱신).\n` +
+          `잠시 후 다시 시도하세요.`
+      }
+    });
+    return;
+  }
+  dispatch({
+    type: 'replace',
+    screen: {
+      kind: 'freshness',
+      mode: 'switch',
+      cliId: cli.id,
+      fromProfile: currentActive,
+      toProfile: to,
+      report,
+      showOnboarding: !data.firstFreshnessPromptShown,
+      onRecapture: () =>
+        void doSwitchWithRecapture(cli, currentActive, to, dispatch, refresh),
+      onDiscard: () => void doSwitchDiscardingLive(cli, to, dispatch, refresh),
+      onCancel: () => dispatch({ type: 'pop' })
+    }
+  });
+  // dialog 가 표시된 시점에 onboarding 플래그 영구 기록 — 다음 표시부터는 panel 생략.
+  void persistFirstFreshnessPromptIfNeeded(data);
+}
+
+async function persistFirstFreshnessPromptIfNeeded(data: AppData): Promise<void> {
+  if (data.firstFreshnessPromptShown) return;
+  try {
+    await markFirstFreshnessPromptShown();
+  } catch (err) {
+    // best-effort — 다음 dialog 표시 시 다시 시도된다. 사용자 흐름 차단 금지.
+    process.stderr.write(`[mat] markFirstFreshnessPromptShown 실패: ${errorMessage(err)}\n`);
+  }
 }
 
 async function doSwitch(
@@ -624,7 +767,130 @@ async function doSwitch(
   });
 }
 
+/**
+ * PR-G "재캡처": 라이브 자격증명 (refresh-rotated) 을 활성 프로필에 명시 저장 후 swap.
+ * snapshotLiveToProfile → switchProfile 시퀀스. switchProfile 의 내부 자동 snapshot 은
+ * 단일 프로세스 race 가 없는 한 동일 상태를 다시 캡처하므로 멱등 — 의미적 안전.
+ */
+async function doSwitchWithRecapture(
+  cli: CliDef,
+  currentActive: string,
+  to: string,
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): Promise<void> {
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '라이브 재캡처 후 전환 중...',
+    work: async () => {
+      await snapshotLiveToProfile(cli.id, currentActive);
+      return await switchProfile(cli.id, to);
+    },
+    buildSuccess: (result) => ({
+      title: '재캡처 + 전환 완료',
+      body:
+        `라이브 자격증명을 '${currentActive}' 에 저장한 뒤 '${to}' 로 전환했습니다.\n\n` +
+        formatSwitchResult(result, to)
+    }),
+    errorTitle: '재캡처/전환 실패'
+  });
+}
+
+/**
+ * PR-G "폐기": skipPreSwapSnapshot 으로 swap. 라이브의 rotated 토큰은 보존되지 않고
+ * toProfile 의 저장본으로 덮어써진다 — 사용자가 의도적으로 폐기 선택한 경우만 사용.
+ */
+async function doSwitchDiscardingLive(
+  cli: CliDef,
+  to: string,
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): Promise<void> {
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '라이브 폐기 후 전환 중...',
+    work: () => switchProfile(cli.id, to, { skipPreSwapSnapshot: true }),
+    buildSuccess: (result) => ({
+      title: '폐기 + 전환 완료',
+      tone: 'warning' as MessageTone,
+      body:
+        `라이브 자격증명을 백업 없이 폐기하고 '${to}' 로 전환했습니다.\n\n` +
+        formatSwitchResult(result, to)
+    }),
+    errorTitle: '폐기/전환 실패'
+  });
+}
+
 async function onAddSubmit(
+  cli: CliDef,
+  name: string,
+  data: AppData,
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): Promise<void> {
+  // PR-G: 활성 프로필이 있을 때만 freshness 체크. 활성 미설정 시엔 라이브가 어느
+  // 프로필 소유인지 정의되지 않으므로 단순 캡처로 진행 (기존 동작 보존).
+  const currentActive = data.activeByCli[cli.id];
+  if (currentActive == null || currentActive === name) {
+    await doCreateProfile(cli.id, name, dispatch, refresh);
+    return;
+  }
+  dispatch({ type: 'replace', screen: { kind: 'busy', message: '자격증명 상태 확인 중...' } });
+  let report: FreshnessReport;
+  try {
+    report = await inspectLiveFreshness(cli.id, currentActive);
+  } catch (err) {
+    dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'message',
+        tone: 'error',
+        title: '자격증명 확인 실패',
+        body: describeError(err)
+      }
+    });
+    return;
+  }
+  if (!needsUserAttention(report) || hasInflight(report)) {
+    if (hasInflight(report)) {
+      dispatch({
+        type: 'replace',
+        screen: {
+          kind: 'message',
+          tone: 'warning',
+          title: '자격증명 갱신 중 (재시도 권장)',
+          body:
+            `라이브 자격증명이 갱신 중간 상태로 보입니다 (multi-source 부분 갱신).\n` +
+            `잠시 후 다시 시도하세요.`
+        }
+      });
+      return;
+    }
+    await doCreateProfile(cli.id, name, dispatch, refresh);
+    return;
+  }
+  dispatch({
+    type: 'replace',
+    screen: {
+      kind: 'freshness',
+      mode: 'create',
+      cliId: cli.id,
+      fromProfile: currentActive,
+      toProfile: name,
+      report,
+      showOnboarding: !data.firstFreshnessPromptShown,
+      onRecapture: () =>
+        void doCreateWithRecapture(cli.id, currentActive, name, dispatch, refresh),
+      onDiscard: () => void doCreateProfile(cli.id, name, dispatch, refresh),
+      onCancel: () => dispatch({ type: 'pop' })
+    }
+  });
+  void persistFirstFreshnessPromptIfNeeded(data);
+}
+
+async function doCreateProfile(
   cliId: string,
   name: string,
   dispatch: React.Dispatch<Action>,
@@ -644,6 +910,38 @@ async function onAddSubmit(
           : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)
     }),
     errorTitle: '프로필 생성 실패'
+  });
+}
+
+/**
+ * PR-G create-mode 재캡처: 활성 프로필에 라이브 저장 후 신규 프로필 생성.
+ * snapshotLiveToProfile 을 두 프로필에 순차 호출 — 단일 프로세스에서 라이브는
+ * 양 호출 사이 변동 없음으로 두 프로필 모두 동일 라이브 토큰을 저장한다.
+ */
+async function doCreateWithRecapture(
+  cliId: string,
+  currentActive: string,
+  newName: string,
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): Promise<void> {
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '라이브 재캡처 후 프로필 생성 중...',
+    work: async () => {
+      await snapshotLiveToProfile(cliId, currentActive);
+      return await snapshotLiveToProfile(cliId, newName);
+    },
+    buildSuccess: (snap) => ({
+      title: '재캡처 + 프로필 생성 완료',
+      body:
+        `라이브 자격증명을 '${currentActive}' 에 저장한 뒤 '${newName}' 프로필을 생성했습니다.\n` +
+        (snap.captured.length > 0
+          ? `캡처된 파일: ${snap.captured.join(', ')}`
+          : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)
+    }),
+    errorTitle: '재캡처/생성 실패'
   });
 }
 

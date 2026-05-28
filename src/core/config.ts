@@ -28,7 +28,8 @@ export async function loadConfig(): Promise<Config> {
     return {
       version: 1,
       active: { ...(parsed.active ?? {}) },
-      firstImportPromptShown: parsed.firstImportPromptShown
+      firstImportPromptShown: parsed.firstImportPromptShown,
+      firstFreshnessPromptShown: parsed.firstFreshnessPromptShown
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -85,6 +86,17 @@ export async function clearActiveProfile(cliId: string): Promise<void> {
 export async function markFirstImportPromptShown(): Promise<void> {
   await mutateConfig((cfg) => {
     if (!cfg.firstImportPromptShown) cfg.firstImportPromptShown = true;
+  });
+}
+
+/**
+ * PR-G: TUI 의 freshness dialog 가 첫 표시 시 onboarding 패널을 함께 출력했음을 기록.
+ * 이후 표시부터는 dialog 본문만 보여 noise 최소화. dialog 자체는 매번 표시됨.
+ * 이미 표시된 경우 추가 save 없이 no-op.
+ */
+export async function markFirstFreshnessPromptShown(): Promise<void> {
+  await mutateConfig((cfg) => {
+    if (!cfg.firstFreshnessPromptShown) cfg.firstFreshnessPromptShown = true;
   });
 }
 
