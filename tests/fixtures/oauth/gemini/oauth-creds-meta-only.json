@@ -1,0 +1,12 @@
+{
+  "name": "gemini oauth_creds token 동일 + expiry_date 만 변경 → rotated meta-only high",
+  "cli": "gemini",
+  "saveAs": "oauth_creds.json",
+  "stored": "{\"access_token\":\"gemfake-access-0001\",\"refresh_token\":\"gemfake-refresh-0001\",\"expiry_date\":1773758399728}",
+  "live": "{\"access_token\":\"gemfake-access-0001\",\"refresh_token\":\"gemfake-refresh-0001\",\"expiry_date\":1773759999999}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "meta-only",
+    "confidence": "high"
+  }
+}

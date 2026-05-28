@@ -1,0 +1,12 @@
+{
+  "name": "opencode multi-provider — openai oauth rotated + anthropic api 동일 → 최악(rotated value-only) 채택",
+  "cli": "opencode",
+  "saveAs": "opencode-auth.json",
+  "stored": "{\"openai\":{\"type\":\"oauth\",\"access\":\"sk-fake-opencode-0001\",\"refresh\":\"refresh-fake-0001\",\"accountId\":\"acc-0001\"},\"anthropic\":{\"type\":\"api\",\"key\":\"sk-fake-anthropic-0001\"}}",
+  "live": "{\"openai\":{\"type\":\"oauth\",\"access\":\"sk-fake-opencode-0002\",\"refresh\":\"refresh-fake-0002\",\"accountId\":\"acc-0001\"},\"anthropic\":{\"type\":\"api\",\"key\":\"sk-fake-anthropic-0001\"}}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "value-only",
+    "confidence": "high"
+  }
+}
