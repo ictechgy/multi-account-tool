@@ -18,9 +18,9 @@ describe('maskIdentifier', () => {
     expect(maskIdentifier('alice')).not.toBe(maskIdentifier('bob'));
   });
 
-  it('출력 형식 = <hash:[0-9a-f]{8}>', () => {
+  it('출력 형식 = <hash:[0-9a-f]{12}> (PR-U: 8 → 12 hex 확장, birthday bound 48-bit)', () => {
     const masked = maskIdentifier('user@example.com');
-    expect(masked).toMatch(/^<hash:[0-9a-f]{8}>$/);
+    expect(masked).toMatch(/^<hash:[0-9a-f]{12}>$/);
   });
 
   it('raw 값 미포함 — email/accountId 등 식별자 노출 차단', () => {

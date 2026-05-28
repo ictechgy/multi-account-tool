@@ -40,7 +40,7 @@ describe('opencodeAdapter — OAuth provider', () => {
     expect(r.detail).toMatch(/accountId 변경/);
     expect(r.detail).not.toContain('alice-uuid-12345');
     expect(r.detail).not.toContain('bob-uuid-67890');
-    expect(r.detail).toMatch(/<hash:[0-9a-f]{8}>/);
+    expect(r.detail).toMatch(/<hash:[0-9a-f]{12}>/);
   });
 
   it('token 동일 + expires 만 변경 → rotated meta-only', () => {
