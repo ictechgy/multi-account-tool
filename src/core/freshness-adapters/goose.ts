@@ -106,14 +106,24 @@ interface YamlParseResult {
 }
 
 /**
- * `yaml` (v2, YAML 1.2 spec) 으로 raw 를 parse 후 top-level string-valued 키만 추출.
+ * `yaml` (v2, YAML 1.2 spec) 으로 raw 를 parse 후 top-level string-valued 키 추출.
  *
- * - nested object / array / number / boolean 값은 매트릭스 contract (1-depth string)
+ * - **string-coerced primitives** (number/boolean) 은 `String(value)` 로 강제 변환 후
+ *   매트릭스 진입. 옛 flat parser 시절 string 동작과 호환 — `GOOSE_MODEL: 3.5`
+ *   같이 YAML number 로 해석되는 model 명이 silent skip 되어 `sameKeySet` 가
+ *   비대칭 → false-positive stale 로 분류되던 회귀 차단 (PR-M quad-review HIGH/MED fix).
+ * - **trailing newline 정규화**: yaml lib 의 block scalar chomping 차이 (`|` clip
+ *   = `"v\n"`, `|-` strip = `"v"`) 로 동일 secret 의 chomping 마커만 다른 stored vs
+ *   live 가 value-only rotation 으로 잘못 분류되던 회귀 차단. `\n+` 후행만 strip.
+ * - `null` / `undefined` / nested object / array 는 매트릭스 contract (string 식별자)
  *   외이므로 skip — 향후 nested 지원 follow-up.
  * - DANGEROUS_KEYS (`__proto__`/`constructor`/`prototype`) 무조건 skip + 결과 객체는
  *   `Object.create(null)` (M3 fix — freshness.ts DANGEROUS_KEYS 와 대칭).
  * - yaml lib 의 strict 옵션 미사용 (default lenient) — 옛 flat parser 의 관용도
  *   유지하기 위함. 단 spec 위반 (invalid escape 등) 은 throw → catch 로 surface.
+ * - **`maxAliasCount: 100`** (yaml lib default 와 동일하나 explicit 으로 lock-in) —
+ *   billion laughs / YAML bomb (anchor/alias exponential expansion) 방어. 향후
+ *   yaml lib default 변경에 대비.
  * - block scalar (`|`/`>`) / quoted / anchor / alias 는 yaml lib 가 정식 해석 →
  *   resolved string value 가 entries 에 그대로 들어감 (옛 parser 의 confidence 강등 제거).
  */
@@ -121,7 +131,7 @@ function parseGooseYaml(raw: string): YamlParseResult {
   const entries = Object.create(null) as Record<string, string>;
   let parsed: unknown;
   try {
-    parsed = parseYaml(raw);
+    parsed = parseYaml(raw, { maxAliasCount: 100 });
   } catch {
     return { entries, hasParseError: true };
   }
@@ -135,10 +145,29 @@ function parseGooseYaml(raw: string): YamlParseResult {
   }
   for (const [key, value] of Object.entries(parsed)) {
     if (!key || DANGEROUS_KEYS.has(key)) continue;
-    if (typeof value !== 'string') continue;
-    entries[key] = value;
+    const coerced = coerceToIdentityString(value);
+    if (coerced === null) continue;
+    // trailing newline strip — block scalar chomping 차이로 동일 secret 가 다르게
+    // 보이지 않도록 정규화. 본문 내부 newline 은 유지 (multi-line key 가능성).
+    entries[key] = coerced.replace(/\n+$/, '');
   }
   return { entries, hasParseError: false };
+}
+
+/**
+ * top-level value 를 identity 비교용 string 으로 강제. 매트릭스 contract (1-depth
+ * string) 외 (nested object / array / null / undefined) 는 null 반환 → skip.
+ *
+ * primitive (number / boolean / bigint) 은 `String()` 으로 강제 — YAML 1.2 spec 의
+ * scalar tag resolution (e.g. `3.5` → number) 으로 인한 silent skip 차단. 옛 flat
+ * parser 시절 string 으로 보존되던 패턴과 호환.
+ */
+function coerceToIdentityString(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  return null;
 }
 
 function extractByPatterns(

@@ -228,6 +228,44 @@ describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', ()
     expect(r.confidence).toBe('low');
     expect(r.detail).toMatch(/YAML parse 실패/);
   });
+
+  it('PR-M quad-review HIGH fix: 동일 본문 + chomping 차이 (`|` clip vs `|-` strip) → false-positive value-only 회귀 차단', () => {
+    // yaml lib: `K: |\n  v` → `"v\n"` (clip, trailing \n 유지)
+    //          `K: |-\n  v` → `"v"` (strip, trailing \n 제거)
+    // 사용자가 stored 는 `|`, live 는 `|-` 로 (또는 Goose 재직렬화로) 작성 시
+    // 동일 secret 인데 trailing \n 차이로 value-only rotation 으로 잘못 분류되던 회귀.
+    // parseGooseYaml 의 trailing newline strip 정규화로 fix 됨 → meta-only 분류.
+    const stored = ['ANTHROPIC_API_KEY: |', '  sk-SAME', ''].join('\n');
+    const live = ['ANTHROPIC_API_KEY: |-', '  sk-SAME', ''].join('\n');
+    const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('meta-only'); // 값 동일, 외 필드만 변경 (chomping 마커)
+  });
+
+  it('PR-M quad-review MED fix: GOOSE_MODEL 의 numeric value (`3.5`) 도 매트릭스 진입 — silent skip 회귀 차단', () => {
+    // YAML 1.2 spec 의 scalar tag resolution 으로 `3.5` 는 number 로 parse 됨.
+    // 옛 string-only filter (`typeof !== 'string' continue`) 는 silent skip →
+    // sameKeySet 비대칭 → false-positive stale 분류 위험.
+    // coerceToIdentityString 으로 String(number) 강제 → 매트릭스 진입.
+    const stored = ['GOOSE_PROVIDER__TYPE: anthropic', 'GOOSE_MODEL: 3.5', ''].join('\n');
+    const live = ['GOOSE_PROVIDER__TYPE: anthropic', 'GOOSE_MODEL: 4.0', ''].join('\n');
+    const r = gooseAdapter.compare(YAML_CONFIG, stored, live);
+    // GOOSE_MODEL 만 값 변경, GOOSE_PROVIDER__TYPE 동일 → 단순 rotation (model 변경).
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('value-only');
+  });
+
+  it('PR-M quad-review MED fix: boolean / null literal value 도 정합 처리', () => {
+    // YAML 1.2 의 `true`/`false`/`yes`/`null`/`~` 등이 scalar tag resolution 됨.
+    // boolean 은 coerce, null 은 skip — 양쪽 동일하게 처리되는지 검증.
+    // 양쪽 모두 boolean true → 매트릭스 매칭 동일 → meta-only.
+    const stored = makeYaml({ ANTHROPIC_API_KEY: 'sk-X', GOOSE_DEBUG: 'true' });
+    const live = makeYaml({ ANTHROPIC_API_KEY: 'sk-X', GOOSE_DEBUG: 'false' });
+    // GOOSE_DEBUG 는 provider/routing 매트릭스 미매칭 → meta-only.
+    const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('meta-only');
+  });
 });
 
 describe('gooseAdapter — M2 _TOKEN$ regex 제거 (non-provider 흡수 차단)', () => {
