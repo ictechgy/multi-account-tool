@@ -24,6 +24,7 @@
 
 import { findCliDef } from './cli-defs.js';
 import { UnknownCliError } from './errors.js';
+import { redactSecretLikeMessage } from './freshness-adapters/_shared.js';
 import { readProfileFile } from './profile-store.js';
 import { readSource } from './sources.js';
 
@@ -367,8 +368,15 @@ function compareOne(
     // adapter 예외 → 실제 fallbackCompare 호출 후 detail 에 예외 메시지 append.
     // (quad-review MEDIUM fix: catch 가 generic rotated 만 반환하면 byte-diff
     // 비교 자체를 건너뛰어 의미 손실. fallback 정상 분류 + 예외 surface 가 정합.)
+    //
+    // PR-L (PR-H quad-review iter 2 M4 fix 마무리): adapter 예외 메시지에 raw
+    // payload 일부 (access_token/refresh_token 등) 가 포함될 가능성 — 사용자 detail
+    // 에 그대로 surface 하면 CI 로그/dialog 화면에 secret 누설. SourceAdapter
+    // contract (line 76-87) 는 정상 return 의 detail 만 redact 의무화 했으므로
+    // throw path 는 별도 방어가 필요. _shared.redactSecretLikeMessage 로 base64-like
+    // 20자+ 및 JWT prefix 를 <redacted> 처리 + 120자 cap.
     const result = fallbackCompare(stored, live);
-    const adapterMsg = (err as Error).message;
+    const adapterMsg = redactSecretLikeMessage((err as Error).message);
     return {
       ...result,
       detail: `${result.detail ? `${result.detail}; ` : ''}adapter 예외: ${adapterMsg}`
