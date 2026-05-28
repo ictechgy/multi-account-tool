@@ -141,7 +141,7 @@ describe('gooseAdapter — config.yaml routing 매트릭스 (M1 fix)', () => {
   });
 });
 
-describe('gooseAdapter — H1 empty-matrix + H2 block scalar', () => {
+describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', () => {
   it('H1: 매트릭스 추출 0/0 + byte-diff → low-conf rotated both', () => {
     // PROVIDER_KEY_PATTERNS / CONFIG_ROUTING_KEY_PATTERNS 모두 미매칭 키.
     // 양쪽 모두 매트릭스 빈 → low-conf rotated both 분류 (freshness.ts:266-277 와 대칭).
@@ -154,54 +154,79 @@ describe('gooseAdapter — H1 empty-matrix + H2 block scalar', () => {
     expect(r.detail).toMatch(/provider 키 미감지/);
   });
 
-  it('H2: block scalar `|` 감지 → confidence low 강등 + detail hint', () => {
-    // ANTHROPIC_API_KEY: | 다음 indent 라인의 secret 본문이 silent 손실 가능.
+  it('PR-M: block scalar `|` 가 정식 parse → resolved 값 비교 → rotated value-only (medium)', () => {
+    // 옛 flat parser 는 indent 라인을 skip 해 secret 본문 손실 → low-conf 강등.
+    // yaml lib (v2, YAML 1.2 spec) 도입 후엔 block scalar 가 resolved string 으로
+    // entries 에 들어감 → 매트릭스가 정확히 매칭 → 값 변경 시 rotated value-only.
     const stored = ['ANTHROPIC_API_KEY: |', '  sk-ant-OLD', ''].join('\n');
     const live = ['ANTHROPIC_API_KEY: |', '  sk-ant-NEW', ''].join('\n');
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
-    expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/block scalar/);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('value-only');
+    expect(r.confidence).toBe('medium');
+    // 더 이상 block scalar hint 미포함 (정식 parse 라 confidence 강등 불필요).
+    expect(r.detail).not.toMatch(/block scalar/);
   });
 
-  it('H2: block scalar `>` 도 동일 감지', () => {
+  it('PR-M: block scalar `>` (folded) 도 정식 parse + 비교', () => {
+    // `>` 는 newline 을 space 로 folding 하지만 값은 string 으로 추출됨.
     const stored = ['OPENAI_API_KEY: >', '  sk-O-OLD'].join('\n');
     const live = ['OPENAI_API_KEY: >', '  sk-O-NEW'].join('\n');
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
-    expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/block scalar/);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('value-only');
+    expect(r.confidence).toBe('medium');
   });
 
-  it('iter 2 Codex-3 #1 fix: block scalar 의 indentation indicator (`|2`, `|-2`, `>+2`) 도 감지', () => {
-    // BLOCK_SCALAR_VALUE_RE 확장 회귀 가드. YAML spec 의 valid block scalar header
-    // 전체 커버 — 이전 regex 는 bare `|`/`>` + chomping `|+`/`|-` 만 감지.
+  it('PR-M: block scalar 의 chomping/indentation indicator (`|2`, `|-`, `>+`) 도 정식 parse', () => {
+    // YAML spec 의 valid block scalar header 전체 — yaml lib 가 해석.
     const cases = [
       ['ANTHROPIC_API_KEY: |2', '  sk-A'],
-      ['ANTHROPIC_API_KEY: |-2', '  sk-A'],
-      ['ANTHROPIC_API_KEY: >+2', '  sk-A'],
-      ['ANTHROPIC_API_KEY: |2-', '  sk-A']
+      ['ANTHROPIC_API_KEY: |-', '  sk-A'],
+      ['ANTHROPIC_API_KEY: >+', '  sk-A']
     ];
     for (const lines of cases) {
-      const r = gooseAdapter.compare(YAML_SECRETS, lines.join('\n'), 'ANTHROPIC_API_KEY: sk-DIFFERENT\n');
-      expect(r.confidence).toBe('low');
-      expect(r.detail).toMatch(/block scalar/);
+      const r = gooseAdapter.compare(
+        YAML_SECRETS,
+        lines.join('\n'),
+        'ANTHROPIC_API_KEY: sk-DIFFERENT\n'
+      );
+      expect(r.kind).toBe('rotated');
+      expect(r.subtype).toBe('value-only');
+      // medium 이어야 함 — 옛 flat parser 시절의 low 강등이 사라졌는지 회귀 가드.
+      expect(r.confidence).toBe('medium');
     }
   });
 
-  it('iter 2 Codex-3 #1 fix: block scalar header + trailing comment (`| # comment`) 도 감지', () => {
+  it('PR-M: block scalar header + trailing comment (`| # comment`) 도 정식 parse', () => {
     const stored = ['ANTHROPIC_API_KEY: | # inline comment', '  sk-OLD'].join('\n');
     const live = ['ANTHROPIC_API_KEY: |', '  sk-NEW'].join('\n');
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
-    expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/block scalar/);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('value-only');
+    expect(r.confidence).toBe('medium');
   });
 
-  it('H1 + H2 결합: 매트릭스 빈 + block scalar 감지 → detail 에 두 hint 모두 포함', () => {
-    const stored = ['random_key: |', '  some content'].join('\n');
-    const live = ['random_key2: |', '  other content'].join('\n');
+  it('PR-M: invalid YAML → parse 실패 → empty matrix verdict 의 YAML parse 실패 hint', () => {
+    // yaml lib 의 throw 케이스 (닫히지 않은 quote 등). 양쪽 모두 throw → empty
+    // matrix verdict 가 parse 실패 hint 포함.
+    const stored = 'ANTHROPIC_API_KEY: "unclosed quote\n';
+    const live = 'OPENAI_API_KEY: "another unclosed\n';
+    const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('both');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/YAML parse 실패/);
+  });
+
+  it('PR-M: 한쪽만 invalid YAML + 매트릭스 매칭 → downgrade 로 confidence low', () => {
+    // 한쪽 정상 (매트릭스 매칭) + 한쪽 throw → matrix verdict 에 parse 실패 hint
+    // 부착 + confidence low 로 강등 (downgradeForParseError).
+    const stored = 'ANTHROPIC_API_KEY: "unclosed\n';
+    const live = 'ANTHROPIC_API_KEY: sk-VALID\n';
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/provider 키 미감지/);
-    expect(r.detail).toMatch(/block scalar 감지/);
+    expect(r.detail).toMatch(/YAML parse 실패/);
   });
 });
 

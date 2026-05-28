@@ -14,7 +14,7 @@
  *    `keyring::set_password(SERVICE, "secrets", yaml_content)` 으로 직렬화). 따라서
  *    KeychainStored.value 는 YAML 본문 그대로.
  *
- * identity 분류 (PR-H iter 1 quad-review HIGH/MED 합의 반영):
+ * identity 분류 (PR-H iter 1 quad-review HIGH/MED 합의 + PR-M YAML lib 도입):
  *  - **secrets.yaml / keyring**: PROVIDER_KEY_PATTERNS (known provider 명만 — generic
  *    `_TOKEN$` 제거, M2 fix) 매트릭스로 추출. 키 set 변경 → stale, 값 변경 → rotated
  *    value-only, 외 필드만 → meta-only.
@@ -22,21 +22,30 @@
  *    매트릭스. provider 변경 → stale (M1 fix).
  *  - **양쪽 모두 매트릭스 추출 0건 + byte-diff** → low-conf rotated both (H1 fix).
  *    freshness.ts:266-277 의 empty whitelist 패턴과 대칭.
- *  - **block scalar (`|` / `>`) 감지** → low-conf 강등 (H2 fix). flat parser 가
- *    indent 라인을 skip 하므로 secret 값이 silent 손실될 위험.
+ *  - **YAML parse 실패** → low-conf 강등 (PR-M). 손상된 YAML 또는 spec 위반.
  *  - **keyring wrapper account XOR / 비-string** → stale low (H4 fix). 한쪽만 account
  *    있거나 비-string 인 케이스를 silent skip 하면 identity 안전망 우회.
  *
+ * PR-M (yaml lib 도입):
+ *  - 옛 간이 flat parser 는 1-depth `KEY: VALUE` 만 처리, block scalar (`|`/`>`) 와
+ *    nested 구조는 감지만 하고 confidence 강등. 일부 사용자 secrets.yaml 패턴 (긴
+ *    multi-line API key 가 block scalar 로 저장된 경우 등) 에서 false-positive
+ *    low-conf 다발.
+ *  - 본 PR: `yaml` npm lib (v2, YAML 1.2 spec) 로 교체. block scalar / quoted /
+ *    anchor / alias 정식 지원. nested 구조는 여전히 top-level string-valued 키만
+ *    추출 (adapter 의 매트릭스가 1-depth contract).
+ *
  * 한계 명시:
- *  - 간이 flat YAML parser — 1-depth `KEY: VALUE` 라인만 처리. block scalar 와 nested
- *    구조는 감지만 하고 분류 confidence 강등 (H2 fix). 완전한 YAML 정합성은 yaml
- *    lib 도입 follow-up.
+ *  - 1-depth `Record<string, string>` 매트릭스 contract — nested/array/numeric/boolean
+ *    값은 매트릭스 미진입. Goose 의 정형 secrets.yaml/config.yaml 패턴은 이 contract
+ *    충족 (string-valued top-level).
  *  - API key 자체에 provider 신원 정보 없음 (sk-ant- prefix 외) — 같은 provider 의
  *    다른 계정 키로 swap 시 stale 못 잡고 rotated value-only 로 분류.
  *  - PROVIDER_KEY_PATTERNS / CONFIG_ROUTING_KEY_PATTERNS 는 보수적 화이트리스트 —
  *    신규 provider 추가 시 갱신 필요. fallback 으로 byte-diff 분류는 유지.
  */
 
+import { parse as parseYaml } from 'yaml';
 import { maskIdentifier } from '../errors.js';
 import type { CompareResult, SourceAdapter } from '../freshness.js';
 import { DANGEROUS_KEYS, parseJsonObject } from './_shared.js';
@@ -88,69 +97,48 @@ const CONFIG_ROUTING_KEY_PATTERNS: RegExp[] = [
  */
 const CONFIG_STALE_ON_VALUE_CHANGE_RE = /^(GOOSE_PROVIDER__TYPE|GOOSE_PROVIDER)$/;
 
-/**
- * block scalar 마커 (`|` 또는 `>`) 가 단독 value 인 라인 패턴 (H2 + iter 2 Codex-3 #1 fix).
- *
- * YAML spec 의 block scalar header 전체 커버:
- *  - bare: `|`, `>`
- *  - chomping indicator: `|-`, `|+`, `>-`, `>+`
- *  - indentation indicator: `|2`, `|-2`, `|2-`, `>+2`, `>2+` 등 (1-9 digit, optional)
- *  - trailing comment: `| # comment` (YAML 은 block scalar header 뒤 주석 허용)
- *
- * 모두 단독 value 라인일 때만 매칭 — inline scalar value 와 충돌 회피.
- * flat parser 가 다음 indent 라인의 secret 본문을 skip 하므로 비교 신뢰도 손상.
- */
-const BLOCK_SCALAR_VALUE_RE = /^\s*[|>](?:[+-]?[1-9]?|[1-9][+-]?)?\s*(?:#.*)?$/;
-
-/** 간이 flat YAML 처리 결과 + block scalar 감지 플래그. */
+/** YAML 처리 결과 + parse 실패 플래그. */
 interface YamlParseResult {
-  /** 1-depth `KEY: VALUE` 매트릭스. prototype pollution 가드 적용 (Object.create(null)). */
+  /** 1-depth `KEY: string-value` 매트릭스. prototype pollution 가드 적용. */
   entries: Record<string, string>;
-  /** YAML 본문에 block scalar (`|`/`>`) value 가 1줄이라도 등장하면 true. */
-  hasBlockScalar: boolean;
+  /** yaml lib 가 throw 했거나 결과가 plain object 가 아닌 경우 (array/scalar 등). */
+  hasParseError: boolean;
 }
 
 /**
- * 간이 flat YAML parser — `KEY: VALUE` 라인 1-depth 만 추출.
+ * `yaml` (v2, YAML 1.2 spec) 으로 raw 를 parse 후 top-level string-valued 키만 추출.
  *
- * - `#` 로 시작하는 라인 (주석) 무시.
- * - 빈 라인 무시.
- * - 들여쓰기된 라인 (nested) 은 top-level 아니므로 skip.
- * - VALUE 의 양옆 single/double quote 1쌍은 strip (Goose 가 보통 unquoted 으로 저장).
- * - block scalar value (`|`/`>`) 가 등장하면 `hasBlockScalar=true` — caller 가
- *   confidence 강등에 사용 (H2 fix).
- * - DANGEROUS_KEYS (`__proto__`/`constructor`/`prototype`) 는 무조건 skip + 결과
- *   객체는 `Object.create(null)` (M3 fix — freshness.ts DANGEROUS_KEYS 와 대칭).
+ * - nested object / array / number / boolean 값은 매트릭스 contract (1-depth string)
+ *   외이므로 skip — 향후 nested 지원 follow-up.
+ * - DANGEROUS_KEYS (`__proto__`/`constructor`/`prototype`) 무조건 skip + 결과 객체는
+ *   `Object.create(null)` (M3 fix — freshness.ts DANGEROUS_KEYS 와 대칭).
+ * - yaml lib 의 strict 옵션 미사용 (default lenient) — 옛 flat parser 의 관용도
+ *   유지하기 위함. 단 spec 위반 (invalid escape 등) 은 throw → catch 로 surface.
+ * - block scalar (`|`/`>`) / quoted / anchor / alias 는 yaml lib 가 정식 해석 →
+ *   resolved string value 가 entries 에 그대로 들어감 (옛 parser 의 confidence 강등 제거).
  */
-function parseFlatYaml(raw: string): YamlParseResult {
+function parseGooseYaml(raw: string): YamlParseResult {
   const entries = Object.create(null) as Record<string, string>;
-  let hasBlockScalar = false;
-  for (const line of raw.split('\n')) {
-    if (line.startsWith(' ') || line.startsWith('\t')) continue;
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const colonIdx = trimmed.indexOf(':');
-    if (colonIdx < 0) continue;
-    const key = trimmed.slice(0, colonIdx).trim();
-    const rawValue = trimmed.slice(colonIdx + 1);
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(raw);
+  } catch {
+    return { entries, hasParseError: true };
+  }
+  // yaml.parse 가 `null` 반환 = 빈 문서 또는 only-comment.
+  if (parsed === null || parsed === undefined) {
+    return { entries, hasParseError: false };
+  }
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    // top-level scalar / array — Goose 의 정형 패턴 외 → parse 실패로 surface.
+    return { entries, hasParseError: true };
+  }
+  for (const [key, value] of Object.entries(parsed)) {
     if (!key || DANGEROUS_KEYS.has(key)) continue;
-    if (BLOCK_SCALAR_VALUE_RE.test(rawValue)) {
-      hasBlockScalar = true;
-    }
-    entries[key] = stripQuotes(rawValue.trim());
+    if (typeof value !== 'string') continue;
+    entries[key] = value;
   }
-  return { entries, hasBlockScalar };
-}
-
-function stripQuotes(v: string): string {
-  if (v.length >= 2) {
-    const first = v[0];
-    const last = v[v.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return v.slice(1, -1);
-    }
-  }
-  return v;
+  return { entries, hasParseError: false };
 }
 
 function extractByPatterns(
@@ -231,26 +219,27 @@ function compareIdentityMatrix(
 
 /**
  * YAML 본문 비교 — secrets.yaml / keyring 또는 config.yaml. saveAs 에 따라 매트릭스
- * 분기. block scalar 감지 시 모든 분류 confidence 강등 (H2 fix).
+ * 분기. parse 실패 시 모든 분류 confidence 강등.
  */
 function compareGooseYaml(saveAs: string, stored: string, live: string): CompareResult {
   if (stored === live) {
     return { kind: 'fresh', confidence: 'high' };
   }
-  const sParsed = parseFlatYaml(stored);
-  const lParsed = parseFlatYaml(live);
+  const sParsed = parseGooseYaml(stored);
+  const lParsed = parseGooseYaml(live);
   const isConfig = saveAs === 'goose-config.yaml';
   const patterns = isConfig ? CONFIG_ROUTING_KEY_PATTERNS : PROVIDER_KEY_PATTERNS;
   const label = isConfig ? 'routing' : 'provider';
   const staleOnChange = isConfig ? CONFIG_STALE_ON_VALUE_CHANGE_RE : undefined;
   const sIds = extractByPatterns(sParsed.entries, patterns);
   const lIds = extractByPatterns(lParsed.entries, patterns);
+  const parseFailed = sParsed.hasParseError || lParsed.hasParseError;
   if (Object.keys(sIds).length === 0 && Object.keys(lIds).length === 0) {
-    return emptyMatrixVerdict(sParsed.hasBlockScalar || lParsed.hasBlockScalar, label);
+    return emptyMatrixVerdict(parseFailed, label);
   }
   const verdict = compareIdentityMatrix(sIds, lIds, label, staleOnChange);
-  if (sParsed.hasBlockScalar || lParsed.hasBlockScalar) {
-    return downgradeForBlockScalar(verdict);
+  if (parseFailed) {
+    return downgradeForParseError(verdict);
   }
   return verdict;
 }
@@ -260,23 +249,23 @@ function compareGooseYaml(saveAs: string, stored: string, live: string): Compare
  * 안 되므로 자격증명 변경 여부 불확실 → low-conf rotated both. freshness.ts:266-277
  * 의 fallback 패턴과 대칭.
  */
-function emptyMatrixVerdict(hasBlockScalar: boolean, label: string): CompareResult {
-  const blockHint = hasBlockScalar ? ' + block scalar 감지' : '';
+function emptyMatrixVerdict(parseFailed: boolean, label: string): CompareResult {
+  const hint = parseFailed ? ' + YAML parse 실패' : '';
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'low',
-    detail: `Goose YAML: ${label} 키 미감지${blockHint} — flat YAML 한계, byte 비교만`
+    detail: `Goose YAML: ${label} 키 미감지${hint} — byte 비교만`
   };
 }
 
 /**
- * block scalar (`|`/`>`) 감지 시 confidence 강등 — flat parser 가 indent 라인을 skip
- * 하므로 secret 본문이 silent 손실 가능 (H2 fix). caller 가 산정한 verdict 의
- * confidence 만 'low' 로 낮추고 detail 에 hint 추가.
+ * YAML parse 실패 시 confidence 강등 (PR-M). yaml lib 가 spec 위반 (invalid escape,
+ * 닫히지 않은 quote, malformed indentation 등) 으로 throw 한 경우 — 매트릭스
+ * 추출이 부분적이거나 stale 한 데이터일 수 있어 신뢰도 낮춤.
  */
-function downgradeForBlockScalar(verdict: CompareResult): CompareResult {
-  const hint = ' (block scalar `|`/`>` 감지 — flat parser 한계, 분류 신뢰도 강등)';
+function downgradeForParseError(verdict: CompareResult): CompareResult {
+  const hint = ' (YAML parse 실패 — 손상된 YAML 또는 spec 위반)';
   return {
     ...verdict,
     confidence: 'low',
