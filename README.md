@@ -47,13 +47,13 @@ Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refre
 | Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 High — confirmed token revocation after stale restore | `mat freshness codex` before swap; `mat exec` for one-shot sessions |
 | Gemini / Antigravity | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 High | Same as Codex |
 | OpenCode | OAuth per provider (`provider.refresh`, `provider.accountId`) | 🔴 High | Same as Codex |
-| Claude Code | macOS Keychain (Anthropic OAuth) | 🟠 Medium-High (rotation suspected) | `mat exec`, and `mat freshness claude` (byte-diff fallback until Claude adapter lands) |
-| Goose | provider-routed (OAuth or API key) | 🟠 Medium | `mat freshness goose` reports the worst per-source result |
+| Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 Mitigated — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec`, and `mat freshness claude` (PR-H adapter, high-confidence rotation classification) |
+| Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider-routed) | 🟢 Mitigated — identity-aware adapter (provider key matrix + keychain account) | `mat freshness goose` reports per-source result, identity-aware |
 | Aider / Kimi / Qwen / Crush | Static API key | 🟢 None | Standard swap is sufficient |
 
 Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live credentials versus the active profile before you swap. Exit code 0 means safe, exit code 1 means `mat` detected `stale` (identity changed or profile missing). For long-running sessions prefer `mat exec`, which automatically restores the previous profile after the command finishes — note that a `SIGKILL` to `mat` itself bypasses restore (see Security section).
 
-> **Current limitation (PR-G now landed):** the TUI swap path detects freshness drift before swapping and shows an interactive **Recapture / Discard / Cancel** dialog (PR-G). Recapture saves the live credentials into the active profile via `snapshotLiveToProfile` then swaps; Discard skips the auto-snapshot (data loss); Cancel aborts. Goose/Claude do not yet have a dedicated adapter — they fall back to byte-diff with `confidence: low`, which may surface the dialog with `[low conf]` even on safe swaps (PR-H follow-up). `mat exec` does not re-capture the live credentials on exit, so a long-running command that triggers a rotation can still lose the new token (PR-I\* follow-up).
+> **OAuth rotation handling (PR-G/PR-I\*/PR-H all landed):** the TUI swap path detects freshness drift before swapping and shows an interactive **Recapture / Discard / Cancel** dialog (PR-G). Recapture saves the live credentials into the active profile via `snapshotLiveToProfile` then swaps; Discard skips the auto-snapshot (data loss); Cancel aborts. `mat exec` re-captures the live credentials on exit (PR-I\*) so rotation triggered during the command is preserved in the swap-target profile before restore — protected against `SIGINT`/`SIGTERM`/`SIGHUP` (`SIGKILL` is OS-level untrappable and falls back to stale-recovery on the next `mat` call). Claude/Goose identity-aware adapters (PR-H) classify rotation vs identity change with `high`/`medium` confidence — no more `[low conf]` dialog noise on safe swaps.
 
 ### Switch flow (lossless)
 

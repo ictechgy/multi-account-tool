@@ -10,8 +10,10 @@
  */
 
 import { getAdapter, registerAdapter } from '../freshness.js';
+import { claudeAdapter } from './claude.js';
 import { codexAdapter } from './codex.js';
 import { geminiAdapter } from './gemini.js';
+import { gooseAdapter } from './goose.js';
 import { opencodeAdapter } from './opencode.js';
 
 /**
@@ -28,9 +30,11 @@ import { opencodeAdapter } from './opencode.js';
 export function registerAllBuiltinAdapters(): void {
   // 이미 등록된 cliId 는 보존 — test mock 또는 향후 user override 가 builtin
   // lazy init 시 덮여지는 사고 방지.
+  if (!getAdapter('claude')) registerAdapter('claude', claudeAdapter);
   if (!getAdapter('codex')) registerAdapter('codex', codexAdapter);
   if (!getAdapter('gemini')) registerAdapter('gemini', geminiAdapter);
+  if (!getAdapter('goose')) registerAdapter('goose', gooseAdapter);
   if (!getAdapter('opencode')) registerAdapter('opencode', opencodeAdapter);
 }
 
-export { codexAdapter, geminiAdapter, opencodeAdapter };
+export { claudeAdapter, codexAdapter, geminiAdapter, gooseAdapter, opencodeAdapter };
