@@ -47,13 +47,13 @@
 | Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 높음 — token revoke 재현됨 | swap 전 `mat freshness codex` 점검 / 일회성은 `mat exec` |
 | Gemini / Antigravity | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 높음 | Codex 와 동일 |
 | OpenCode | provider 별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex 와 동일 |
-| Claude Code | macOS Keychain (Anthropic OAuth) | 🟠 중간-높음 (rotation 추정, identity 필드 `acct`) | `mat exec` 또는 `mat freshness claude` (Claude adapter 도입 전엔 byte-diff fallback) |
-| Goose | provider 라우팅 (OAuth 또는 API key) | 🟠 중간 | `mat freshness goose` 가 source 별 최악 결과 보고 |
+| Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (PR-H adapter, high-confidence rotation 분류) |
+| Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider 라우팅) | 🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account) | `mat freshness goose` 가 source 별 결과 보고, identity-aware |
 | Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap 으로 충분 |
 
 `mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = `stale` 감지 (identity 변경 또는 프로필 부재). 장기 실행 세션은 `mat exec` 사용을 권장 — 명령 종료 후 자동으로 이전 프로필 복원. 단 mat 자체가 `SIGKILL` 을 받으면 복원이 일어나지 않는다 (보안 섹션 참조).
 
-> **현재 한계 (PR-G 머지 후):** TUI 의 swap 흐름이 swap 직전 라이브 freshness 를 점검하고 차이 감지 시 **재캡처 / 폐기 / 취소** 3-옵션 dialog 를 표시한다 (PR-G). 재캡처는 라이브를 `snapshotLiveToProfile` 로 활성 프로필에 저장 후 swap, 폐기는 자동 snapshot 을 건너뛰고 swap (데이터 손실), 취소는 swap 미실행. Goose/Claude 는 전용 adapter 미도입 — byte-diff fallback (`confidence: low`) 으로만 동작하므로 안전한 swap 에서도 `[low conf]` 표기로 dialog 가 떠 보일 수 있다 (PR-H 후속). `mat exec` 는 종료 시 라이브 갱신본을 재캡처하지 않으므로, 장시간 실행 중 rotation 이 일어나면 새 토큰이 손실될 수 있다 (PR-I\* 후속).
+> **OAuth rotation 대응 (PR-G/PR-I\*/PR-H 모두 머지):** TUI 의 swap 흐름이 swap 직전 라이브 freshness 를 점검하고 차이 감지 시 **재캡처 / 폐기 / 취소** 3-옵션 dialog 를 표시한다 (PR-G). 재캡처는 라이브를 `snapshotLiveToProfile` 로 활성 프로필에 저장 후 swap, 폐기는 자동 snapshot 을 건너뛰고 swap (데이터 손실), 취소는 swap 미실행. `mat exec` 는 종료 시 라이브를 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원 (PR-I\*) — `SIGINT`/`SIGTERM`/`SIGHUP` 까지 보호 (`SIGKILL` 은 OS 보장상 trap 불가 → 다음 `mat` 호출의 stale-recovery 가 사용자에게 안내). Claude/Goose identity-aware adapter (PR-H) 가 `high`/`medium` confidence 로 rotation vs 다른 계정을 분류 — 안전한 swap 에서 `[low conf]` dialog noise 제거.
 
 ### 전환 흐름 (데이터 손실 없음)
 
