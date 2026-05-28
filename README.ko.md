@@ -247,8 +247,8 @@ CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 
     ├── gemini/                   # oauth_creds.json + google_accounts.json
     ├── aider/                    # aider.yml
     ├── kimi/                     # config.toml
-    ├── qwen/                     # settings.json + .env
-    ├── crush/                    # crush.json (config + data 레이어)
+    ├── qwen/                     # qwen-settings.json + qwen.env (prefix 적용된 saveAs)
+    ├── crush/                    # crush-config.json + crush-data.json (config + data 레이어)
     ├── opencode/                 # auth.json (OS 공통 XDG 경로)
     └── goose/                    # goose-keyring.json (macOS) + goose-secrets.yaml + goose-config.yaml
 ```

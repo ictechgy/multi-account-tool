@@ -247,8 +247,8 @@ See the OAuth Rotation Safety Matrix at the top of this README for per-CLI class
     ├── gemini/                   # oauth_creds.json + google_accounts.json
     ├── aider/                    # aider.yml
     ├── kimi/                     # config.toml
-    ├── qwen/                     # settings.json + .env
-    ├── crush/                    # crush.json (config + data layers)
+    ├── qwen/                     # qwen-settings.json + qwen.env (prefixed saveAs to disambiguate)
+    ├── crush/                    # crush-config.json + crush-data.json (config + data layers)
     ├── opencode/                 # auth.json (OS-agnostic XDG)
     └── goose/                    # goose-keyring.json (macOS) + goose-secrets.yaml + goose-config.yaml
 ```
