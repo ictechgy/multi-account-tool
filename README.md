@@ -108,7 +108,7 @@ If the CLI's live credentials are already present, `mat` offers to import them a
 ### Adding a new account
 
 1. `mat` → pick a CLI → press `a` → enter a profile name (e.g., `work`)
-2. Press `Enter` on the new profile to make it active. If the live credentials drifted from any other stored profile (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog — see Switch flow + OAuth Rotation Safety Matrix above.
+2. Press `Enter` on the new profile to make it active. If the live credentials drifted from the **active profile**'s stored snapshot (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before swapping — see Switch flow + OAuth Rotation Safety Matrix above.
 3. In a separate terminal, log in to the CLI itself (`claude`, `codex`, `gemini`, …). This overwrites the live credentials with the new account.
 4. Back in `mat`, press `c` on the same profile to **capture** the new live credentials into it
 5. From now on, switch freely between profiles with `Enter`
@@ -125,7 +125,7 @@ If the CLI's live credentials are already present, `mat` offers to import them a
 | Profiles | `c` | Capture live credentials into the focused profile |
 | Profiles | `r` | Rename |
 | Profiles | `d` | Delete |
-| Freshness dialog | `r` | Recapture (save live into active profile before swap) |
+| Freshness dialog | `r` / `Enter` | Recapture (save live into active profile before swap) |
 | Freshness dialog | `d` | Discard (skip auto-snapshot — data loss) |
 | Freshness dialog | `c` / `Esc` | Cancel swap |
 
@@ -160,11 +160,14 @@ Exit codes:
 | Code | Meaning |
 | --- | --- |
 | `0` | Child exited 0 (and restore succeeded) |
-| `1` | Unexpected error |
-| `2` | Usage error (`UsageError`) |
-| `74` | Restore failed (`restoreError` set) — child result preserved on stdout/stderr |
-| `75` | Another `mat exec` holds the per-CLI lock (`LockHeldError`) |
+| `2` | Usage error (`UsageError` — pre-spawn validation) |
+| `74` | `mat`-side restore failed (`restoreError` set) — child result preserved on stdout/stderr |
+| `75` | Another `mat exec` holds the per-CLI lock (`LockHeldError` — pre-spawn) |
 | `128+N` | Child terminated by signal `N` (e.g., `130` for `SIGINT`) |
+| `1` | Either: child exited non-zero with code `1`, OR `mat` itself hit an unexpected error before/after child execution |
+| _other (e.g., `3`, `42`)_ | Child's own non-zero exit code is propagated as-is |
+
+Note: `2` / `74` / `75` are reserved by `mat`'s own error model (pre-spawn validation, lock contention, post-spawn restore failure). Any other non-zero code below `128` is the child's own exit code propagated transparently. Use `restoreError` log lines on stderr to distinguish `74` from a child exit `74` (unlikely but possible).
 
 ### `mat freshness` — pre-swap safety check
 

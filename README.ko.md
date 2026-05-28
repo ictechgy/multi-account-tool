@@ -108,7 +108,7 @@ TUI 가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
 ### 새 계정 추가하기
 
 1. `mat` → CLI 선택 → `a` (새 프로필) → 이름 입력 (예: `work`)
-2. 새 프로필 위에서 `Enter` 눌러 활성화. 만약 라이브 자격증명이 다른 저장 프로필과 drift (OAuth refresh 토큰 회전 등) 한 상태면 **재캡처 / 폐기 / 취소** dialog 가 표시된다 — 위의 전환 흐름 + OAuth Rotation 안전성 매트릭스 참고.
+2. 새 프로필 위에서 `Enter` 눌러 활성화. 만약 라이브 자격증명이 **활성 프로필**의 저장본과 drift (OAuth refresh 토큰 회전 등) 한 상태면 swap 직전에 **재캡처 / 폐기 / 취소** dialog 가 표시된다 — 위의 전환 흐름 + OAuth Rotation 안전성 매트릭스 참고.
 3. 별도 터미널에서 해당 CLI 의 로그인 명령 실행 (`claude`, `codex`, `gemini` 등). 라이브 자격증명이 새 계정 것으로 덮어쓰인다.
 4. `mat` 으로 돌아와 같은 프로필 위에서 `c` (캡처) → 새 라이브 자격증명이 프로필에 저장됨
 5. 이후로는 `Enter` 만으로 프로필 사이를 자유롭게 전환
@@ -125,7 +125,7 @@ TUI 가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
 | 프로필 | `c` | 포커스된 프로필에 현재 라이브 자격증명 캡처 |
 | 프로필 | `r` | 이름 변경 |
 | 프로필 | `d` | 삭제 |
-| Freshness dialog | `r` | 재캡처 (swap 전에 라이브를 활성 프로필에 저장) |
+| Freshness dialog | `r` / `Enter` | 재캡처 (swap 전에 라이브를 활성 프로필에 저장) |
 | Freshness dialog | `d` | 폐기 (자동 snapshot 건너뜀 — 데이터 손실) |
 | Freshness dialog | `c` / `Esc` | swap 취소 |
 
@@ -160,11 +160,14 @@ lterm send-keys "mat exec claude work -- claude" Enter
 | 코드 | 의미 |
 | --- | --- |
 | `0` | 자식 정상 종료 0 (원복 성공) |
-| `1` | 예상치 못한 에러 |
-| `2` | 사용 오류 (`UsageError`) |
-| `74` | 원복 실패 (`restoreError`) — 자식 결과는 stdout/stderr 로 출력됨 |
-| `75` | 다른 `mat exec` 가 CLI lock 보유 중 (`LockHeldError`) |
+| `2` | 사용 오류 (`UsageError` — spawn 전 검증 실패) |
+| `74` | `mat` 자체의 원복 실패 (`restoreError`) — 자식 결과는 stdout/stderr 로 출력됨 |
+| `75` | 다른 `mat exec` 가 CLI lock 보유 중 (`LockHeldError` — spawn 전) |
 | `128+N` | 자식이 시그널 `N` 으로 종료 (예: SIGINT 면 `130`) |
+| `1` | 자식이 종료 코드 `1` 로 끝났거나, `mat` 자체가 spawn 전후로 예상치 못한 에러 |
+| _그 외 (예: `3`, `42`)_ | 자식의 non-zero 종료 코드를 그대로 propagate |
+
+참고: `2` / `74` / `75` 는 `mat` 자체의 에러 모델로 예약 (spawn 전 검증 / lock 경합 / spawn 후 원복 실패). 그 외의 `128` 미만 non-zero 코드는 모두 자식의 종료 코드를 투명하게 그대로 전달. `74` 가 `mat` 의 원복 실패인지 자식의 exit 74 인지 헷갈리면 stderr 의 `restoreError` 로그를 확인.
 
 ### `mat freshness` — swap 전 안전성 점검
 
