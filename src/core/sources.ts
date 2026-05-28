@@ -121,18 +121,19 @@ async function keychainGetValue(service: string, account?: string): Promise<stri
 }
 
 /**
- * Keychain 항목을 안전하게 쓴다.
- *  1) 기존 값/account 메모리 백업
- *  2) 백업 acct 와 정확히 매칭되는 항목만 삭제 (-a 명시).
- *     백업이 있는데 acct 를 못 잡으면 throw — service-only 삭제는 동일 service 의
- *     타 항목 영구 손실 위험이 있어 swap 자체를 거부한다 (data loss 방지).
- *  3) 새 값 추가. 실패 시 백업으로 롤백 (롤백 결과도 확인해 실패 시 에러에 첨부).
+ * Keychain 항목을 안전하게 쓴다 — orchestrator. 실제 4 책임은 3 helper 로 분리됨
+ * (PR-P: 책임 ≤10 lines 가이드 + 컴파일타임 invariant 강제).
+ *  1) `loadKeychainBackup`: 기존 값+account 메모리 백업. account 미식별 시 throw —
+ *     service-only 삭제로 인한 타 entry 영구 손실 차단 (data loss 방지).
+ *  2) `deleteKeychainEntry`: 백업 acct 와 정확히 매칭되는 항목만 삭제 (-a 명시).
+ *  3) `addKeychainEntryOrRollback`: 새 값 add. 실패 시 backup 으로 자동 rollback,
+ *     rollback 도 실패하면 양쪽 에러 동시 surface.
  *
  * `scopeAccount` 가 지정되면 백업 lookup/삭제 모두 `-a scopeAccount` 항목 하나로
  * 제한 — 동일 service 의 타 account 항목은 건드리지 않는다 (multi-account 안전).
  * 미지정 시 단일-account 사용자 전제로 service-only lookup (기존 동작 유지).
  *
- * `-A` 로 동일 사용자 모든 앱이 접근 가능한 ACL 사용 (Claude 가 토큰을 못 읽는 회귀 방지).
+ * 보안 invariant (helper 도 보존): `-A` ACL (Claude 가 토큰을 못 읽는 회귀 방지),
  * argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
  */
 async function keychainSet(
