@@ -1,0 +1,12 @@
+{
+  "name": "opencode oauth provider token rotated, same accountId → rotated value-only high",
+  "cli": "opencode",
+  "saveAs": "opencode-auth.json",
+  "stored": "{\"openai\":{\"type\":\"oauth\",\"access\":\"sk-fake-opencode-0001\",\"refresh\":\"refresh-fake-0001\",\"accountId\":\"acc-0001\",\"expires\":1773758399728}}",
+  "live": "{\"openai\":{\"type\":\"oauth\",\"access\":\"sk-fake-opencode-0002\",\"refresh\":\"refresh-fake-0002\",\"accountId\":\"acc-0001\",\"expires\":1773759999999}}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "value-only",
+    "confidence": "high"
+  }
+}

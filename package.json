@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:contract": "vitest run tests/contract",
     "check-publish": "node scripts/check-publish-readiness.mjs",
     "prepublishOnly": "node scripts/check-publish-readiness.mjs && npm run build"
   },

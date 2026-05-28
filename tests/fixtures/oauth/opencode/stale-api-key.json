@@ -1,0 +1,11 @@
+{
+  "name": "opencode anthropic api key changed → stale high",
+  "cli": "opencode",
+  "saveAs": "opencode-auth.json",
+  "stored": "{\"anthropic\":{\"type\":\"api\",\"key\":\"sk-fake-anthropic-0001\"}}",
+  "live": "{\"anthropic\":{\"type\":\"api\",\"key\":\"sk-fake-anthropic-0002\"}}",
+  "expected": {
+    "kind": "stale",
+    "confidence": "high"
+  }
+}

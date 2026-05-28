@@ -1,0 +1,11 @@
+{
+  "name": "codex different account_id → stale high",
+  "cli": "codex",
+  "saveAs": "auth.json",
+  "stored": "{\"tokens\":{\"access_token\":\"sk-fake-codex-0001\",\"refresh_token\":\"refresh-fake-0001\",\"account_id\":\"acc-0001\"}}",
+  "live": "{\"tokens\":{\"access_token\":\"sk-fake-codex-0002\",\"refresh_token\":\"refresh-fake-0002\",\"account_id\":\"acc-0002\"}}",
+  "expected": {
+    "kind": "stale",
+    "confidence": "high"
+  }
+}

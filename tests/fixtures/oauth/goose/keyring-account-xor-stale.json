@@ -1,0 +1,11 @@
+{
+  "name": "goose keyring wrapper account XOR (stored 만 string) → stale low",
+  "cli": "goose",
+  "saveAs": "goose-keyring.json",
+  "stored": "{\"value\":\"ANTHROPIC_API_KEY: sk-fake-anthropic-0001\\n\",\"account\":\"secrets\"}",
+  "live": "{\"value\":\"ANTHROPIC_API_KEY: sk-fake-anthropic-0001\\n\"}",
+  "expected": {
+    "kind": "stale",
+    "confidence": "low"
+  }
+}

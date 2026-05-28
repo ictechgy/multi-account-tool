@@ -1,0 +1,11 @@
+{
+  "name": "codex byte-identical → fresh",
+  "cli": "codex",
+  "saveAs": "auth.json",
+  "stored": "{\"tokens\":{\"access_token\":\"sk-fake-codex-0001\",\"refresh_token\":\"refresh-fake-0001\",\"account_id\":\"acc-0001\"}}",
+  "live": "{\"tokens\":{\"access_token\":\"sk-fake-codex-0001\",\"refresh_token\":\"refresh-fake-0001\",\"account_id\":\"acc-0001\"}}",
+  "expected": {
+    "kind": "fresh",
+    "confidence": "high"
+  }
+}

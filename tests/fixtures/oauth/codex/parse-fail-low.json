@@ -1,0 +1,12 @@
+{
+  "name": "codex invalid JSON one side → low-conf rotated both",
+  "cli": "codex",
+  "saveAs": "auth.json",
+  "stored": "not valid json",
+  "live": "{\"tokens\":{\"account_id\":\"acc-0001\"}}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "both",
+    "confidence": "low"
+  }
+}
