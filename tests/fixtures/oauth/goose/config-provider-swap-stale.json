@@ -1,0 +1,11 @@
+{
+  "name": "goose config.yaml GOOSE_PROVIDER__TYPE changed → stale medium",
+  "cli": "goose",
+  "saveAs": "goose-config.yaml",
+  "stored": "GOOSE_PROVIDER__TYPE: anthropic\nGOOSE_MODEL: claude-sonnet-4\n",
+  "live": "GOOSE_PROVIDER__TYPE: openai\nGOOSE_MODEL: claude-sonnet-4\n",
+  "expected": {
+    "kind": "stale",
+    "confidence": "medium"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "gemini google_accounts active email changed → stale high",
+  "cli": "gemini",
+  "saveAs": "google_accounts.json",
+  "stored": "{\"active\":\"user-a@fixture.example\",\"old\":[]}",
+  "live": "{\"active\":\"user-b@fixture.example\",\"old\":[\"user-a@fixture.example\"]}",
+  "expected": {
+    "kind": "stale",
+    "confidence": "high"
+  }
+}

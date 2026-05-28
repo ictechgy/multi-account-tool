@@ -1,0 +1,11 @@
+{
+  "name": "claude credentials.json subscriptionType changed → stale medium",
+  "cli": "claude",
+  "saveAs": "credentials.json",
+  "stored": "{\"claudeAiOauth\":{\"accessToken\":\"sk-fake-anthropic-0001\",\"refreshToken\":\"refresh-fake-0001\",\"subscriptionType\":\"pro\"}}",
+  "live": "{\"claudeAiOauth\":{\"accessToken\":\"sk-fake-anthropic-0002\",\"refreshToken\":\"refresh-fake-0002\",\"subscriptionType\":\"max\"}}",
+  "expected": {
+    "kind": "stale",
+    "confidence": "medium"
+  }
+}

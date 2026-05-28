@@ -1,0 +1,12 @@
+{
+  "name": "claude credentials.json (non-macOS) token rotated, same subscriptionType → rotated value-only high",
+  "cli": "claude",
+  "saveAs": "credentials.json",
+  "stored": "{\"claudeAiOauth\":{\"accessToken\":\"sk-fake-anthropic-0001\",\"refreshToken\":\"refresh-fake-0001\",\"subscriptionType\":\"pro\",\"expiresAt\":1773758399728}}",
+  "live": "{\"claudeAiOauth\":{\"accessToken\":\"sk-fake-anthropic-0002\",\"refreshToken\":\"refresh-fake-0002\",\"subscriptionType\":\"pro\",\"expiresAt\":1773759999999}}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "value-only",
+    "confidence": "high"
+  }
+}
