@@ -388,3 +388,287 @@ describe('lockfile.acquireCliLock — doMock 시나리오', () => {
     }
   });
 });
+
+/**
+ * PR-I*: LockBody 확장 (execMode / previousActive / affectsCliIds) +
+ * stale recovery 정책 B (warn + drop) 회귀 가드.
+ *
+ * 신규 필드는 모두 optional — 옛 mat 으로 생성된 info.json (이 필드가 없는 형태) 도
+ * readInfo 가 backward-compat 처리하고, stale recovery 가 두 경우를 명시 분기해 사용자에게
+ * 다른 안내 문구를 stderr 로 출력한다.
+ */
+describe('lockfile.acquireCliLock — PR-I* LockBody 확장', () => {
+  let tmp: TmpHome;
+  beforeEach(async () => { tmp = await setupTmpHome(); });
+  afterEach(async () => { await tmp.cleanup(); });
+
+  it('옵션 없이 호출하면 default execMode="exec" + affectsCliIds=[cliId] + previousActive undefined', async () => {
+    const release = await acquireCliLock('codex', 'work');
+    const info = JSON.parse(
+      await fs.readFile(join(cliLockPath('codex'), 'info.json'), 'utf8')
+    );
+    expect(info.execMode).toBe('exec');
+    expect(info.affectsCliIds).toEqual(['codex']);
+    expect(info.previousActive).toBeUndefined();
+    await release();
+  });
+
+  it('옵션 전달 시 execMode / previousActive / affectsCliIds 모두 info.json 에 직렬화됨', async () => {
+    const release = await acquireCliLock('codex', 'work', {
+      execMode: 'exec',
+      previousActive: 'default',
+      affectsCliIds: ['codex', 'gemini']
+    });
+    const info = JSON.parse(
+      await fs.readFile(join(cliLockPath('codex'), 'info.json'), 'utf8')
+    );
+    expect(info.execMode).toBe('exec');
+    expect(info.previousActive).toBe('default');
+    expect(info.affectsCliIds).toEqual(['codex', 'gemini']);
+    await release();
+  });
+
+  it('execMode="foreground" 도 전달되면 info.json 에 그대로 보존 (향후 TUI 호출 예약)', async () => {
+    const release = await acquireCliLock('codex', 'work', { execMode: 'foreground' });
+    const info = JSON.parse(
+      await fs.readFile(join(cliLockPath('codex'), 'info.json'), 'utf8')
+    );
+    expect(info.execMode).toBe('foreground');
+    await release();
+  });
+
+  it('stale recovery 정책 B — 신규 lock (previousActive 보유) 의 stale 회수 시 사용자 안내 stderr', async () => {
+    // dead pid 의 신규 형식 lock 을 미리 만들어두고, 정상 acquireCliLock 이 stale 회수하면서
+    // stderr 에 "라이브 자격증명이 활성 프로필 '...' 이 아닌 '...' 의 것일 수 있습니다" 출력 검증.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'work',
+        token: 'foreign-token',
+        execMode: 'exec',
+        previousActive: 'default',
+        affectsCliIds: ['codex']
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'new');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(calls).toMatch(/이전 mat exec 가 비정상 종료된 흔적/);
+      expect(calls).toMatch(/활성 프로필 'default' 이 아닌 'work' 의 것/);
+      expect(calls).toMatch(/mat freshness codex/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('stale recovery 정책 B — 옛 lock (previousActive 부재, pre-PR-I*) 회수 시 일반 안내 stderr', async () => {
+    // pre-PR-I* 의 lock shape (execMode/previousActive/affectsCliIds 부재). readInfo 가
+    // optional 필드 부재를 정상 처리하고, stale recovery 가 "이전 mat 버전의 exec lock" 분기로 안내.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'old-profile',
+        token: 'legacy-token'
+        // execMode / previousActive / affectsCliIds 모두 부재 — 옛 버전 lock.
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'recovered');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(calls).toMatch(/이전 mat 버전의 exec lock/);
+      expect(calls).toMatch(/profile=old-profile/);
+      expect(calls).toMatch(/mat freshness codex/);
+      // 신규 lock 분기 문구는 등장하지 않아야.
+      expect(calls).not.toMatch(/활성 프로필 '/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('readInfo: 잘못된 execMode 값 ("invalid") → undefined 로 normalize, stale 회수는 정상 진행', async () => {
+    // execMode 가 'foreground' / 'exec' 외 값이면 옛 lock 으로 간주 (pickExecMode 의 union narrowing).
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: 'now',
+        profile: 'p',
+        token: 'tok',
+        execMode: 'invalid-mode'  // ← 잘못된 값
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'recovered');
+      // release 호출 전에 신규 lock 의 info.json 검증 — release 가 lock 디렉토리 자체를 삭제하므로.
+      const fresh = JSON.parse(
+        await fs.readFile(join(cliLockPath('codex'), 'info.json'), 'utf8')
+      );
+      expect(fresh.profile).toBe('recovered');
+      // execMode 가 normalize 됐으므로 (previousActive 도 없어) 옛 lock 분기로 안내.
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(calls).toMatch(/이전 mat 버전의 exec lock/);
+      await release();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('정책 B 정밀화 — execMode="exec" + previousActive 부재 (손상) → "손상된 흔적" 분기 stderr (옛 버전 분기 아님)', async () => {
+    // quad-review iter 1 Strong MED (Claude-1 + Codex-2 + Claude-2 합의):
+    // 신규 형식 lock 의 손상 케이스. execMode='exec' 로 신규 형식임은 확인되지만
+    // previousActive 가 누락 (호출자가 옵션 일부만 전달 또는 외부 손상). 옛 버전 분기로
+    // 잘못 안내되면 안 되고, 별도 "손상" 분기로 분류돼야 한다.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'work',
+        token: 'foreign-token',
+        execMode: 'exec',
+        // previousActive 의도적 누락
+        affectsCliIds: ['codex']
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'new');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(calls).toMatch(/mat exec lock 의 손상된 흔적/);
+      expect(calls).toMatch(/활성 정보가 누락되어/);
+      expect(calls).toMatch(/mat freshness codex/);
+      // 옛 버전 분기 / 신규 정상 분기 문구 둘 다 등장 금지.
+      expect(calls).not.toMatch(/이전 mat 버전의 exec lock/);
+      expect(calls).not.toMatch(/활성 프로필 '/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('정책 B 정밀화 — execMode="foreground" lock 의 stale 회수 시 "TUI/foreground" 분기 stderr', async () => {
+    // execMode='foreground' 는 향후 TUI 가 직접 lock 잡을 때 사용 예약된 모드. 본 PR 시점
+    // 호출자는 없지만 스키마상 별도 분기로 안내해 옛 버전 / exec 분기와 구분.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'work',
+        token: 'tui-token',
+        execMode: 'foreground'
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'new');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(calls).toMatch(/이전 mat TUI\/foreground 작업의 비정상 종료 흔적/);
+      expect(calls).toMatch(/mat freshness codex/);
+      expect(calls).not.toMatch(/mat exec lock/);
+      expect(calls).not.toMatch(/이전 mat 버전의 exec lock/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('stderr sanitize — info.json 의 control char / 매우 긴 문자열을 stderr 보간 전 strip + 200자 cap', async () => {
+    // quad-review iter 1 Strong LOW security (Codex-2 + Claude-2 합의): info.json 의
+    // raw string 이 ANSI escape / 매우 긴 입력이면 terminal escape injection 위험.
+    // trust boundary 가 self 라 LOW 지만 defense in depth.
+    //
+    // 본 케이스는 신규 lock 의 profile/previousActive 에 control char 와 200+자 입력을
+    // 주입해 stderr 출력 본문이 (1) control char 가 '?' 로 replace 되고 (2) 200자 cap
+    // 적용됨을 검증. validateProfileName 은 일반 호출에서 차단하지만, lock 파일이
+    // 외부 손상된 경우를 가정.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    const longProfile = 'A'.repeat(300);
+    const ansiPrev = '\x1b[31mEVIL\x1b[0m';
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: '2026-05-28T20:00:00Z',
+        profile: longProfile,
+        token: 'tok',
+        execMode: 'exec',
+        previousActive: ansiPrev
+      })
+    );
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const release = await acquireCliLock('codex', 'new');
+      await release();
+      const calls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      // ANSI ESC (\x1b) 가 stderr 본문에 그대로 노출되면 안 됨.
+      expect(calls).not.toMatch(/\x1b\[/);
+      // long profile 은 200자 cap 후에도 'A' 가 등장하나 300자 그대로는 아님.
+      expect(calls).toMatch(/AAAAAA/);
+      // ANSI 의 control char (\x1b) 는 '?' 로 replace 됐어야.
+      expect(calls).toMatch(/\?\[31mEVIL\?\[0m/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('readInfo: affectsCliIds 가 비-문자열 원소 포함 → undefined 로 normalize (손상 간주)', async () => {
+    // pickStringArray 의 every typeof 'string' 가드 회귀 가드. 손상된 값은 LockBody 자체는 valid
+    // 하지만 (execMode/previousActive 도 모두 부재) 신규 옵션 필드만 normalize 되어야.
+    const deadPid = spawnGhostPid();
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: 'now',
+        profile: 'p',
+        token: 'tok',
+        affectsCliIds: [1, 2, 'x']  // ← number 섞임 → undefined 로 normalize
+      })
+    );
+
+    // stale 회수 자체가 throw 없이 정상 동작하면 readInfo 가 손상 시에도 LockBody 보존했다는 증거.
+    const release = await acquireCliLock('codex', 'recovered');
+    // release 전에 신규 lock 검증 — release 가 lock 디렉토리를 삭제.
+    const fresh = JSON.parse(
+      await fs.readFile(join(cliLockPath('codex'), 'info.json'), 'utf8')
+    );
+    expect(fresh.profile).toBe('recovered');
+    expect(fresh.affectsCliIds).toEqual(['codex']);  // default 채워짐
+    await release();
+  });
+});

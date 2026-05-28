@@ -34,7 +34,9 @@ vi.mock('../../src/core/profile-store.js', () => ({
   profileExists: vi.fn()
 }));
 vi.mock('../../src/core/switcher.js', () => ({
-  switchProfile: vi.fn()
+  switchProfile: vi.fn(),
+  // PR-I*: runExec 의 종료 시점 재캡처가 snapshotLiveToProfile 를 직접 호출하므로 mock 필요.
+  snapshotLiveToProfile: vi.fn()
 }));
 // Partial mock: 진짜 LockHeldError 를 보존하고 acquireCliLock 만 spy.
 // 가짜 LockHeldError 를 재정의하면 `instanceof` 검증이 mock 클래스에 대해서만 동작하는
@@ -57,12 +59,18 @@ import { UsageError } from '../../src/core/errors.js';
 import { runExec } from '../../src/core/exec.js';
 import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import { profileExists } from '../../src/core/profile-store.js';
-import { switchProfile, type SwitchResult } from '../../src/core/switcher.js';
+import {
+  snapshotLiveToProfile,
+  switchProfile,
+  type SnapshotResult,
+  type SwitchResult
+} from '../../src/core/switcher.js';
 
 const mockFindCliDef = vi.mocked(findCliDef);
 const mockGetActive = vi.mocked(getActiveProfile);
 const mockProfileExists = vi.mocked(profileExists);
 const mockSwitch = vi.mocked(switchProfile);
+const mockSnapshot = vi.mocked(snapshotLiveToProfile);
 const mockAcquire = vi.mocked(acquireCliLock);
 const mockSpawn = vi.mocked(spawn);
 
@@ -73,6 +81,11 @@ const mockSpawn = vi.mocked(spawn);
  */
 type FakeSwitch = SwitchResult;
 const FAKE_SWITCH = undefined as unknown as FakeSwitch;
+
+/** snapshotLiveToProfile 의 fake 반환 — runExec 가 결과를 직접 참조하지 않으므로 빈 값. */
+const FAKE_SNAPSHOT: SnapshotResult = {
+  cliId: 'codex', profileName: '', captured: [], empty: []
+};
 
 /**
  * findCliDef fixture — CliDef contract 의 모든 필드 채움 + `satisfies` 로 type-check.
@@ -149,6 +162,7 @@ describe('runExec', () => {
     mockGetActive.mockResolvedValue('default');
     mockProfileExists.mockResolvedValue(true);
     mockSwitch.mockResolvedValue(FAKE_SWITCH);
+    mockSnapshot.mockResolvedValue(FAKE_SNAPSHOT);
   });
 
   afterEach(() => {
@@ -164,7 +178,8 @@ describe('runExec', () => {
 
     expect(result).toEqual({ code: 0, signal: null, restoreError: undefined });
     expect(mockSwitch).toHaveBeenNthCalledWith(1, 'codex', 'work');
-    expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default');
+    // PR-I*: restore 는 skipPreSwapSnapshot=true 로 호출 (recapture 가 이미 snapshot 했으므로 중복 회피)
+    expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
     expect(release).toHaveBeenCalledOnce();
     expect(mockSpawn).toHaveBeenCalledWith('echo', ['hi'], { stdio: 'inherit' });
   });
@@ -311,6 +326,10 @@ describe('runExec', () => {
       callOrder.push(`switch:${profile}`);
       return FAKE_SWITCH;
     });
+    mockSnapshot.mockImplementation(async (_cli, profile) => {
+      callOrder.push(`snapshot:${profile}`);
+      return { ...FAKE_SNAPSHOT, profileName: profile };
+    });
     release.mockImplementation(async () => {
       callOrder.push('release:start');
       await new Promise((r) => setImmediate(r));
@@ -336,8 +355,11 @@ describe('runExec', () => {
       await runExec({
         cliId: 'codex', profileName: 'work', command: 'echo', args: []
       });
+      // PR-I*: spawn 종료 후 snapshot(swap-target) → switch(previousActive) 순.
       expect(callOrder).toEqual([
-        'switch:work', 'spawn', 'switch:default',
+        'switch:work', 'spawn',
+        'snapshot:work',     // ← PR-I*: 라이브 재캡처 (rotation 흡수)
+        'switch:default',    // ← restore (skipPreSwapSnapshot=true)
         'release:start', 'release:done',
         'dispose:SIGINT'
       ]);
@@ -421,5 +443,154 @@ describe('runExec', () => {
     await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
     const after = process.listeners('SIGINT').length;
     expect(after).toBe(before);  // 등록 = 해제
+  });
+
+  // ---- PR-I* — rotation 재캡처 + LockBody.previousActive 전달 ----
+
+  it('PR-I*: acquireCliLock 가 execMode/previousActive/affectsCliIds 옵션과 함께 호출됨', async () => {
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+    await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+
+    expect(mockAcquire).toHaveBeenCalledWith('codex', 'work', {
+      execMode: 'exec',
+      previousActive: 'default',
+      affectsCliIds: ['codex']
+    });
+  });
+
+  it('PR-I*: swap 성공 후 cmd 종료 시 snapshotLiveToProfile(cliId, swap-target) 가 호출되어 라이브 재캡처', async () => {
+    // 실시나리오: codex cmd 가 자체적으로 OAuth refresh rotation. 라이브에 새 토큰이 남아 있으므로
+    // swap-target ('work') profile 로 재캡처해야 손실 없음.
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+    await runExec({ cliId: 'codex', profileName: 'work', command: 'codex', args: ['ask'] });
+
+    expect(mockSnapshot).toHaveBeenCalledOnce();
+    expect(mockSnapshot).toHaveBeenCalledWith('codex', 'work');
+  });
+
+  it('PR-I*: restore (previousActive 로 switchProfile) 가 skipPreSwapSnapshot:true 옵션과 함께 호출됨', async () => {
+    // 재캡처 단계에서 이미 snapshot 했으므로 switchProfile 내부 snapshot 중복 회피.
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+    await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+
+    // 1번째 호출 = swap (skipPreSwapSnapshot 없음), 2번째 호출 = restore (skipPreSwapSnapshot=true)
+    expect(mockSwitch).toHaveBeenNthCalledWith(1, 'codex', 'work');
+    expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
+  });
+
+  it('PR-I*: 재캡처 (snapshotLiveToProfile) 실패 → stderr 안내 + restore 는 진행됨', async () => {
+    // best-effort 흐름 회귀 가드. 재캡처 실패해도 restore 가 호출되어 활성 포인터 원복.
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+    mockSnapshot.mockRejectedValueOnce(new Error('keychain locked during recapture'));
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const result = await runExec({
+        cliId: 'codex', profileName: 'work', command: 'echo', args: []
+      });
+      expect(result.code).toBe(0);
+      // restore 는 여전히 호출됨 — switch 호출 횟수 = swap + restore = 2
+      expect(mockSwitch).toHaveBeenCalledTimes(2);
+      expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
+      // 사용자 안내 stderr 확인 — quad-review iter 1 Split LOW (Claude-1/2 합의) fix:
+      // restore 실패 안내와 일관되게 후속 action (`mat freshness <cli>`) 권장 문구 포함.
+      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(stderr).toMatch(/swap 프로필\(work\) 의 라이브 재캡처 실패/);
+      expect(stderr).toMatch(/keychain locked during recapture/);
+      expect(stderr).toMatch(/mat freshness codex/);
+      // restore 자체는 성공이므로 restoreError 는 undefined
+      expect(result.restoreError).toBeUndefined();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('PR-I*: already-active (previousActive === target) → snapshot/restore 모두 skip', async () => {
+    // 기존 already-active 시나리오와 동일 — swap 자체가 일어나지 않으므로 PR-I* 재캡처도 skip.
+    mockGetActive.mockResolvedValue('work');
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+
+    expect(mockSnapshot).not.toHaveBeenCalled();
+    expect(mockSwitch).not.toHaveBeenCalled();
+  });
+
+  it.each<NodeJS.Signals>(['SIGINT', 'SIGTERM', 'SIGHUP'])(
+    'PR-I*: %s forwarder 도 자식에게 신호 전달 후 재캡처 + restore (FORWARD_SIGNALS 매트릭스, quad-review Split LOW fix)',
+    async (sig) => {
+      // plan §198 의 trap 가능 signal (SIGINT/SIGTERM/SIGHUP) 매트릭스 회귀 가드.
+      // table-driven 으로 FORWARD_SIGNALS 변경 시 자동 감지. 기존 SIGINT 단일 케이스
+      // (listener identity 검증) 와 별개로, 본 매트릭스는 finally invariant (재캡처 +
+      // restore) 가 모든 trap 가능 signal 에서 보존됨을 검증.
+      const child = fakeChild({});
+      mockSpawn.mockImplementation(() => {
+        setImmediate(() => {
+          latestSignalListener(sig)(sig);
+          setImmediate(() => child.emit('exit', null, sig));
+        });
+        return asChildProcess(child);
+      });
+
+      const result = await runExec({
+        cliId: 'codex', profileName: 'work', command: 'sleep', args: ['100']
+      });
+
+      expect(child.kill).toHaveBeenCalledWith(sig);
+      expect(result.signal).toBe(sig);
+      // signal 이후에도 재캡처 + restore 가 모두 실행됨 (PR-I* finally invariant)
+      expect(mockSnapshot).toHaveBeenCalledOnce();
+      expect(mockSwitch).toHaveBeenCalledTimes(2);  // swap + restore
+      expect(release).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('PR-I*: snapshotLiveToProfile 가 hang 하면 RECAPTURE_TIMEOUT_MS 후 timeout → stderr 안내 + restore 진행 (quad-review Strong MED fix)', async () => {
+    // quad-review iter 1 Strong MED (Codex-2 + Claude-2 합의): recapture 가 keychain
+    // prompt / NFS stall 등으로 hang 시 finally 전체 차단 → mat 종료 안 됨. timeout
+    // 도입으로 bounded — timeout 후 stderr 안내 + restore 정상 진행.
+    //
+    // fake timers 로 RECAPTURE_TIMEOUT_MS (10s default) advance. snapshotLiveToProfile
+    // mock 는 영원히 pending → withTimeout race 의 timeoutPromise 가 먼저 reject.
+    vi.useFakeTimers();
+    try {
+      mockSnapshot.mockImplementationOnce(() => new Promise(() => { /* never settle */ }));
+      mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      const runPromise = runExec({
+        cliId: 'codex', profileName: 'work', command: 'sleep', args: []
+      });
+      // RECAPTURE_TIMEOUT_MS (10s) 충분히 초과해 timeout reject 유발.
+      await vi.advanceTimersByTimeAsync(11_000);
+      const result = await runPromise;
+
+      expect(result.code).toBe(0);
+      // restore 는 timeout 후에도 호출됨 — swap + restore = 2회.
+      expect(mockSwitch).toHaveBeenCalledTimes(2);
+      expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
+
+      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(stderr).toMatch(/swap 프로필\(work\) 의 라이브 재캡처 실패/);
+      expect(stderr).toMatch(/timeout after 10000ms/);
+      expect(stderr).toMatch(/mat freshness codex/);
+      stderrSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PR-I*: spawn error 후에도 재캡처 + restore 모두 시도됨 (rotation 손실 방지)', async () => {
+    // spawn error (예: 자식 ENOENT) 라도 swap 은 이미 완료된 상태. 라이브에 cmd 가 일부 토큰을
+    // 갱신했을 수 있으므로 재캡처는 시도해야 함. 그 후 restore 도 진행.
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ error: new Error('ENOENT') })));
+
+    await expect(runExec({
+      cliId: 'codex', profileName: 'work', command: 'nosuchbin', args: []
+    })).rejects.toThrow('ENOENT');
+
+    expect(mockSnapshot).toHaveBeenCalledOnce();
+    expect(mockSnapshot).toHaveBeenCalledWith('codex', 'work');
+    expect(mockSwitch).toHaveBeenCalledTimes(2);  // swap + restore
   });
 });
