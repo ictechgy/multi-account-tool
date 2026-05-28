@@ -769,8 +769,11 @@ async function doSwitch(
 
 /**
  * PR-G "재캡처": 라이브 자격증명 (refresh-rotated) 을 활성 프로필에 명시 저장 후 swap.
- * snapshotLiveToProfile → switchProfile 시퀀스. switchProfile 의 내부 자동 snapshot 은
- * 단일 프로세스 race 가 없는 한 동일 상태를 다시 캡처하므로 멱등 — 의미적 안전.
+ *
+ * 시퀀스: `snapshotLiveToProfile(currentActive)` → `switchProfile(to, skipPreSwapSnapshot=true)`.
+ * 내부 자동 snapshot 은 의미적으로 idempotent 하지만 동일 라이브를 두 번 읽고 두 번 쓰는
+ * I/O 비효율 + race window 확대를 막기 위해 명시 `skipPreSwapSnapshot=true` 로 생략.
+ * 폐기 path 의 `skipPreSwapSnapshot=true` 와 동일 옵션 — 단지 명시 snapshot 1회가 선행.
  */
 async function doSwitchWithRecapture(
   cli: CliDef,
@@ -785,7 +788,7 @@ async function doSwitchWithRecapture(
     busyMessage: '라이브 재캡처 후 전환 중...',
     work: async () => {
       await snapshotLiveToProfile(cli.id, currentActive);
-      return await switchProfile(cli.id, to);
+      return await switchProfile(cli.id, to, { skipPreSwapSnapshot: true });
     },
     buildSuccess: (result) => ({
       title: '재캡처 + 전환 완료',
@@ -853,22 +856,24 @@ async function onAddSubmit(
     });
     return;
   }
-  if (!needsUserAttention(report) || hasInflight(report)) {
-    if (hasInflight(report)) {
-      dispatch({
-        type: 'replace',
-        screen: {
-          kind: 'message',
-          tone: 'warning',
-          title: '자격증명 갱신 중 (재시도 권장)',
-          body:
-            `라이브 자격증명이 갱신 중간 상태로 보입니다 (multi-source 부분 갱신).\n` +
-            `잠시 후 다시 시도하세요.`
-        }
-      });
-      return;
-    }
+  // 분기 구조는 checkFreshnessThenSwitch 와 정규화 — fresh → 직진, inflight → 재시도
+  // 안내, 그 외 (rotated/stale) → dialog. 두 mode 가 동일 흐름이라 미래 회귀 위험을 줄임.
+  if (!needsUserAttention(report)) {
     await doCreateProfile(cli.id, name, dispatch, refresh);
+    return;
+  }
+  if (hasInflight(report)) {
+    dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'message',
+        tone: 'warning',
+        title: '자격증명 갱신 중 (재시도 권장)',
+        body:
+          `라이브 자격증명이 갱신 중간 상태로 보입니다 (multi-source 부분 갱신).\n` +
+          `잠시 후 다시 시도하세요.`
+      }
+    });
     return;
   }
   dispatch({
@@ -903,8 +908,10 @@ async function doCreateProfile(
     work: () => snapshotLiveToProfile(cliId, name),
     buildSuccess: (snap) => ({
       title: '프로필 생성 완료',
+      // 활성 프로필은 변경되지 않는다 — 생성된 프로필로 전환하려면 사용자가 별도로
+      // 선택해야 한다 (기존 동작 보존). PR-G 재캡처 path 도 동일.
       body:
-        `'${name}' 프로필이 생성되었습니다.\n` +
+        `'${name}' 프로필이 생성되었습니다. (활성 프로필은 변경되지 않았습니다)\n` +
         (snap.captured.length > 0
           ? `라이브 자격증명을 캡처했습니다: ${snap.captured.join(', ')}`
           : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)
@@ -937,6 +944,7 @@ async function doCreateWithRecapture(
       title: '재캡처 + 프로필 생성 완료',
       body:
         `라이브 자격증명을 '${currentActive}' 에 저장한 뒤 '${newName}' 프로필을 생성했습니다.\n` +
+        `(활성 프로필은 '${currentActive}' 로 유지됩니다)\n` +
         (snap.captured.length > 0
           ? `캡처된 파일: ${snap.captured.join(', ')}`
           : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)

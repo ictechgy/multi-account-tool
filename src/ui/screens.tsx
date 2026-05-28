@@ -210,6 +210,10 @@ interface FreshnessDialogProps {
  *  - d: 폐기 (라이브 무시 — 데이터 손실 위험)
  *  - c 또는 esc: 취소
  *
+ * 렌더링 전제: app.tsx 의 `renderScreen` 이 스택 최상단 화면 1개만 렌더링하므로 본
+ * dialog 와 ProfilesScreen (`c`=capture) 의 키가 겹쳐도 한 시점에 하나만 활성. 향후
+ * 모달 오버레이로 전환 시 재검증 필요.
+ *
  * submittedRef 가드로 사용자 더블 Enter 시 단일 액션만 발사된다 (race 방지 — Confirm
  * 위젯과 동일 패턴).
  */
