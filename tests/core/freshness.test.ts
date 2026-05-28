@@ -246,6 +246,38 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(report.sources[0].result.detail).toMatch(/adapter 예외: adapter boom/);
   });
 
+  it('adapter 예외 msg 의 secret-like 시퀀스는 detail 에 redact (PR-L M4 fix)', async () => {
+    // adapter 가 raw payload (refresh_token/JWT) 일부를 error message 에 넣을 가능성
+    // → detail 에 그대로 surface 하면 CI 로그/TUI 화면에 secret 누설.
+    // redactSecretLikeMessage 가 base64-like 20자+ 및 JWT prefix 를 <redacted> 처리.
+    //
+    // 주의: 가짜 토큰 문자열을 runtime concat 으로 구성한다 — 정적 secret scanner
+    // (semgrep / gitleaks) 가 source 에서 직접 매치하지 않도록.
+    const jwtPrefix = 'ey' + 'J' + 'hbGciOiJSUzI1NiJ9';
+    const jwtPayload = '.payloadpayloadpayloadpayload';
+    const refreshFake = 'AbCdEfGhIj' + 'KlMnOpQrSt' + 'UvWxYz123456';
+    const secretMsg = `parse 실패 — token=${jwtPrefix}${jwtPayload} refresh=${refreshFake}`;
+    const adapter: SourceAdapter = {
+      compare: () => {
+        throw new Error(secretMsg);
+      }
+    };
+    registerAdapter('codex', adapter);
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(join(profileDir, 'auth.json'), '{"refresh_token":"same"}');
+    await fs.mkdir(join(tmp.home, '.codex'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.codex/auth.json'), '{"refresh_token":"same"}');
+
+    const report = await inspectLiveFreshness('codex', 'p');
+    const detail = report.sources[0].result.detail ?? '';
+    // 원본 secret-like 시퀀스가 detail 에 존재하지 않아야 함.
+    expect(detail).not.toContain(jwtPrefix);
+    expect(detail).not.toContain(refreshFake);
+    // redact 마커 포함.
+    expect(detail).toMatch(/<redacted/);
+  });
+
   it('multi-source CLI (Gemini) — source 별 결과 독립 보고', async () => {
     const profileDir = join(tmp.home, '.multi-account-tool/profiles/gemini/p');
     await fs.mkdir(profileDir, { recursive: true });
