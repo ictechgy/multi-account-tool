@@ -20,9 +20,6 @@
 import React, { useEffect, useReducer, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
-import { promises as fs } from 'node:fs';
-import { dirname } from 'node:path';
-
 import { findCliDef, getAllCliDefs } from './core/cli-defs.js';
 import {
   cleanupTmpFiles,
@@ -32,9 +29,31 @@ import {
   markFirstImportPromptShown,
   setActiveProfile
 } from './core/config.js';
-import { detectAll, type DetectionResult } from './core/detector.js';
+import { detectAll } from './core/detector.js';
 import { describeError, errorMessage } from './core/errors.js';
-import { appLogPath } from './core/paths.js';
+import {
+  EMPTY_DATA,
+  initialState,
+  reducer,
+  topOf,
+  type Action,
+  type AppData,
+  type MessageTone,
+  type Screen,
+  type State
+} from './app/state.js';
+import {
+  formatCaptureWarning,
+  formatFirstImportBody,
+  formatFirstImportSummary,
+  formatSwitchConfirmBody,
+  formatSwitchResult,
+  importTitle,
+  importTone,
+  type FirstImportSummary
+} from './app/formatters.js';
+import { validateNewName, validateRenameTo } from './app/validators.js';
+import { appendAppLogBestEffort } from './app/log.js';
 import {
   hasInflight,
   inspectLiveFreshness,
@@ -60,124 +79,7 @@ import { FreshnessDialog, HomeScreen, ProfilesScreen, type CliRow, type ProfileI
 
 // --- 화면 타입 ---
 
-type MessageTone = 'info' | 'success' | 'error' | 'warning';
-
-type Screen =
-  | { kind: 'loading' }
-  | { kind: 'home' }
-  | { kind: 'firstImport'; targets: string[] }
-  | { kind: 'profiles'; cliId: string }
-  | { kind: 'add'; cliId: string }
-  | { kind: 'rename'; cliId: string; oldName: string }
-  | {
-      kind: 'confirm';
-      title: string;
-      body?: string;
-      dangerous?: boolean;
-      onYes: () => void;
-      onNo?: () => void;
-      yesLabel?: string;
-      noLabel?: string;
-    }
-  | {
-      // PR-G: 라이브 자격증명이 활성 프로필 저장본과 다를 때 (OAuth refresh rotation
-      // 등) 사용자에게 재캡처 / 폐기 / 취소 3-옵션을 묻는 dialog.
-      //
-      // - mode='switch': switch action 전 표시. recapture 후 swap, discard 시
-      //   skipPreSwapSnapshot=true 로 swap, cancel 시 swap 미실행.
-      // - mode='create': 새 프로필 생성 전 표시. recapture 후 active 프로필에 라이브
-      //   저장 → 그 후 새 프로필 생성. discard 는 그냥 생성 (active 저장본 stale 유지).
-      kind: 'freshness';
-      mode: 'switch' | 'create';
-      cliId: string;
-      fromProfile: string;
-      toProfile: string;
-      report: FreshnessReport;
-      onRecapture: () => void;
-      onDiscard: () => void;
-      onCancel: () => void;
-      showOnboarding: boolean;
-    }
-  | { kind: 'busy'; message: string }
-  | {
-      kind: 'message';
-      tone: MessageTone;
-      title: string;
-      body?: string;
-      onDismiss?: () => void;
-    };
-
-// --- 데이터 캐시 ---
-
-interface AppData {
-  detection: DetectionResult[];
-  activeByCli: Record<string, string | undefined>;
-  profilesByCli: Record<string, { name: string; meta?: Profile }[]>;
-  firstImportPromptShown: boolean;
-  firstFreshnessPromptShown: boolean;
-}
-
-const EMPTY_DATA: AppData = {
-  detection: [],
-  activeByCli: {},
-  profilesByCli: {},
-  firstImportPromptShown: false,
-  firstFreshnessPromptShown: false
-};
-
-// --- 액션 / 리듀서 ---
-
-type Action =
-  | { type: 'set-data'; data: AppData }
-  | { type: 'push'; screen: Screen }
-  | { type: 'replace'; screen: Screen }
-  | { type: 'pop' }
-  | { type: 'home' }
-  // PR-G quad-review fix (#3): firstFreshnessPromptShown 의 in-memory 즉시 갱신.
-  // file persist (markFirstFreshnessPromptShown) 와 별도 — 같은 세션 내 두 번째
-  // dialog 표시 시 onboarding 패널 중복 표시 차단. file 비동기 쓰기와 reducer
-  // 갱신을 분리해 race window 제거.
-  | { type: 'mark-freshness-prompt-shown' };
-
-interface State {
-  stack: Screen[];
-  data: AppData;
-}
-
-const initialState: State = {
-  stack: [{ kind: 'loading' }],
-  data: EMPTY_DATA
-};
-
-function reducer(state: State, action: Action): State {
-  switch (action.type) {
-    case 'set-data':
-      return { ...state, data: action.data };
-    case 'push':
-      return { ...state, stack: [...state.stack, action.screen] };
-    case 'replace':
-      if (state.stack.length === 0) return { ...state, stack: [action.screen] };
-      return { ...state, stack: [...state.stack.slice(0, -1), action.screen] };
-    case 'pop':
-      // 스택이 비게 되면 home 으로 fallback (root level 화면이 pop 됐을 때 안전).
-      if (state.stack.length <= 1) return { ...state, stack: [{ kind: 'home' }] };
-      return { ...state, stack: state.stack.slice(0, -1) };
-    case 'home':
-      // 명시적 home navigation (firstImport 완료 후 등). 스택 전체를 리셋.
-      return { ...state, stack: [{ kind: 'home' }] };
-    case 'mark-freshness-prompt-shown':
-      if (state.data.firstFreshnessPromptShown) return state;
-      return {
-        ...state,
-        data: { ...state.data, firstFreshnessPromptShown: true }
-      };
-  }
-}
-
-function topOf(state: State): Screen {
-  // reducer 가 invariant (stack.length >= 1) 를 유지하지만 안전망으로 fallback.
-  return state.stack[state.stack.length - 1] ?? { kind: 'home' };
-}
+// 화면 스택 / reducer / AppData / Action / EMPTY_DATA 정의는 src/app/state.ts 로 분리 (PR-O).
 
 // --- 앱 컴포넌트 ---
 
@@ -445,86 +347,9 @@ function renderFirstImport(
 
 // --- 메시지 / 라벨 포매터 ---
 
-function formatFirstImportBody(targets: CliDef[]): string {
-  return (
-    `다음 CLI 에 이미 로그인된 자격증명이 감지되었습니다:\n` +
-    targets.map((c) => `  - ${c.name}`).join('\n') +
-    `\n\n각 CLI 마다 'default' 프로필로 가져올까요?\n` +
-    `라이브 자격증명은 그대로 유지되며 백업만 생성됩니다.\n` +
-    `(이 프롬프트는 어떤 답을 선택하든 다음 실행부터 자동으로 뜨지 않습니다.)`
-  );
-}
-
-function formatSwitchConfirmBody(currentActive: string | undefined, to: string): string {
-  const header = `${currentActive ?? '(없음)'}  →  ${to}\n\n`;
-  if (!currentActive) {
-    return (
-      header +
-      `현재 활성 프로필이 없어 별도 백업 없이 '${to}' 프로필을 복원합니다.\n` +
-      `(주의: 현재 라이브 자격증명은 덮어써집니다)`
-    );
-  }
-  return (
-    header +
-    `현재 라이브 자격증명은 '${currentActive}' 프로필로 자동 백업된 뒤,\n` +
-    `'${to}' 프로필의 자격증명이 복원됩니다.`
-  );
-}
-
-function formatSwitchResult(r: SwitchResult, to: string): string {
-  const lines: string[] = [];
-  if (r.fromSnapshot) {
-    lines.push(`백업 → ${r.fromSnapshot.profileName} : ${r.fromSnapshot.captured.length}개 파일`);
-    if (r.fromSnapshot.empty.length) {
-      lines.push(`  (비어있어 캡처 안 됨: ${r.fromSnapshot.empty.join(', ')})`);
-    }
-  }
-  lines.push(`복원 → ${to} : ${r.restore.restored.length}개 파일`);
-  if (r.restore.missing.length) {
-    lines.push(`  (프로필에 없어 건너뜀: ${r.restore.missing.join(', ')})`);
-  }
-  return lines.join('\n');
-}
-
-function formatCaptureWarning(name: string, active: string | undefined): string {
-  if (name === active) {
-    return (
-      `'${name}' 프로필의 저장된 자격증명을 현재 라이브 값으로 덮어씁니다.\n` +
-      `방금 새 계정으로 로그인을 마쳤다면 이 동작을 사용하세요.`
-    );
-  }
-  return (
-    `'${name}' 프로필의 저장된 자격증명을 현재 라이브 값으로 덮어씁니다.\n\n` +
-    `⚠ 주의: 현재 활성 프로필은 '${active ?? '없음'}' 입니다.\n` +
-    `라이브 자격증명은 활성 프로필의 것이므로, 캡처 시 '${name}' 프로필이\n` +
-    `활성 프로필의 자격증명으로 덮어써집니다 (의도한 동작이 맞는지 확인하세요).`
-  );
-}
-
-// --- 입력 검증 (UI 즉시 피드백) ---
-
-function validateNewName(v: string, existing: Set<string>): string | null {
-  if (!v) return '이름을 입력하세요.';
-  try {
-    const normalized = validateProfileName(v);
-    if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : '잘못된 이름입니다.';
-  }
-}
-
-function validateRenameTo(v: string, oldName: string, existing: Set<string>): string | null {
-  if (!v) return '이름을 입력하세요.';
-  try {
-    const normalized = validateProfileName(v);
-    if (normalized === oldName) return '같은 이름입니다.';
-    if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : '잘못된 이름입니다.';
-  }
-}
+// formatFirstImportBody / formatSwitchConfirmBody / formatSwitchResult /
+// formatCaptureWarning 정의는 src/app/formatters.ts 로 분리 (PR-O).
+// validateNewName / validateRenameTo 는 src/app/validators.ts 로 분리.
 
 // --- 공용 액션 헬퍼 (busy → work → refresh → success/error message) ---
 
@@ -570,11 +395,6 @@ async function declineFirstImport(dispatch: React.Dispatch<Action>): Promise<voi
   dispatch({ type: 'replace', screen: { kind: 'home' } });
 }
 
-interface FirstImportSummary {
-  successes: { cliId: string; captured: string[] }[];
-  failures: { cliId: string; err: string }[];
-}
-
 async function onFirstImport(
   targets: string[],
   dispatch: React.Dispatch<Action>,
@@ -609,28 +429,8 @@ async function onFirstImport(
   });
 }
 
-function importTone(s: FirstImportSummary): MessageTone {
-  if (s.failures.length === 0) return 'success';
-  if (s.successes.length === 0) return 'error';
-  return 'warning';
-}
-
-function importTitle(s: FirstImportSummary): string {
-  if (s.failures.length === 0) return '가져오기 완료';
-  if (s.successes.length === 0) return '가져오기 실패';
-  return '가져오기 부분 완료';
-}
-
-function formatFirstImportSummary(s: FirstImportSummary): string {
-  const lines: string[] = [];
-  for (const ok of s.successes) {
-    lines.push(`✓ ${ok.cliId}: ${ok.captured.length}개 파일 캡처 (${ok.captured.join(', ')})`);
-  }
-  for (const fail of s.failures) {
-    lines.push(`✗ ${fail.cliId}: ${fail.err}`);
-  }
-  return lines.join('\n');
-}
+// importTone / importTitle / formatFirstImportSummary / FirstImportSummary
+// 정의는 src/app/formatters.ts 로 분리 (PR-O).
 
 function onSwitchAction(
   cli: CliDef,
@@ -808,37 +608,7 @@ async function persistFirstFreshnessPromptIfNeeded(data: AppData): Promise<void>
   }
 }
 
-/**
- * TUI 의 best-effort 경고 로그를 ~/.multi-account-tool/app.log 에 append.
- *
- * 호출자: PR-R 의 persist 실패 등 user-flow 차단 금지인 정보성 경고. stderr 대신
- * 본 파일에 ISO 시각 + 메시지 한 줄. 디렉토리 부재 시 mkdir 후 재시도. 본 함수 자체가
- * 실패하면 stderr 로 최후 surface (Ink 충돌 가능성 대비 단 한 줄로 짧게).
- */
-async function appendAppLogBestEffort(message: string): Promise<void> {
-  const line = `${new Date().toISOString()} ${message}\n`;
-  try {
-    await fs.appendFile(appLogPath(), line, { mode: 0o600 });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      // dataDir 미생성 케이스 — mkdir 후 1회 재시도. node:path 의 dirname 으로
-      // cross-platform 디렉토리 추출 (옛 슬래시-only slice 는 Windows 부적합 —
-      // 현재 mat 는 macOS/Linux 전용이나 cli-defs 의 join() 과 일관).
-      try {
-        const path = appLogPath();
-        await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
-        await fs.appendFile(path, line, { mode: 0o600 });
-        return;
-      } catch (retryErr) {
-        process.stderr.write(
-          `[mat] appLog 쓰기 실패 (mkdir retry): ${errorMessage(retryErr)}\n`
-        );
-        return;
-      }
-    }
-    process.stderr.write(`[mat] appLog 쓰기 실패: ${errorMessage(err)}\n`);
-  }
-}
+// appendAppLogBestEffort 정의는 src/app/log.ts 로 분리 (PR-O).
 
 /**
  * PR-G quad-review HIGH fix (#1): freshness dialog 표시 ~ 사용자 결정 사이에
