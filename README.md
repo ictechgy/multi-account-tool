@@ -49,11 +49,27 @@ Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refre
 | OpenCode | OAuth per provider (`provider.refresh`, `provider.accountId`) | 🔴 High | Same as Codex |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 Mitigated — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec`, and `mat freshness claude` (PR-H adapter, high-confidence rotation classification) |
 | Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider-routed) | 🟢 Mitigated — identity-aware adapter (provider key matrix + keychain account) | `mat freshness goose` reports per-source result, identity-aware |
-| Aider / Kimi / Qwen / Crush | Static API key | 🟢 None | Standard swap is sufficient |
+| Aider / Kimi / Qwen / Crush | Static API key | 🟢 None | Standard swap suffices — but environment variables or project-local config can bypass `mat` (see "Platform support" below) |
 
 Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live credentials versus the active profile before you swap. Exit code 0 means safe, exit code 1 means `mat` detected `stale` (identity changed or profile missing). For long-running sessions prefer `mat exec`, which automatically restores the previous profile after the command finishes — note that a `SIGKILL` to `mat` itself bypasses restore (see Security section).
 
 > **OAuth rotation handling (PR-G/PR-I\*/PR-H all landed):** the TUI swap path detects freshness drift before swapping and shows an interactive **Recapture / Discard / Cancel** dialog (PR-G). Recapture saves the live credentials into the active profile via `snapshotLiveToProfile` then swaps; Discard skips the auto-snapshot (data loss); Cancel aborts. `mat exec` re-captures the live credentials on exit (PR-I\*) so rotation triggered during the command is preserved in the swap-target profile before restore — protected against `SIGINT`/`SIGTERM`/`SIGHUP` (`SIGKILL` is OS-level untrappable and falls back to stale-recovery on the next `mat` call). Claude/Goose identity-aware adapters (PR-H) classify rotation vs identity change with `high`/`medium` confidence — no more `[low conf]` dialog noise on safe swaps.
+
+### Platform support
+
+| CLI | macOS | Linux | Windows | Override / known limits |
+| --- | --- | --- | --- | --- |
+| Claude Code | ✅ | ❌ | ❌ | macOS Keychain only — no Linux/Windows credential-store backend yet |
+| Codex CLI | ✅ | ✅ | ⚠️ untested | `~/.codex/auth.json` (cross-platform file path) |
+| Gemini / Antigravity | ✅ | ✅ | ⚠️ untested | `~/.gemini/oauth_creds.json` + `google_accounts.json` |
+| Aider | ✅ | ✅ | ⚠️ untested | **env override**: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_BASE` etc. bypass `~/.aider.conf.yml` — `mat` cannot swap shell env |
+| Kimi CLI | ✅ | ✅ | ⚠️ untested | **env override**: `MOONSHOT_API_KEY` and friends bypass `~/.kimi/config.toml` |
+| Qwen Code CLI | ✅ | ✅ | ⚠️ untested | Credential precedence: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. `mat` swaps both files but cannot affect shell env |
+| Crush | ✅ | ✅ | ⚠️ untested | **project-local override**: `./.crush.json` / `./crush.json` in CWD takes precedence over `~/.config/crush/*`; `CRUSH_GLOBAL_*` env vars also override |
+| OpenCode | ✅ | ✅ | ⚠️ untested | OS-agnostic XDG path (`~/.local/share/opencode/auth.json` on every OS via `xdg-basedir`) |
+| Goose | ✅ | ⚠️ file-only | ❌ | macOS Keychain (`goose`/`secrets`) + `~/.config/goose/*.yaml`. Linux needs `GOOSE_DISABLE_KEYRING=1` (or file backend in `config.yaml`) so credentials land in `secrets.yaml` — mat does not reach `secret-service`/libsecret yet |
+
+"⚠️ untested" = swap logic is platform-agnostic file I/O, but the project's CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI's documentation, not exercised. Patches and bug reports welcome.
 
 ### Switch flow (lossless)
 
@@ -91,12 +107,24 @@ npm run build
 npm link
 ```
 
+### Verify the install
+
+```bash
+mat --version                  # prints the installed semver
+mat --help                     # subcommand list (TUI flags + `mat exec` / `mat freshness`)
+node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (CLI defs load + paths resolve, never touches credentials)
+```
+
+The smoke test is read-only and safe to run on a machine with active mat profiles.
+
 ---
 
 ## Usage
 
 ```bash
-mat
+mat              # launch the TUI
+mat --version    # print installed version
+mat --help       # short usage summary (subcommands: exec, freshness)
 ```
 
 The TUI opens with **CLI → profile → switch**.
@@ -141,7 +169,7 @@ Temporarily swap to `<profile>`, run `<cmd>`, then restore the previously active
 # Run a single Claude session as the "work" profile, then restore "personal"
 mat exec claude work -- claude
 
-# Pair with lterm
+# Pair with lterm (optional — install with `npm install -g @ictechgy/lterm` first)
 lterm send-keys "mat exec claude work -- claude" Enter
 ```
 
@@ -205,14 +233,24 @@ See the OAuth Rotation Safety Matrix at the top of this README for per-CLI class
 ```
 ~/.multi-account-tool/
 ├── config.json                   # active profile pointer + flags
+├── cli-defs/                     # optional user plugins — see "Adding a new CLI"
+│   └── <id>.json
+├── locks/                        # per-CLI `mat exec` lock dirs (auto-recovered on stale)
+│   └── <cli>.lock/
 └── profiles/
-    ├── claude/
+    ├── claude/                   # credentials.json (macOS Keychain backup, plaintext)
     │   ├── personal/
-    │   │   ├── credentials.json  # Keychain entry backup (plaintext JSON)
+    │   │   ├── credentials.json
     │   │   └── meta.json
     │   └── work/...
-    ├── codex/...
-    └── gemini/...
+    ├── codex/                    # auth.json
+    ├── gemini/                   # oauth_creds.json + google_accounts.json
+    ├── aider/                    # aider.yml
+    ├── kimi/                     # config.toml
+    ├── qwen/                     # settings.json + .env
+    ├── crush/                    # crush.json (config + data layers)
+    ├── opencode/                 # auth.json (OS-agnostic XDG)
+    └── goose/                    # goose-keyring.json (macOS) + goose-secrets.yaml + goose-config.yaml
 ```
 
 Files are created with `0600`, directories with `0700`.
