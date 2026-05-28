@@ -88,6 +88,35 @@ describe('mat freshness — exit code 정책', () => {
     expect(result.stderr).toMatch(/알 수 없는 옵션/);
   });
 
+  it('PR-S: multi-source rotated+stale race → inflight → hasUnsafe → exit 1', async () => {
+    // gemini: oauth_creds rotated + google_accounts stale → PR-S 가 둘 다 inflight 로
+    // reclassify. hasUnsafe 가 inflight 도 unsafe 분류 → exit 1.
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/gemini/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(
+      join(profileDir, 'oauth_creds.json'),
+      '{"access_token":"old","refresh_token":"old"}'
+    );
+    await fs.writeFile(
+      join(profileDir, 'google_accounts.json'),
+      '{"active":"alice@fixture.example"}'
+    );
+    const liveDir = join(tmp.home, '.gemini');
+    await fs.mkdir(liveDir, { recursive: true });
+    await fs.writeFile(
+      join(liveDir, 'oauth_creds.json'),
+      '{"access_token":"new","refresh_token":"new"}'
+    );
+    await fs.writeFile(
+      join(liveDir, 'google_accounts.json'),
+      '{"active":"bob@fixture.example"}'
+    );
+
+    const result = runMat(['freshness', 'gemini', '--profile', 'p'], tmp.home);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toMatch(/inflight/);
+  });
+
   it('PR-Q: --check-only 가 --json 과 조합 가능 — exit 0 + JSON 출력', async () => {
     // stale 케이스 setup (저장본만, 라이브 부재).
     const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');

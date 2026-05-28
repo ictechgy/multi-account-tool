@@ -358,6 +358,22 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(report.sources[1].result.kind).toBe('fresh');
   });
 
+  it('PR-S: stale + stale 조합은 race 아님 → reclassify 미적용 (양쪽 동시 다른 계정으로 swap)', async () => {
+    // 양쪽 모두 stale (한 시점에 다른 계정으로 swap 완료). race 가 아니라 의도된
+    // identity 변경 — hasRotated=false 라 aggregation 가드가 통과시킴.
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/gemini/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(join(profileDir, 'oauth_creds.json'), '{"a":1}');
+    await fs.writeFile(
+      join(profileDir, 'google_accounts.json'),
+      '{"active":"alice@fixture.example"}'
+    );
+    // 라이브 양쪽 부재 → 둘 다 stale.
+    const report = await inspectLiveFreshness('gemini', 'p');
+    expect(report.sources[0].result.kind).toBe('stale');
+    expect(report.sources[1].result.kind).toBe('stale');
+  });
+
   it('PR-S: single-source CLI 는 inflight 적용 안 됨 (length < 2)', async () => {
     // codex 는 단일 source (auth.json). identity 변경 (stale) 만 발생해도 inflight
     // reclassify 대상 아님 — race 추론 불가.
