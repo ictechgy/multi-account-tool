@@ -20,6 +20,8 @@
 import React, { useEffect, useReducer, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
+import { promises as fs } from 'node:fs';
+
 import { findCliDef, getAllCliDefs } from './core/cli-defs.js';
 import {
   cleanupTmpFiles,
@@ -31,6 +33,7 @@ import {
 } from './core/config.js';
 import { detectAll, type DetectionResult } from './core/detector.js';
 import { describeError, errorMessage } from './core/errors.js';
+import { appLogPath } from './core/paths.js';
 import {
   hasInflight,
   inspectLiveFreshness,
@@ -792,7 +795,44 @@ async function persistFirstFreshnessPromptIfNeeded(data: AppData): Promise<void>
     await markFirstFreshnessPromptShown();
   } catch (err) {
     // best-effort — 다음 dialog 표시 시 다시 시도된다. 사용자 흐름 차단 금지.
-    process.stderr.write(`[mat] markFirstFreshnessPromptShown 실패: ${errorMessage(err)}\n`);
+    //
+    // PR-R: 옛 코드는 process.stderr.write 로 surface 했으나 Ink 의 alternate-buffer
+    // 모드에서 화면 렌더와 충돌 가능 (PR-G Claude-1 LOW finding). 본 PR 에서 ~/.
+    // multi-account-tool/app.log 에 append 로 전환 — TUI 무영향 + 디버그 audit trail.
+    // 로그 쓰기 자체도 실패하면 빈 catch 금지 규칙 (CLAUDE.md) 에 따라 최후 수단
+    // stderr 안내 — 이중 실패는 영구 디스크 문제로 추정.
+    void appendAppLogBestEffort(
+      `markFirstFreshnessPromptShown 실패: ${errorMessage(err)}`
+    );
+  }
+}
+
+/**
+ * TUI 의 best-effort 경고 로그를 ~/.multi-account-tool/app.log 에 append.
+ *
+ * 호출자: PR-R 의 persist 실패 등 user-flow 차단 금지인 정보성 경고. stderr 대신
+ * 본 파일에 ISO 시각 + 메시지 한 줄. 디렉토리 부재 시 mkdir 후 재시도. 본 함수 자체가
+ * 실패하면 stderr 로 최후 surface (Ink 충돌 가능성 대비 단 한 줄로 짧게).
+ */
+async function appendAppLogBestEffort(message: string): Promise<void> {
+  const line = `${new Date().toISOString()} ${message}\n`;
+  try {
+    await fs.appendFile(appLogPath(), line, { mode: 0o600 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // dataDir 미생성 케이스 — mkdir 후 1회 재시도.
+      try {
+        const path = appLogPath();
+        const dir = path.slice(0, path.lastIndexOf('/'));
+        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+        await fs.appendFile(path, line, { mode: 0o600 });
+        return;
+      } catch (retryErr) {
+        process.stderr.write(`[mat] appLog 쓰기 실패: ${errorMessage(retryErr)}\n`);
+        return;
+      }
+    }
+    process.stderr.write(`[mat] appLog 쓰기 실패: ${errorMessage(err)}\n`);
   }
 }
 
