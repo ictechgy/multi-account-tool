@@ -199,13 +199,25 @@ export async function switchProfile(
   options?: SwitchOptions
 ): Promise<SwitchResult> {
   const current = await getActiveProfile(cliId);
+  // quad-review HIGH fix (#2): current === toProfile 일 때 무조건 no-op.
+  // skipPreSwapSnapshot 이 true 면 restore 가 라이브를 동일 stored 로 덮어쓰면서
+  // 사용자가 의도하지 않은 라이브 회전 토큰까지 실수로 폐기될 수 있다 (public API
+  // 데이터 손실). TUI 는 onSwitchAction 에서 차단하지만 API contract 가 안전해야
+  // mat exec / 외부 호출자도 동일 보호 받는다. snapshotLiveToProfile / restore /
+  // setActive 모두 skip 하고 즉시 idempotent 반환.
+  if (current != null && current === toProfile) {
+    return {
+      fromSnapshot: undefined,
+      restore: { cliId, profileName: toProfile, restored: [], missing: [] },
+      preSwapLiveFreshness: undefined
+    };
+  }
   let fromSnapshot: SnapshotResult | undefined;
   let preSwapLiveFreshness: FreshnessReport | undefined;
   const skipSnapshot = options?.skipPreSwapSnapshot === true;
   const shouldSnapshot =
     !skipSnapshot &&
     current != null &&
-    current !== toProfile &&
     (await profileExists(cliId, current));
   // 활성 포인터가 가리키는 프로필 디렉토리가 외부에서 삭제됐을 경우 좀비 부활 방지:
   // snapshotLiveToProfile 의 auto-create 를 건너뛰고 restore 만 진행한다.

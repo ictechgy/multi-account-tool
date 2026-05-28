@@ -128,7 +128,12 @@ type Action =
   | { type: 'push'; screen: Screen }
   | { type: 'replace'; screen: Screen }
   | { type: 'pop' }
-  | { type: 'home' };
+  | { type: 'home' }
+  // PR-G quad-review fix (#3): firstFreshnessPromptShown 의 in-memory 즉시 갱신.
+  // file persist (markFirstFreshnessPromptShown) 와 별도 — 같은 세션 내 두 번째
+  // dialog 표시 시 onboarding 패널 중복 표시 차단. file 비동기 쓰기와 reducer
+  // 갱신을 분리해 race window 제거.
+  | { type: 'mark-freshness-prompt-shown' };
 
 interface State {
   stack: Screen[];
@@ -156,6 +161,12 @@ function reducer(state: State, action: Action): State {
     case 'home':
       // 명시적 home navigation (firstImport 완료 후 등). 스택 전체를 리셋.
       return { ...state, stack: [{ kind: 'home' }] };
+    case 'mark-freshness-prompt-shown':
+      if (state.data.firstFreshnessPromptShown) return state;
+      return {
+        ...state,
+        data: { ...state.data, firstFreshnessPromptShown: true }
+      };
   }
 }
 
@@ -658,17 +669,10 @@ function onSwitchAction(
 /**
  * PR-G: swap 직전 freshness inspect → 라이브 vs 저장본 차이 감지 시 dialog 분기.
  *
- * 시퀀스:
- *  1) inspectLiveFreshness(cli, currentActive) — read-only.
- *  2) 모든 source `fresh` → 일반 confirm 후 swap (기존 동작 보존).
- *  3) inflight 포함 → 재시도 안내 후 작업 취소.
- *  4) rotated/stale → 3-옵션 dialog (재캡처/폐기/취소).
- *
- * inspect 실패 (UnknownCliError, fs 권한 등) 는 swap 중단 — 사용자가 원인을
- * 확인해야 함. PR-F* 의 switchProfile 자체 safeInspect 와 달리 본 경로는 사용자가
- * 결정 전 상태이므로 silent swallow 부적절.
+ * `inspectAndRouteFreshness` 의 switch-mode 래퍼. 모든 분기 로직은 helper 가
+ * 담당하고 본 함수는 콜백만 제공.
  */
-async function checkFreshnessThenSwitch(
+function checkFreshnessThenSwitch(
   cli: CliDef,
   currentActive: string,
   to: string,
@@ -676,12 +680,77 @@ async function checkFreshnessThenSwitch(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  dispatch({ type: 'push', screen: { kind: 'busy', message: '자격증명 상태 확인 중...' } });
+  return inspectAndRouteFreshness({
+    cli,
+    currentActive,
+    data,
+    dispatch,
+    initialBusyAction: 'push',
+    onFresh: () => dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'confirm',
+        title: `${cli.name} 프로필 전환`,
+        body: formatSwitchConfirmBody(currentActive, to),
+        onYes: () => void doSwitch(cli, to, dispatch, refresh)
+      }
+    }),
+    buildDialog: (report) => ({
+      kind: 'freshness',
+      mode: 'switch',
+      cliId: cli.id,
+      fromProfile: currentActive,
+      toProfile: to,
+      report,
+      showOnboarding: !data.firstFreshnessPromptShown,
+      onRecapture: () =>
+        void doSwitchWithRecapture(cli, currentActive, to, dispatch, refresh),
+      onDiscard: () =>
+        void doSwitchDiscardingLive(cli, currentActive, to, dispatch, refresh),
+      onCancel: () => dispatch({ type: 'pop' })
+    })
+  });
+}
+
+interface FreshnessRoutingOptions {
+  cli: CliDef;
+  currentActive: string;
+  data: AppData;
+  dispatch: React.Dispatch<Action>;
+  /**
+   * Busy 화면 진입 시 dispatch 방식.
+   *  - 'push': 현재 화면을 보존한 채 busy 를 쌓는다 (switch 흐름 — ProfilesScreen 보존).
+   *  - 'replace': 현재 화면을 busy 로 교체 (create 흐름 — TextPrompt 의 add 화면을 dismiss).
+   */
+  initialBusyAction: 'push' | 'replace';
+  /** 모든 source fresh — 사용자 액션 불필요. 호출자가 다음 화면 dispatch. */
+  onFresh: () => void;
+  /** rotated/stale 감지 — 호출자가 freshness Screen 객체 빌드. */
+  buildDialog: (report: FreshnessReport) => Screen;
+}
+
+/**
+ * PR-G quad-review HIGH fix (#9): switch / create 두 모드의 freshness 분기 중복 제거.
+ *
+ * 공통 시퀀스:
+ *  1) busy 화면 dispatch (initialBusyAction 으로 push/replace 결정).
+ *  2) inspectLiveFreshness(cli, currentActive) — read-only.
+ *  3) 예외 → "자격증명 확인 실패" message 후 중단 (사용자가 결정 전 상태라 silent
+ *     swallow 부적절 — PR-F* 의 safeInspectFreshness 와 분기되는 정책).
+ *  4) 모든 source fresh → onFresh() 호출 (호출자 분기).
+ *  5) inflight 포함 → 재시도 안내 message 후 중단.
+ *  6) rotated/stale → buildDialog(report) 의 화면을 dispatch + onboarding 플래그 갱신.
+ */
+async function inspectAndRouteFreshness(opts: FreshnessRoutingOptions): Promise<void> {
+  opts.dispatch({
+    type: opts.initialBusyAction,
+    screen: { kind: 'busy', message: '자격증명 상태 확인 중...' }
+  });
   let report: FreshnessReport;
   try {
-    report = await inspectLiveFreshness(cli.id, currentActive);
+    report = await inspectLiveFreshness(opts.cli.id, opts.currentActive);
   } catch (err) {
-    dispatch({
+    opts.dispatch({
       type: 'replace',
       screen: {
         kind: 'message',
@@ -693,19 +762,11 @@ async function checkFreshnessThenSwitch(
     return;
   }
   if (!needsUserAttention(report)) {
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'confirm',
-        title: `${cli.name} 프로필 전환`,
-        body: formatSwitchConfirmBody(currentActive, to),
-        onYes: () => void doSwitch(cli, to, dispatch, refresh)
-      }
-    });
+    opts.onFresh();
     return;
   }
   if (hasInflight(report)) {
-    dispatch({
+    opts.dispatch({
       type: 'replace',
       screen: {
         kind: 'message',
@@ -718,24 +779,11 @@ async function checkFreshnessThenSwitch(
     });
     return;
   }
-  dispatch({
-    type: 'replace',
-    screen: {
-      kind: 'freshness',
-      mode: 'switch',
-      cliId: cli.id,
-      fromProfile: currentActive,
-      toProfile: to,
-      report,
-      showOnboarding: !data.firstFreshnessPromptShown,
-      onRecapture: () =>
-        void doSwitchWithRecapture(cli, currentActive, to, dispatch, refresh),
-      onDiscard: () => void doSwitchDiscardingLive(cli, to, dispatch, refresh),
-      onCancel: () => dispatch({ type: 'pop' })
-    }
-  });
-  // dialog 가 표시된 시점에 onboarding 플래그 영구 기록 — 다음 표시부터는 panel 생략.
-  void persistFirstFreshnessPromptIfNeeded(data);
+  opts.dispatch({ type: 'replace', screen: opts.buildDialog(report) });
+  // dialog 가 표시된 시점에 onboarding 플래그 즉시 in-memory 갱신 (#3 fix).
+  // file persist 는 fire-and-forget — 같은 세션 내 두 번째 dialog 에도 panel 미중복.
+  opts.dispatch({ type: 'mark-freshness-prompt-shown' });
+  void persistFirstFreshnessPromptIfNeeded(opts.data);
 }
 
 async function persistFirstFreshnessPromptIfNeeded(data: AppData): Promise<void> {
@@ -746,6 +794,40 @@ async function persistFirstFreshnessPromptIfNeeded(data: AppData): Promise<void>
     // best-effort — 다음 dialog 표시 시 다시 시도된다. 사용자 흐름 차단 금지.
     process.stderr.write(`[mat] markFirstFreshnessPromptShown 실패: ${errorMessage(err)}\n`);
   }
+}
+
+/**
+ * PR-G quad-review HIGH fix (#1): freshness dialog 표시 ~ 사용자 결정 사이에
+ * 다른 mat 프로세스 / 외부 도구가 active 프로필을 변경했을 가능성을 차단한다.
+ *
+ * dialog 가 보여준 컨텍스트와 실제 swap 시점의 상태가 일치하지 않으면 사용자는
+ * 의도하지 않은 프로필에 라이브 자격증명을 저장하거나 폐기하게 된다. 본 함수가
+ * 진입 직전 active 를 재검증해 mismatch 시 swap/snapshot 전체를 중단한다.
+ *
+ * 반환: 일치하면 true (진행), 불일치하면 false 와 함께 error message screen 을
+ * dispatch (호출자는 즉시 return).
+ */
+async function reAssertActiveProfile(
+  cliId: string,
+  expected: string,
+  dispatch: React.Dispatch<Action>
+): Promise<boolean> {
+  const current = await getActiveProfile(cliId);
+  if (current === expected) return true;
+  dispatch({
+    type: 'replace',
+    screen: {
+      kind: 'message',
+      tone: 'error',
+      title: '활성 프로필 변경 감지 — 작업 취소',
+      body:
+        `dialog 표시 중 다른 도구가 활성 프로필을 변경했습니다.\n` +
+        `예상: '${expected}' / 현재: '${current ?? '(없음)'}'\n\n` +
+        `라이브 자격증명이 의도와 다른 프로필에 쓰일 수 있어 작업을 취소했습니다.\n` +
+        `프로필 목록을 다시 확인 후 재시도하세요.`
+    }
+  });
+  return false;
 }
 
 async function doSwitch(
@@ -782,6 +864,8 @@ async function doSwitchWithRecapture(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
+  // #1 fix: dialog 표시 중 active 가 외부에서 변경됐다면 race — 작업 중단.
+  if (!(await reAssertActiveProfile(cli.id, currentActive, dispatch))) return;
   await runBusyAction({
     dispatch,
     refresh,
@@ -803,13 +887,16 @@ async function doSwitchWithRecapture(
 /**
  * PR-G "폐기": skipPreSwapSnapshot 으로 swap. 라이브의 rotated 토큰은 보존되지 않고
  * toProfile 의 저장본으로 덮어써진다 — 사용자가 의도적으로 폐기 선택한 경우만 사용.
+ * #1 fix: 진입 시 currentActive 재검증 — dialog 컨텍스트와 실제 active 일치 확인.
  */
 async function doSwitchDiscardingLive(
   cli: CliDef,
+  currentActive: string,
   to: string,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
+  if (!(await reAssertActiveProfile(cli.id, currentActive, dispatch))) return;
   await runBusyAction({
     dispatch,
     refresh,
@@ -837,48 +924,19 @@ async function onAddSubmit(
   // 프로필 소유인지 정의되지 않으므로 단순 캡처로 진행 (기존 동작 보존).
   const currentActive = data.activeByCli[cli.id];
   if (currentActive == null || currentActive === name) {
-    await doCreateProfile(cli.id, name, dispatch, refresh);
+    // 활성 미설정 / 자기 자신 캡처 — race 가드 불필요 (expectedActive=undefined).
+    await doCreateProfile(cli, name, undefined, dispatch, refresh);
     return;
   }
-  dispatch({ type: 'replace', screen: { kind: 'busy', message: '자격증명 상태 확인 중...' } });
-  let report: FreshnessReport;
-  try {
-    report = await inspectLiveFreshness(cli.id, currentActive);
-  } catch (err) {
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'error',
-        title: '자격증명 확인 실패',
-        body: describeError(err)
-      }
-    });
-    return;
-  }
-  // 분기 구조는 checkFreshnessThenSwitch 와 정규화 — fresh → 직진, inflight → 재시도
-  // 안내, 그 외 (rotated/stale) → dialog. 두 mode 가 동일 흐름이라 미래 회귀 위험을 줄임.
-  if (!needsUserAttention(report)) {
-    await doCreateProfile(cli.id, name, dispatch, refresh);
-    return;
-  }
-  if (hasInflight(report)) {
-    dispatch({
-      type: 'replace',
-      screen: {
-        kind: 'message',
-        tone: 'warning',
-        title: '자격증명 갱신 중 (재시도 권장)',
-        body:
-          `라이브 자격증명이 갱신 중간 상태로 보입니다 (multi-source 부분 갱신).\n` +
-          `잠시 후 다시 시도하세요.`
-      }
-    });
-    return;
-  }
-  dispatch({
-    type: 'replace',
-    screen: {
+  // create-mode 의 분기는 switch-mode 와 동일 helper 재사용 (#9 fix).
+  await inspectAndRouteFreshness({
+    cli,
+    currentActive,
+    data,
+    dispatch,
+    initialBusyAction: 'replace',
+    onFresh: () => void doCreateProfile(cli, name, currentActive, dispatch, refresh),
+    buildDialog: (report) => ({
       kind: 'freshness',
       mode: 'create',
       cliId: cli.id,
@@ -887,29 +945,40 @@ async function onAddSubmit(
       report,
       showOnboarding: !data.firstFreshnessPromptShown,
       onRecapture: () =>
-        void doCreateWithRecapture(cli.id, currentActive, name, dispatch, refresh),
-      onDiscard: () => void doCreateProfile(cli.id, name, dispatch, refresh),
+        void doCreateWithRecapture(cli, currentActive, name, dispatch, refresh),
+      // 폐기 path: 라이브를 활성 프로필에 저장하지 않고 새 프로필만 캡처. race 가드 적용.
+      onDiscard: () => void doCreateProfile(cli, name, currentActive, dispatch, refresh),
       onCancel: () => dispatch({ type: 'pop' })
-    }
+    })
   });
-  void persistFirstFreshnessPromptIfNeeded(data);
 }
 
+/**
+ * PR-G create-mode 의 "폐기" 분기 + 단순 캡처 진입점.
+ *
+ * expectedActive 가 명시되면 #1 fix 의 race 가드를 적용 — dialog 표시 ~ 사용자 결정
+ * 사이에 active 가 외부에서 변경됐다면 작업 중단. expectedActive 가 undefined 면
+ * (active 미설정 / fresh 경로) 가드 skip.
+ *
+ * 활성 프로필은 변경되지 않음 — 사용자가 명시 전환할 때까지 그대로 유지.
+ */
 async function doCreateProfile(
-  cliId: string,
+  cli: CliDef,
   name: string,
+  expectedActive: string | undefined,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
+  if (expectedActive != null) {
+    if (!(await reAssertActiveProfile(cli.id, expectedActive, dispatch))) return;
+  }
   await runBusyAction({
     dispatch,
     refresh,
     busyMessage: '프로필 생성 중...',
-    work: () => snapshotLiveToProfile(cliId, name),
+    work: () => snapshotLiveToProfile(cli.id, name),
     buildSuccess: (snap) => ({
       title: '프로필 생성 완료',
-      // 활성 프로필은 변경되지 않는다 — 생성된 프로필로 전환하려면 사용자가 별도로
-      // 선택해야 한다 (기존 동작 보존). PR-G 재캡처 path 도 동일.
       body:
         `'${name}' 프로필이 생성되었습니다. (활성 프로필은 변경되지 않았습니다)\n` +
         (snap.captured.length > 0
@@ -922,23 +991,31 @@ async function doCreateProfile(
 
 /**
  * PR-G create-mode 재캡처: 활성 프로필에 라이브 저장 후 신규 프로필 생성.
- * snapshotLiveToProfile 을 두 프로필에 순차 호출 — 단일 프로세스에서 라이브는
- * 양 호출 사이 변동 없음으로 두 프로필 모두 동일 라이브 토큰을 저장한다.
+ *
+ * 두 snapshotLiveToProfile 호출 사이에 외부 CLI 가 OAuth refresh rotation 을
+ * 수행하면 currentActive 와 newName 두 프로필이 *서로 다른* 라이브 토큰을 저장할
+ * 수 있다 (단일 프로세스 내 두 read 의 race window). 본 race 는 알려진 한계로,
+ * PR-I* 의 LockBody 확장으로 cli 단위 직렬화 도입 시 함께 해소될 예정. 현재는
+ * Best-effort — race 발생 빈도가 낮고, 양쪽 다 유효한 토큰 (옛 + 새) 을 갖게 되므로
+ * 데이터 손실은 발생하지 않는다 (provider 가 옛 토큰을 revoke 하면 새 토큰만 유효).
+ *
+ * #1 fix: 진입 시 currentActive 재검증 — dialog 표시 후 active 변경 race 차단.
  */
 async function doCreateWithRecapture(
-  cliId: string,
+  cli: CliDef,
   currentActive: string,
   newName: string,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
+  if (!(await reAssertActiveProfile(cli.id, currentActive, dispatch))) return;
   await runBusyAction({
     dispatch,
     refresh,
     busyMessage: '라이브 재캡처 후 프로필 생성 중...',
     work: async () => {
-      await snapshotLiveToProfile(cliId, currentActive);
-      return await snapshotLiveToProfile(cliId, newName);
+      await snapshotLiveToProfile(cli.id, currentActive);
+      return await snapshotLiveToProfile(cli.id, newName);
     },
     buildSuccess: (snap) => ({
       title: '재캡처 + 프로필 생성 완료',

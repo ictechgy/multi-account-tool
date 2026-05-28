@@ -315,3 +315,34 @@ describe('hasInflight (PR-G)', () => {
     expect(hasInflight(makeReport(['fresh']))).toBe(false);
   });
 });
+
+/**
+ * PR-G quad-review fix (#6): predicate 간 invariant 회귀 가드.
+ *
+ * hasInflight(report) 가 true 면 needsUserAttention(report) 도 반드시 true 여야 한다.
+ * 두 함수의 분기 순서를 caller (app.tsx) 가 바꾸어도 본 함의가 깨지지 않도록 강제.
+ * 모든 가능한 CompareKind 조합에 대해 검증.
+ */
+describe('predicate invariants (PR-G)', () => {
+  const KINDS: CompareResult['kind'][] = ['fresh', 'rotated', 'stale', 'inflight'];
+
+  it('hasInflight(report) ⇒ needsUserAttention(report) — 모든 단일 source 케이스', () => {
+    for (const kind of KINDS) {
+      const r = makeReport([kind]);
+      if (hasInflight(r)) {
+        expect(needsUserAttention(r)).toBe(true);
+      }
+    }
+  });
+
+  it('hasInflight(report) ⇒ needsUserAttention(report) — multi-source 모든 페어', () => {
+    for (const a of KINDS) {
+      for (const b of KINDS) {
+        const r = makeReport([a, b]);
+        if (hasInflight(r)) {
+          expect(needsUserAttention(r)).toBe(true);
+        }
+      }
+    }
+  });
+});

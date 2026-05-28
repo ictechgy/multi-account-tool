@@ -330,21 +330,25 @@ describe('switcher', () => {
       expect(await getActiveProfile('codex')).toBe('work');
     });
 
-    it('current === toProfile: snapshot + restore 의 writeSource 호출 안 함 (자기 자신으로 swap 방지)', async () => {
+    it('current === toProfile: 무조건 no-op (snapshot + restore 모두 skip, writeSource 0회)', async () => {
+      // quad-review HIGH fix (#2): current===toProfile 은 snapshot 만 skip 이 아니라
+      // restore 까지 모두 skip 한다. 그렇지 않으면 라이브의 회전된 토큰이 stored 로
+      // 덮어써져 데이터 손실 발생 (public API 의 contract gap).
       await setupProfile('codex', 'work');
       await setActiveProfile('codex', 'work');
       await writeProfileFile('codex', 'work', 'auth.json', 'value');
-      mockReadSource.mockResolvedValue(null);
+      mockReadSource.mockResolvedValue('live-rotated');
       mockWriteSource.mockResolvedValue(undefined);
 
       const result = await switchProfile('codex', 'work');
 
-      // snapshot skip (current === to) — 부수효과 없음
       expect(result.fromSnapshot).toBeUndefined();
-      // restore 는 호출되지만 (active 갱신 보장 위해), stored 가 'value' 이고 mockWriteSource
-      // 호출됨. 다만 의도는 "snapshot 자체가 자기에게 덮어쓰기 방지".
-      // → snapshot 단계의 writeProfileFile (real) 가 호출되지 않았음을 검증.
-      // profile dir 안 marker file 변화 없음 (snapshot 이 안 일어남).
+      expect(result.restore.restored).toEqual([]);
+      expect(result.restore.missing).toEqual([]);
+      // writeSource 0회 — 라이브 회전 토큰 보존
+      expect(mockWriteSource).not.toHaveBeenCalled();
+      // active 동일 유지
+      expect(await getActiveProfile('codex')).toBe('work');
     });
 
     it('current 프로필 디렉토리 외부 삭제 (좀비) → snapshot skip, restore 만 진행', async () => {
@@ -543,15 +547,19 @@ describe('switcher', () => {
       expect(mockReadSource.mock.calls.length).toBe(1);
     });
 
-    it('skipPreSwapSnapshot=true + active === toProfile → restore 도 무의미 but 정상 종료', async () => {
-      // 사용자가 같은 프로필로 폐기 swap 을 시도하는 edge — TUI 에서 차단되지만
-      // API contract 로는 idempotent 종료 보장.
+    it('skipPreSwapSnapshot=true + active === toProfile → 무조건 no-op (writeSource 0회)', async () => {
+      // quad-review HIGH fix (#2): skipPreSwapSnapshot 무관 — current===toProfile
+      // 은 라이브 회전 토큰을 stored 로 덮어쓰는 데이터 손실 위험이 있어 무조건
+      // skip. 호출자가 명시 폐기를 선택해도 동일한 두 프로필 사이엔 의미 없음.
       await setActiveProfile('codex', 'home');
-      mockReadSource.mockResolvedValue('any');
+      mockReadSource.mockResolvedValue('live-rotated');
 
       const result = await switchProfile('codex', 'home', { skipPreSwapSnapshot: true });
       expect(result.fromSnapshot).toBeUndefined();
       expect(result.preSwapLiveFreshness).toBeUndefined();
+      expect(result.restore.restored).toEqual([]);
+      // 라이브 자격증명 보존 — writeSource 호출 안 됨
+      expect(mockWriteSource).not.toHaveBeenCalled();
       expect(await getActiveProfile('codex')).toBe('home');
     });
 
