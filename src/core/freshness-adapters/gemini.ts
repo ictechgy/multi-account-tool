@@ -20,6 +20,7 @@
 
 import { maskIdentifier } from '../errors.js';
 import type { CompareResult, SourceAdapter } from '../freshness.js';
+import { parseJsonObject } from './_shared.js';
 
 interface OAuthCreds {
   access_token?: string;
@@ -33,20 +34,10 @@ interface GoogleAccounts {
   old?: string[];
 }
 
-function parseObject<T>(raw: string): T | null {
-  try {
-    const v: unknown = JSON.parse(raw);
-    if (v === null || typeof v !== 'object') return null;
-    return v as T;
-  } catch {
-    return null;
-  }
-}
-
 function compareOauthCreds(stored: string, live: string): CompareResult {
   if (stored === live) return { kind: 'fresh', confidence: 'high' };
-  const s = parseObject<OAuthCreds>(stored);
-  const l = parseObject<OAuthCreds>(live);
+  const s = parseJsonObject<OAuthCreds>(stored);
+  const l = parseJsonObject<OAuthCreds>(live);
   if (!s || !l) {
     return {
       kind: 'rotated',
@@ -77,8 +68,8 @@ function compareOauthCreds(stored: string, live: string): CompareResult {
 
 function compareGoogleAccounts(stored: string, live: string): CompareResult {
   if (stored === live) return { kind: 'fresh', confidence: 'high' };
-  const s = parseObject<GoogleAccounts>(stored);
-  const l = parseObject<GoogleAccounts>(live);
+  const s = parseJsonObject<GoogleAccounts>(stored);
+  const l = parseJsonObject<GoogleAccounts>(live);
   if (!s || !l) {
     return {
       kind: 'rotated',

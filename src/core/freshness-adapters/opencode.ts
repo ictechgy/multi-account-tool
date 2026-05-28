@@ -19,6 +19,7 @@
 
 import { maskIdentifier } from '../errors.js';
 import type { CompareKind, CompareResult, RotatedSubtype, SourceAdapter } from '../freshness.js';
+import { parseJsonObject } from './_shared.js';
 
 interface ProviderAuth {
   type?: 'oauth' | 'api';
@@ -30,16 +31,6 @@ interface ProviderAuth {
 }
 
 type OpenCodeAuth = Record<string, ProviderAuth>;
-
-function parse(raw: string): OpenCodeAuth | null {
-  try {
-    const v: unknown = JSON.parse(raw);
-    if (v === null || typeof v !== 'object') return null;
-    return v as OpenCodeAuth;
-  } catch {
-    return null;
-  }
-}
 
 /** 단일 provider 비교. provider 가 한쪽에만 있는 경우는 호출자가 처리. */
 function compareProvider(stored: ProviderAuth, live: ProviderAuth): CompareResult {
@@ -95,8 +86,8 @@ function pickWorse(a: CompareResult, b: CompareResult): CompareResult {
 
 function compareOpencode(stored: string, live: string): CompareResult {
   if (stored === live) return { kind: 'fresh', confidence: 'high' };
-  const s = parse(stored);
-  const l = parse(live);
+  const s = parseJsonObject<OpenCodeAuth>(stored);
+  const l = parseJsonObject<OpenCodeAuth>(live);
   if (!s || !l) {
     return {
       kind: 'rotated',

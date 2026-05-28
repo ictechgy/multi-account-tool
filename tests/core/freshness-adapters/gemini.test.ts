@@ -40,6 +40,13 @@ describe('geminiAdapter — oauth_creds.json', () => {
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
   });
+
+  it('JSON array → rotated both (low) — _shared.parseJsonObject array reject 회귀 가드', () => {
+    const r = geminiAdapter.compare(SAVE_AS, '[]', '{"refresh_token":"x"}');
+    expect(r.kind).toBe('rotated');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/parse 실패/);
+  });
 });
 
 describe('geminiAdapter — google_accounts.json', () => {
