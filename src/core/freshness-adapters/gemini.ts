@@ -18,6 +18,7 @@
  * 받아 cross-source aggregation 으로 판단 — 본 adapter 는 각 saveAs 만 책임.
  */
 
+import { maskIdentifier } from '../errors.js';
 import type { CompareResult, SourceAdapter } from '../freshness.js';
 
 interface OAuthCreds {
@@ -91,7 +92,8 @@ function compareGoogleAccounts(stored: string, live: string): CompareResult {
       return {
         kind: 'stale',
         confidence: 'high',
-        detail: `active 계정 변경: ${s.active} → ${l.active}`
+        // raw email 노출 회피 — maskIdentifier 로 stable fingerprint 만 표시.
+        detail: `active 계정 변경: ${maskIdentifier(s.active)} → ${maskIdentifier(l.active)}`
       };
     }
     return {

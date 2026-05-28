@@ -23,6 +23,7 @@
  */
 
 import { findCliDef } from './cli-defs.js';
+import { UnknownCliError } from './errors.js';
 import { readProfileFile } from './profile-store.js';
 import { readSource } from './sources.js';
 
@@ -78,6 +79,16 @@ export interface SourceAdapter {
 
 const adapters = new Map<string, SourceAdapter>();
 
+/**
+ * builtin adapter 가 lazy 자동 등록되었는지 추적.
+ *
+ * `inspectLiveFreshness` 첫 호출 시 dynamic import 로 `registerAllBuiltinAdapters`
+ * 를 한 번만 실행 (circular dep 회피). `resetAdapters` 호출 후엔 false 로 리셋해
+ * test 가 fallback 동작을 직접 검증 가능 (quad-review HIGH fix — silent fallback
+ * 차단).
+ */
+let builtinAdaptersInitialized = false;
+
 /** adapter 등록. cli-defs 의 builtin 으로 매핑. 테스트도 동일 API 사용. */
 export function registerAdapter(cliId: string, adapter: SourceAdapter): void {
   adapters.set(cliId, adapter);
@@ -86,6 +97,21 @@ export function registerAdapter(cliId: string, adapter: SourceAdapter): void {
 /** 테스트가 사용 — registry 초기화. production 호출 금지. */
 export function resetAdapters(): void {
   adapters.clear();
+  builtinAdaptersInitialized = false;
+}
+
+/**
+ * builtin adapter 가 미등록 상태면 dynamic import 후 1회 등록.
+ *
+ * cli.tsx 외 진입점 (TUI swap, programmatic API) 에서도 silent fallback (identity
+ * 검증 우회) 을 차단. dynamic import 라 circular dep 안전. test 가
+ * `resetAdapters()` 직후 명시적으로 fallback 검증할 수 있도록 lazy.
+ */
+async function ensureBuiltinAdapters(): Promise<void> {
+  if (builtinAdaptersInitialized) return;
+  builtinAdaptersInitialized = true;
+  const mod = await import('./freshness-adapters/index.js');
+  mod.registerAllBuiltinAdapters();
 }
 
 /** 외부 조회 헬퍼 — 미등록 시 undefined. */
@@ -118,6 +144,13 @@ const ROTATION_FIELDS = new Set([
 ]);
 
 /**
+ * 정규화 단계에서 무조건 제외하는 위험 키 — prototype pollution 방어.
+ * `JSON.parse` 가 반환한 객체에 `__proto__` / `constructor` / `prototype` 키가
+ * 있어도 normalize 결과 객체에 복사하지 않는다. 회귀 가드는 freshness.test.ts.
+ */
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
  * raw JSON 을 회전 후보 필드만 남긴 정규화 문자열로 변환. JSON 아니면 null.
  * 중첩 객체도 재귀 walk — OpenCode 의 `{ openai: { refresh, access, accountId } }` 처리.
  */
@@ -136,7 +169,13 @@ function normalizeJsonForCompare(raw: string): string | null {
   }
 }
 
-/** ROTATION_FIELDS 만 남기고 나머지 키 제거. 배열/원시값은 그대로. */
+/**
+ * ROTATION_FIELDS 만 남기고 나머지 키 제거. 배열/원시값은 그대로.
+ *
+ * 보안: 결과 객체는 `Object.create(null)` — `__proto__`/`constructor`/`prototype`
+ * 같은 위험 키는 DANGEROUS_KEYS 체크로 무조건 drop. credential JSON 이
+ * `{"__proto__":{"refresh_token":"x"}}` 형태로 와도 normalize 결과를 조작 못함.
+ */
 function filterRotationFields(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(filterRotationFields);
@@ -144,12 +183,14 @@ function filterRotationFields(value: unknown): unknown {
   if (value === null || typeof value !== 'object') {
     return value;
   }
-  const out: Record<string, unknown> = {};
+  const out = Object.create(null) as Record<string, unknown>;
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (DANGEROUS_KEYS.has(key)) {
+      continue;
+    }
     if (ROTATION_FIELDS.has(key)) {
       out[key] = filterRotationFields(val);
     } else if (val !== null && typeof val === 'object') {
-      // 중첩 객체는 재귀 — 키 자체는 보존하지 않고 내부 회전 필드만 추출.
       const nested = filterRotationFields(val) as Record<string, unknown>;
       if (Object.keys(nested).length > 0) {
         out[key] = nested;
@@ -177,11 +218,22 @@ export function fallbackCompare(stored: string, live: string): CompareResult {
   const normalizedStored = normalizeJsonForCompare(stored);
   const normalizedLive = normalizeJsonForCompare(live);
   if (normalizedStored !== null && normalizedLive !== null) {
+    // 빈 객체 (`{}`) — 화이트리스트 회전 필드가 양쪽 모두 부재 →  fresh 판정 불가
+    // (plugin CLI 가 `{apiKey: ...}` 같이 화이트리스트 외 필드만 쓰면 양쪽
+    // normalize 결과가 모두 `{}` → equal 이라고 fresh 처리 시 실제 자격증명
+    // 변경을 안전 통과시키는 사고. quad-review HIGH fix.)
+    if (normalizedStored === '{}' && normalizedLive === '{}') {
+      return {
+        kind: 'rotated',
+        subtype: 'both',
+        confidence: 'low',
+        detail: 'fallback: 화이트리스트 회전 필드 부재 — adapter 추가 권장'
+      };
+    }
     if (normalizedStored === normalizedLive) {
       // 회전 후보 필드 (refresh_token 등) 가 동일하므로 사용자 자격증명 자체는
       // 변경 없음 — 캐시/timestamp 만 갱신된 정상 사용 noise. dialog 띄울 가치
-      // 없으므로 fresh 로 분류 (quad-review MEDIUM fix: meta-only rotated 가
-      // PR-G dialog 의 false-positive 원인이 됨).
+      // 없으므로 fresh 로 분류.
       return {
         kind: 'fresh',
         confidence: 'medium',
@@ -218,9 +270,11 @@ export async function inspectLiveFreshness(
   cliId: string,
   profileName: string
 ): Promise<FreshnessReport> {
+  // builtin adapter 자동 등록 — 진입점 무관 silent fallback 차단 (quad-review HIGH fix).
+  await ensureBuiltinAdapters();
   const def = findCliDef(cliId);
   if (!def) {
-    throw new Error(`알 수 없는 CLI: ${cliId}`);
+    throw new UnknownCliError(cliId);
   }
   const adapter = adapters.get(cliId);
   const sources: SourceFreshness[] = [];
@@ -265,11 +319,14 @@ function compareOne(
   try {
     return adapter.compare(saveAs, stored, live);
   } catch (err) {
+    // adapter 예외 → 실제 fallbackCompare 호출 후 detail 에 예외 메시지 append.
+    // (quad-review MEDIUM fix: catch 가 generic rotated 만 반환하면 byte-diff
+    // 비교 자체를 건너뛰어 의미 손실. fallback 정상 분류 + 예외 surface 가 정합.)
+    const result = fallbackCompare(stored, live);
+    const adapterMsg = (err as Error).message;
     return {
-      kind: 'rotated',
-      subtype: 'both',
-      confidence: 'low',
-      detail: `adapter 예외 → fallback: ${(err as Error).message}`
+      ...result,
+      detail: `${result.detail ? `${result.detail}; ` : ''}adapter 예외: ${adapterMsg}`
     };
   }
 }

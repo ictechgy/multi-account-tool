@@ -192,14 +192,24 @@ export async function switchProfile(
   return { fromSnapshot, restore, preSwapLiveFreshness };
 }
 
-/** freshness inspect 의 예외는 swap 을 막지 않도록 swallow — 호출자가 absence 로 해석. */
+/**
+ * freshness inspect 의 예외는 swap 을 막지 않도록 swallow — 호출자가 absence 로 해석.
+ *
+ * 단, silent 실패는 사용자가 인지하기 어려우므로 stderr 에 한 줄 경고 surface
+ * (quad-review MED fix). `preSwapLiveFreshness === undefined` 가 "검사 안 함
+ * (current 없음)" vs "검사 실패" 두 의미를 가지는데, 후자만 stderr 출력으로 구분.
+ */
 async function safeInspectFreshness(
   cliId: string,
   profileName: string
 ): Promise<FreshnessReport | undefined> {
   try {
     return await inspectLiveFreshness(cliId, profileName);
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[mat] freshness 검사 실패 (swap 진행됨): cli=${cliId} profile=${profileName}: ${msg}\n`
+    );
     return undefined;
   }
 }

@@ -16,7 +16,7 @@ import { render } from 'ink';
 import App from './app.js';
 import { getAllCliDefs } from './core/cli-defs.js';
 import { getActiveProfile } from './core/config.js';
-import { describeError } from './core/errors.js';
+import { describeError, UnknownCliError } from './core/errors.js';
 import { runExec } from './core/exec.js';
 import { registerAllBuiltinAdapters } from './core/freshness-adapters/index.js';
 import {
@@ -164,9 +164,10 @@ async function handleFreshness(rest: string[]): Promise<void> {
       reports.push(await inspectLiveFreshness(cliId, profileName));
     } catch (err) {
       process.stderr.write(`mat freshness ${cliId}: ${describeError(err)}\n`);
-      // "알 수 없는 CLI" 는 사용자 입력 에러 → exit 2 (usage). 그 외는 내부 실패 (74).
-      const isUsageError = err instanceof Error && /알 수 없는 CLI/.test(err.message);
-      process.exit(isUsageError ? 2 : EXIT_FRESHNESS_INSPECT_FAILED);
+      // UnknownCliError 는 사용자 입력 에러 → exit 2 (UsageError 상속, exitCode 2).
+      // 그 외 (fs 에러 등) → 내부 검사 실패 (74). instanceof 분기로 message 정규식
+      // brittleness 제거 (quad-review MED fix).
+      process.exit(err instanceof UnknownCliError ? 2 : EXIT_FRESHNESS_INSPECT_FAILED);
     }
   }
   if (parsed.asJson) {
@@ -174,7 +175,7 @@ async function handleFreshness(rest: string[]): Promise<void> {
   } else {
     process.stdout.write(formatFreshnessTable(reports));
   }
-  process.exit(hasStale(reports) ? EXIT_STALE_DETECTED : 0);
+  process.exit(hasUnsafe(reports) ? EXIT_STALE_DETECTED : 0);
 }
 
 interface FreshnessArgs {
@@ -235,8 +236,25 @@ async function resolveFreshnessTargets(
   return targets;
 }
 
-function hasStale(reports: FreshnessReport[]): boolean {
-  return reports.some((r) => r.sources.some((s) => s.result.kind === 'stale'));
+/**
+ * exit 1 트리거 — 사용자 액션이 필요한 unsafe 상태.
+ *
+ * `stale` (identity 변경) 외에 **low-confidence rotated** (parse 실패 / fallback 의
+ * 화이트리스트 회전 필드 부재 등 정확 분류 불가 상태) 도 unsafe 로 분류.
+ * adapter parse 실패로 손상된 auth.json 이 `rotated/low` 로 분류되어 안전한 듯
+ * exit 0 통과하던 사고를 차단 (quad-review HIGH fix — Codex-2 #1).
+ *
+ * adapter 가 명시 분류한 `rotated` high/medium confidence (정상 rotation 흐름) 는
+ * unsafe 아님 — 사용자가 swap 진행해도 안전.
+ */
+function hasUnsafe(reports: FreshnessReport[]): boolean {
+  return reports.some((r) =>
+    r.sources.some((s) => {
+      if (s.result.kind === 'stale') return true;
+      if (s.result.kind === 'rotated' && s.result.confidence === 'low') return true;
+      return false;
+    })
+  );
 }
 
 /** 4 컬럼 표 (사람-친화). 빈 reports / 빈 sources 모두 안내 한 줄. */

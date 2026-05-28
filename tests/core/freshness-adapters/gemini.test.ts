@@ -53,12 +53,18 @@ describe('geminiAdapter — google_accounts.json', () => {
     expect(r.subtype).toBe('meta-only');
   });
 
-  it('active 변경 → stale (다른 Google 계정)', () => {
-    const stored = JSON.stringify({ active: 'a@example.com' });
-    const live = JSON.stringify({ active: 'b@example.com' });
+  it('active 변경 → stale + detail 의 email PII 마스킹 (quad-review MED fix)', () => {
+    // detail 에 raw email 노출되면 CI 로그/shell history 누설 — maskIdentifier 적용 후엔
+    // <hash:...> 형식만, 원본 email 부재.
+    const stored = JSON.stringify({ active: 'alice@example.com' });
+    const live = JSON.stringify({ active: 'bob@example.com' });
     const r = geminiAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.detail).toMatch(/active 계정 변경/);
+    expect(r.detail).not.toContain('alice');
+    expect(r.detail).not.toContain('bob');
+    expect(r.detail).not.toContain('example.com');
+    expect(r.detail).toMatch(/<hash:[0-9a-f]{8}>/);
   });
 
   it('active 필드 부재 → medium confidence rotated', () => {

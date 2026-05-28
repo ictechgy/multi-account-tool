@@ -25,6 +25,41 @@ import {
 } from '../../src/core/freshness.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
+describe('fallbackCompare — prototype pollution 방어 (quad-review HIGH fix)', () => {
+  it('__proto__ 키 포함 JSON → normalize 결과에 영향 없음 (prototype 미오염)', () => {
+    // Before fix: __proto__ 키가 normalize 결과 객체의 prototype 을 오염 가능 → compare bypass.
+    // After fix: DANGEROUS_KEYS skip + Object.create(null) — 결과에 미포함.
+    const stored = JSON.stringify({ refresh_token: 'r1', __proto__: { refresh_token: 'evil' } });
+    const live = JSON.stringify({ refresh_token: 'r2', __proto__: { refresh_token: 'evil' } });
+    const r = fallbackCompare(stored, live);
+    // 실제 refresh_token 만 비교됨 → 다르므로 rotated.
+    expect(r.kind).toBe('rotated');
+    expect(({} as Record<string, unknown>).refresh_token).toBeUndefined();
+  });
+
+  it('constructor 키 포함 → 정상 normalize, 결과 객체 prototype 비오염', () => {
+    const stored = JSON.stringify({ access_token: 'a', constructor: { x: 1 } });
+    const live = JSON.stringify({ access_token: 'a', constructor: { x: 2 } });
+    // constructor 는 DANGEROUS_KEYS → drop. 화이트리스트 외 필드만 변경 → fresh medium.
+    const r = fallbackCompare(stored, live);
+    expect(r.kind).toBe('fresh');
+  });
+});
+
+describe('fallbackCompare — empty normalize bypass 차단 (quad-review HIGH fix)', () => {
+  it('양쪽 모두 화이트리스트 필드 부재 (예: {apiKey:...}) → fresh 거부 → rotated/both low', () => {
+    // Before fix: normalize 양쪽 {} → equal → fresh 처리 → 실제 자격증명 변경 누락.
+    // After fix: empty normalize 는 fresh 아닌 low-conf rotated/both.
+    const stored = JSON.stringify({ apiKey: 'sk-old' });
+    const live = JSON.stringify({ apiKey: 'sk-new' });
+    const r = fallbackCompare(stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('both');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/adapter 추가 권장/);
+  });
+});
+
 describe('fallbackCompare — adapter 미정의 CLI 용 byte-diff', () => {
   it('byte-identical → fresh (high)', () => {
     const r = fallbackCompare('{"x":1}', '{"x":1}');
@@ -155,8 +190,20 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(report.sources[0].result.detail).toMatch(/저장본 부재/);
   });
 
-  it('알 수 없는 cliId → throw', async () => {
-    await expect(inspectLiveFreshness('does-not-exist', 'p')).rejects.toThrow(/알 수 없는 CLI/);
+  it('알 수 없는 cliId → UnknownCliError throw (UsageError 상속, exit 2 자동 매핑)', async () => {
+    // quad-review MED fix: 이전엔 Error("알 수 없는 CLI: ...") throw → caller 가 message
+    // 정규식 매칭으로 분기 (brittle). 새 정책: 전용 클래스 + UsageError 상속 → instanceof.
+    const { UnknownCliError, UsageError } = await import('../../src/core/errors.js');
+    let caught: unknown;
+    try {
+      await inspectLiveFreshness('does-not-exist', 'p');
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnknownCliError);
+    expect(caught).toBeInstanceOf(UsageError);
+    expect((caught as { exitCode: number }).exitCode).toBe(2);
+    expect((caught as { cliId: string }).cliId).toBe('does-not-exist');
   });
 
   it('adapter 등록 시 fallback 대신 adapter.compare 호출', async () => {
@@ -175,7 +222,9 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(report.sources[0].result.kind).toBe('rotated');
   });
 
-  it('adapter 예외 던지면 fallback 으로 (silent swallow + detail surface)', async () => {
+  it('adapter 예외 → fallbackCompare 호출 결과 + adapter 예외 detail 첨부 (quad-review MED fix)', async () => {
+    // Before fix: catch 가 generic rotated/both 만 반환 → fallback 비교 자체 미실행.
+    // After fix: fallbackCompare 호출 → 정상 분류 + detail 에 adapter 예외 append.
     const adapter: SourceAdapter = {
       compare: () => {
         throw new Error('adapter boom');
@@ -184,13 +233,14 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     registerAdapter('codex', adapter);
     const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');
     await fs.mkdir(profileDir, { recursive: true });
-    await fs.writeFile(join(profileDir, 'auth.json'), '{"v":1}');
+    // 양쪽 동일 — fallback 이 fresh 분류해야 함 (이전엔 rotated/both 가 잘못 반환됨).
+    await fs.writeFile(join(profileDir, 'auth.json'), '{"refresh_token":"same"}');
     await fs.mkdir(join(tmp.home, '.codex'), { recursive: true });
-    await fs.writeFile(join(tmp.home, '.codex/auth.json'), '{"v":2}');
+    await fs.writeFile(join(tmp.home, '.codex/auth.json'), '{"refresh_token":"same"}');
 
     const report = await inspectLiveFreshness('codex', 'p');
-    expect(report.sources[0].result.kind).toBe('rotated');
-    expect(report.sources[0].result.detail).toMatch(/adapter boom/);
+    expect(report.sources[0].result.kind).toBe('fresh');  // fallback 정상 분류
+    expect(report.sources[0].result.detail).toMatch(/adapter 예외: adapter boom/);
   });
 
   it('multi-source CLI (Gemini) — source 별 결과 독립 보고', async () => {

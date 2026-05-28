@@ -17,6 +17,7 @@
  *  - 여러 provider 가 섞여 있으면 가장 심각한 결과를 채택 (stale > rotated > fresh).
  */
 
+import { maskIdentifier } from '../errors.js';
 import type { CompareKind, CompareResult, RotatedSubtype, SourceAdapter } from '../freshness.js';
 
 interface ProviderAuth {
@@ -44,7 +45,12 @@ function parse(raw: string): OpenCodeAuth | null {
 function compareProvider(stored: ProviderAuth, live: ProviderAuth): CompareResult {
   if (stored.type === 'oauth' && live.type === 'oauth') {
     if (stored.accountId && live.accountId && stored.accountId !== live.accountId) {
-      return { kind: 'stale', confidence: 'high', detail: `accountId 변경: ${stored.accountId} → ${live.accountId}` };
+      // raw accountId 노출 회피.
+      return {
+        kind: 'stale',
+        confidence: 'high',
+        detail: `accountId 변경: ${maskIdentifier(stored.accountId)} → ${maskIdentifier(live.accountId)}`
+      };
     }
     const tokenChanged = stored.access !== live.access || stored.refresh !== live.refresh;
     if (tokenChanged) {

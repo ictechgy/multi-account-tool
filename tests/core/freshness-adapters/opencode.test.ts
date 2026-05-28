@@ -28,16 +28,19 @@ describe('opencodeAdapter — OAuth provider', () => {
     expect(r.subtype).toBe('value-only');
   });
 
-  it('accountId 변경 → stale (다른 계정)', () => {
+  it('accountId 변경 → stale + detail PII 마스킹 (quad-review MED fix)', () => {
     const stored = JSON.stringify({
-      openai: { type: 'oauth', accountId: 'alice', access: 'a', refresh: 'r' }
+      openai: { type: 'oauth', accountId: 'alice-uuid-12345', access: 'a', refresh: 'r' }
     });
     const live = JSON.stringify({
-      openai: { type: 'oauth', accountId: 'bob', access: 'a', refresh: 'r' }
+      openai: { type: 'oauth', accountId: 'bob-uuid-67890', access: 'a', refresh: 'r' }
     });
     const r = opencodeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.detail).toMatch(/accountId 변경/);
+    expect(r.detail).not.toContain('alice-uuid-12345');
+    expect(r.detail).not.toContain('bob-uuid-67890');
+    expect(r.detail).toMatch(/<hash:[0-9a-f]{8}>/);
   });
 
   it('token 동일 + expires 만 변경 → rotated meta-only', () => {

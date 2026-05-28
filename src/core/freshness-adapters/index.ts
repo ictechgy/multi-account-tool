@@ -9,16 +9,28 @@
  * 가능 (idempotent).
  */
 
-import { registerAdapter } from '../freshness.js';
+import { getAdapter, registerAdapter } from '../freshness.js';
 import { codexAdapter } from './codex.js';
 import { geminiAdapter } from './gemini.js';
 import { opencodeAdapter } from './opencode.js';
 
-/** 모든 builtin adapter 등록. 호출자에 의해 startup 1회 실행. */
+/**
+ * 모든 builtin adapter 등록. idempotent (registerAdapter 가 Map.set).
+ *
+ * 호출 시점:
+ *  - `freshness.inspectLiveFreshness` 가 첫 호출 시 dynamic import 로 자동 호출
+ *    (lazy init — circular dep 회피, 호출자 부담 0).
+ *  - `cli.tsx main()` 도 startup 에서 명시 호출 (옛 호환 경로 — idempotent 무해).
+ *
+ * test 격리: `resetAdapters()` 후 다음 inspectLiveFreshness 호출이 다시 자동
+ * 등록하지 않도록 freshness.ts 의 builtinAdaptersInitialized 플래그가 잠금.
+ */
 export function registerAllBuiltinAdapters(): void {
-  registerAdapter('codex', codexAdapter);
-  registerAdapter('gemini', geminiAdapter);
-  registerAdapter('opencode', opencodeAdapter);
+  // 이미 등록된 cliId 는 보존 — test mock 또는 향후 user override 가 builtin
+  // lazy init 시 덮여지는 사고 방지.
+  if (!getAdapter('codex')) registerAdapter('codex', codexAdapter);
+  if (!getAdapter('gemini')) registerAdapter('gemini', geminiAdapter);
+  if (!getAdapter('opencode')) registerAdapter('opencode', opencodeAdapter);
 }
 
 export { codexAdapter, geminiAdapter, opencodeAdapter };

@@ -5,12 +5,50 @@
  * (UsageError = 2, LockHeldError = 75, restore 실패는 ExecResult 경로로 별도 처리).
  */
 
+import { createHash } from 'node:crypto';
+
+/**
+ * 사용자 식별자 (email / accountId 등) 를 stable 8-자 SHA-256 fingerprint 로 마스킹.
+ *
+ * adapter detail / `mat freshness` stdout / `--json` 출력에 raw identifier 가
+ * 노출되면 CI logs / shell history / support bundle 로 누설된다 (quad-review MED
+ * consensus). 마스킹 후엔 두 다른 identifier 를 구분 가능 (서로 다른 hash) 하면서도
+ * raw 값은 노출되지 않는다.
+ *
+ * 빈 문자열은 `<empty>` (hash collision 회피).
+ *
+ * 단방향 — 비교 가능하지만 역추적 불가. 단 사전 공격에는 약함 (짧은 fingerprint).
+ * 본 함수는 audit-grade 비밀 보호 용도가 아닌 UI 누설 방지 용도 (defense in depth).
+ */
+export function maskIdentifier(value: string): string {
+  if (!value) return '<empty>';
+  const hash = createHash('sha256').update(value).digest('hex').slice(0, 8);
+  return `<hash:${hash}>`;
+}
+
 /** 인자/입력 검증 실패. cli.tsx 가 exit 2 로 매핑. */
 export class UsageError extends Error {
   readonly exitCode = 2;
   constructor(message: string) {
     super(message);
     this.name = 'UsageError';
+  }
+}
+
+/**
+ * 알 수 없는 CLI id 호출. UsageError 의 서브클래스 — exit 2 자동 상속.
+ *
+ * 이전엔 `Error("알 수 없는 CLI: ...")` 로 throw 되어 호출자가 message 정규식
+ * 매칭으로 exit code 분기를 결정했다 — 메시지 변경 시 silently exit 74 회귀
+ * 위험 (quad-review MED fix). 본 클래스 도입 후 호출자는 `instanceof
+ * UnknownCliError` 로 분기. readonly `cliId` 로 raw 값 직접 접근.
+ */
+export class UnknownCliError extends UsageError {
+  readonly cliId: string;
+  constructor(cliId: string) {
+    super(`알 수 없는 CLI: ${cliId}`);
+    this.name = 'UnknownCliError';
+    this.cliId = cliId;
   }
 }
 
