@@ -36,9 +36,11 @@
 - `medium`: identity 필드 부재거나 byte-diff 매트릭스 기반 (Goose flat YAML 매트릭스 등).
 - `low`: parse 실패 / 매트릭스 추출 0/0 / wrapper 손상 / fallback byte-diff.
 
-### v2 (예약) — multi-source aggregate fixture
+### v2 (계획 — 후속 PR 도입 예정) — multi-source aggregate fixture
 
-`inflight` 케이스 (multi-source CLI 의 한 source 만 갱신된 race) 는 현재 v1 schema 의 단일 (saveAs, stored, live) 로 표현 불가. PR-S (inflight cross-source aggregation) 에서 다음 형식 도입:
+⚠ **현재 미구현**: loader (`tests/contract/adapters.test.ts`) 는 v1 single-source 만 지원. 본 섹션은 향후 schema 계획 — fixture 작성 시 v1 만 사용.
+
+`inflight` 케이스 (multi-source CLI 의 한 source 만 갱신된 race) 는 현재 v1 schema 의 단일 (saveAs, stored, live) 로 표현 불가. PR-S 는 cross-source aggregation 로직만 구현 (real fs 통합 tests/core/freshness.test.ts 에서 검증). fixture-based contract test 는 향후 PR 에서 다음 schema 로 추가 예정:
 
 ```json
 {
@@ -51,7 +53,7 @@
 }
 ```
 
-`sources` 가 있으면 v2 (aggregate), 없으면 v1 (single-source) — loader 가 자동 분기.
+도입 시 loader 가 `sources` 유무로 v1/v2 자동 분기. 본 PR (PR-S) 머지 후 별도 follow-up.
 
 ## 마스킹 규칙
 

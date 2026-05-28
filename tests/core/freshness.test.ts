@@ -292,6 +292,107 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(report.sources[0].result.kind).toBe('stale');
     expect(report.sources[1].result.kind).toBe('stale');
   });
+
+  it('PR-S: multi-source CLI 의 rotated + stale 조합 → 모순 race → inflight 로 reclassify', async () => {
+    // oauth_creds.json: token rotated (account_id 부재 — gemini adapter 가 token 변경
+    // 만 보고 rotated value-only 로 분류) + google_accounts.json: active 이메일 변경
+    // → stale. 같은 cli 에 동시 발생은 cross-source race → 모두 inflight.
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/gemini/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(
+      join(profileDir, 'oauth_creds.json'),
+      '{"access_token":"old-token","refresh_token":"old-refresh"}'
+    );
+    await fs.writeFile(
+      join(profileDir, 'google_accounts.json'),
+      '{"active":"alice@fixture.example"}'
+    );
+    const liveDir = join(tmp.home, '.gemini');
+    await fs.mkdir(liveDir, { recursive: true });
+    await fs.writeFile(
+      join(liveDir, 'oauth_creds.json'),
+      '{"access_token":"new-token","refresh_token":"new-refresh"}'
+    );
+    await fs.writeFile(
+      join(liveDir, 'google_accounts.json'),
+      '{"active":"bob@fixture.example"}'
+    );
+
+    const report = await inspectLiveFreshness('gemini', 'p');
+    expect(report.sources).toHaveLength(2);
+    // 옛 동작: oauth_creds=rotated, google_accounts=stale 그대로 보고.
+    // PR-S: 두 분류 공존 = race → 둘 다 inflight 로 reclassify.
+    expect(report.sources[0].result.kind).toBe('inflight');
+    expect(report.sources[1].result.kind).toBe('inflight');
+    expect(report.sources[0].result.detail).toMatch(/cross-source race/);
+    expect(report.sources[1].result.detail).toMatch(/cross-source race/);
+  });
+
+  it('PR-S: fresh + rotated 조합은 race 아님 → reclassify 미적용 (정상 rotation)', async () => {
+    // oauth_creds.json: token 변경 → rotated, google_accounts.json: 동일 → fresh.
+    // 흔한 정상 token rotation 시나리오 — race 가 아니므로 그대로 보고.
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/gemini/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(
+      join(profileDir, 'oauth_creds.json'),
+      '{"access_token":"old-token","refresh_token":"old-refresh"}'
+    );
+    await fs.writeFile(
+      join(profileDir, 'google_accounts.json'),
+      '{"active":"alice@fixture.example"}'
+    );
+    const liveDir = join(tmp.home, '.gemini');
+    await fs.mkdir(liveDir, { recursive: true });
+    await fs.writeFile(
+      join(liveDir, 'oauth_creds.json'),
+      '{"access_token":"new-token","refresh_token":"new-refresh"}'
+    );
+    await fs.writeFile(
+      join(liveDir, 'google_accounts.json'),
+      '{"active":"alice@fixture.example"}'
+    );
+
+    const report = await inspectLiveFreshness('gemini', 'p');
+    // 정상 분류 유지 (inflight 미적용).
+    expect(report.sources[0].result.kind).toBe('rotated');
+    expect(report.sources[1].result.kind).toBe('fresh');
+  });
+
+  it('PR-S: stale + stale 조합은 race 아님 → reclassify 미적용 (양쪽 동시 다른 계정으로 swap)', async () => {
+    // 양쪽 모두 stale (한 시점에 다른 계정으로 swap 완료). race 가 아니라 의도된
+    // identity 변경 — hasRotated=false 라 aggregation 가드가 통과시킴.
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/gemini/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(join(profileDir, 'oauth_creds.json'), '{"a":1}');
+    await fs.writeFile(
+      join(profileDir, 'google_accounts.json'),
+      '{"active":"alice@fixture.example"}'
+    );
+    // 라이브 양쪽 부재 → 둘 다 stale.
+    const report = await inspectLiveFreshness('gemini', 'p');
+    expect(report.sources[0].result.kind).toBe('stale');
+    expect(report.sources[1].result.kind).toBe('stale');
+  });
+
+  it('PR-S: single-source CLI 는 inflight 적용 안 됨 (length < 2)', async () => {
+    // codex 는 단일 source (auth.json). identity 변경 (stale) 만 발생해도 inflight
+    // reclassify 대상 아님 — race 추론 불가.
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(
+      join(profileDir, 'auth.json'),
+      '{"tokens":{"account_id":"acc-a","access_token":"old","refresh_token":"old"}}'
+    );
+    const liveDir = join(tmp.home, '.codex');
+    await fs.mkdir(liveDir, { recursive: true });
+    await fs.writeFile(
+      join(liveDir, 'auth.json'),
+      '{"tokens":{"account_id":"acc-b","access_token":"new","refresh_token":"new"}}'
+    );
+    const report = await inspectLiveFreshness('codex', 'p');
+    expect(report.sources).toHaveLength(1);
+    expect(report.sources[0].result.kind).toBe('stale');
+  });
 });
 
 // --- PR-G: TUI dialog 분기 predicate ---
