@@ -18,6 +18,7 @@ import {
   clearActiveProfile,
   getActiveProfile,
   loadConfig,
+  markFirstFreshnessPromptShown,
   markFirstImportPromptShown,
   mutateConfig,
   saveConfig,
@@ -180,6 +181,46 @@ describe('config', () => {
       const cfg = await loadConfig();
       expect(cfg.firstImportPromptShown).toBe(true);
       expect(cfg.active.codex).toBe('work');     // 영향 없음
+    });
+  });
+
+  describe('markFirstFreshnessPromptShown (PR-G)', () => {
+    it('첫 호출: firstFreshnessPromptShown=true 로 기록', async () => {
+      await markFirstFreshnessPromptShown();
+      const cfg = await loadConfig();
+      expect(cfg.firstFreshnessPromptShown).toBe(true);
+    });
+
+    it('두 번째 호출: 이미 true 면 멱등 (다른 state 변경 없음)', async () => {
+      await markFirstFreshnessPromptShown();
+      await setActiveProfile('codex', 'work');
+      await markFirstFreshnessPromptShown();
+
+      const cfg = await loadConfig();
+      expect(cfg.firstFreshnessPromptShown).toBe(true);
+      expect(cfg.active.codex).toBe('work');
+    });
+
+    it('firstImportPromptShown 과 독립 — 한쪽 set 가 다른 쪽 영향 없음', async () => {
+      await markFirstImportPromptShown();
+      const cfg1 = await loadConfig();
+      expect(cfg1.firstImportPromptShown).toBe(true);
+      expect(cfg1.firstFreshnessPromptShown).toBeUndefined();
+
+      await markFirstFreshnessPromptShown();
+      const cfg2 = await loadConfig();
+      expect(cfg2.firstImportPromptShown).toBe(true);
+      expect(cfg2.firstFreshnessPromptShown).toBe(true);
+    });
+
+    it('파일에 firstFreshnessPromptShown=false 면 false 로 보존 (round-trip)', async () => {
+      await fs.mkdir(dataDir(), { recursive: true, mode: 0o700 });
+      await fs.writeFile(
+        configPath(),
+        JSON.stringify({ version: 1, active: {}, firstFreshnessPromptShown: false })
+      );
+      const cfg = await loadConfig();
+      expect(cfg.firstFreshnessPromptShown).toBe(false);
     });
   });
 

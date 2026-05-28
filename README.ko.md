@@ -53,7 +53,7 @@
 
 `mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = `stale` 감지 (identity 변경 또는 프로필 부재). 장기 실행 세션은 `mat exec` 사용을 권장 — 명령 종료 후 자동으로 이전 프로필 복원. 단 mat 자체가 `SIGKILL` 을 받으면 복원이 일어나지 않는다 (보안 섹션 참조).
 
-> **현재 한계 (PR-F\* 단독 머지 후):** TUI 의 swap 흐름이 `SwitchResult.preSwapLiveFreshness` 로 freshness 를 보고하지만 **대화형 dialog 는 아직 없다**. PR-G 머지 전까지는 rotation 위험 CLI 의 swap 전 `mat freshness <cli>` 를 **수동으로** 호출하길 권장. Goose/Claude 는 전용 adapter 미도입 — byte-diff fallback (`confidence: low`) 으로만 동작 (PR-H 후속). `mat exec` 도 종료 시 라이브 갱신본을 재캡처하지 않으므로, 장시간 실행 중 rotation 이 일어나면 새 토큰이 손실될 수 있다 (PR-I\* 후속).
+> **현재 한계 (PR-G 머지 후):** TUI 의 swap 흐름이 swap 직전 라이브 freshness 를 점검하고 차이 감지 시 **재캡처 / 폐기 / 취소** 3-옵션 dialog 를 표시한다 (PR-G). 재캡처는 라이브를 `snapshotLiveToProfile` 로 활성 프로필에 저장 후 swap, 폐기는 자동 snapshot 을 건너뛰고 swap (데이터 손실), 취소는 swap 미실행. Goose/Claude 는 전용 adapter 미도입 — byte-diff fallback (`confidence: low`) 으로만 동작하므로 안전한 swap 에서도 `[low conf]` 표기로 dialog 가 떠 보일 수 있다 (PR-H 후속). `mat exec` 는 종료 시 라이브 갱신본을 재캡처하지 않으므로, 장시간 실행 중 rotation 이 일어나면 새 토큰이 손실될 수 있다 (PR-I\* 후속).
 
 ### 전환 흐름 (데이터 손실 없음)
 

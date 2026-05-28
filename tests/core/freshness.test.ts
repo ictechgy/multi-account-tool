@@ -17,10 +17,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fallbackCompare,
   getAdapter,
+  hasInflight,
   inspectLiveFreshness,
+  needsUserAttention,
   registerAdapter,
   resetAdapters,
   type CompareResult,
+  type FreshnessReport,
   type SourceAdapter
 } from '../../src/core/freshness.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
@@ -256,5 +259,90 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     // 둘 다 라이브 부재 + 저장본 존재 → stale
     expect(report.sources[0].result.kind).toBe('stale');
     expect(report.sources[1].result.kind).toBe('stale');
+  });
+});
+
+// --- PR-G: TUI dialog 분기 predicate ---
+
+/**
+ * 합성된 FreshnessReport 헬퍼. inspectLiveFreshness 의 fs 의존 없이 predicate
+ * 단위 검증 — 입력 매트릭스만 표현.
+ */
+function makeReport(kinds: CompareResult['kind'][]): FreshnessReport {
+  return {
+    cliId: 'codex',
+    profileName: 'work',
+    sources: kinds.map((kind, i) => ({
+      saveAs: `s${i}.json`,
+      result: { kind, confidence: 'high' as const }
+    }))
+  };
+}
+
+describe('needsUserAttention (PR-G)', () => {
+  it('모든 source fresh → false (dialog 미표시)', () => {
+    expect(needsUserAttention(makeReport(['fresh']))).toBe(false);
+    expect(needsUserAttention(makeReport(['fresh', 'fresh']))).toBe(false);
+  });
+
+  it('rotated 하나라도 → true', () => {
+    expect(needsUserAttention(makeReport(['rotated']))).toBe(true);
+    expect(needsUserAttention(makeReport(['fresh', 'rotated']))).toBe(true);
+  });
+
+  it('stale 하나라도 → true', () => {
+    expect(needsUserAttention(makeReport(['stale']))).toBe(true);
+    expect(needsUserAttention(makeReport(['fresh', 'stale']))).toBe(true);
+  });
+
+  it('inflight 하나라도 → true (재시도 안내 톤은 hasInflight 로 분기)', () => {
+    expect(needsUserAttention(makeReport(['inflight']))).toBe(true);
+  });
+
+  it('빈 sources → false (보고할 source 없음 — dialog 의미 없음)', () => {
+    expect(needsUserAttention(makeReport([]))).toBe(false);
+  });
+});
+
+describe('hasInflight (PR-G)', () => {
+  it('inflight 하나라도 → true', () => {
+    expect(hasInflight(makeReport(['inflight']))).toBe(true);
+    expect(hasInflight(makeReport(['fresh', 'rotated', 'inflight']))).toBe(true);
+  });
+
+  it('inflight 없음 → false (rotated/stale 만 있어도)', () => {
+    expect(hasInflight(makeReport(['rotated', 'stale']))).toBe(false);
+    expect(hasInflight(makeReport(['fresh']))).toBe(false);
+  });
+});
+
+/**
+ * PR-G quad-review fix (#6): predicate 간 invariant 회귀 가드.
+ *
+ * hasInflight(report) 가 true 면 needsUserAttention(report) 도 반드시 true 여야 한다.
+ * 두 함수의 분기 순서를 caller (app.tsx) 가 바꾸어도 본 함의가 깨지지 않도록 강제.
+ * 모든 가능한 CompareKind 조합에 대해 검증.
+ */
+describe('predicate invariants (PR-G)', () => {
+  const KINDS: CompareResult['kind'][] = ['fresh', 'rotated', 'stale', 'inflight'];
+
+  it('hasInflight(report) ⇒ needsUserAttention(report) — 모든 단일 source 케이스', () => {
+    for (const kind of KINDS) {
+      const r = makeReport([kind]);
+      if (hasInflight(r)) {
+        expect(needsUserAttention(r)).toBe(true);
+      }
+    }
+  });
+
+  it('hasInflight(report) ⇒ needsUserAttention(report) — multi-source 모든 페어', () => {
+    for (const a of KINDS) {
+      for (const b of KINDS) {
+        const r = makeReport([a, b]);
+        if (hasInflight(r)) {
+          expect(needsUserAttention(r)).toBe(true);
+        }
+      }
+    }
   });
 });

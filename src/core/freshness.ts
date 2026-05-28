@@ -72,6 +72,18 @@ export interface FreshnessReport {
  *
  * registry key 는 cliId. multi-source CLI 의 source 별 분기는 adapter 가
  * saveAs 인자로 내부 분기한다.
+ *
+ * **CompareResult.detail 의 secret leak 방어 contract (PR-G quad-review #14)**:
+ *  - detail 은 TUI dialog (FreshnessDialog) 와 `mat freshness` CLI 표 양쪽에
+ *    그대로 렌더링된다. 따라서 OAuth token / access_token / refresh_token /
+ *    email / accountId 등 raw 값은 절대 detail 에 포함하지 말 것.
+ *  - identity 식별이 필요하면 `maskIdentifier` (errors-mask.ts) 의 SHA-256
+ *    fingerprint 형태로 마스킹. 예: `identity match: ${mask(email)}`.
+ *  - plugin 작성자도 본 contract 를 지켜야 — adapter 등록 시 detail 의
+ *    raw 자격증명 직접 노출 금지.
+ *  - 본 contract 위반 시 사용자 터미널 scrollback / screen recording 으로
+ *    자격증명 누설 가능 — `screens.tsx` 의 dialog 렌더가 256자 truncate 하지만
+ *    근본 방어는 adapter 책임.
  */
 export interface SourceAdapter {
   compare(saveAs: string, stored: string, live: string): CompareResult;
@@ -117,6 +129,39 @@ async function ensureBuiltinAdapters(): Promise<void> {
 /** 외부 조회 헬퍼 — 미등록 시 undefined. */
 export function getAdapter(cliId: string): SourceAdapter | undefined {
   return adapters.get(cliId);
+}
+
+/**
+ * 사용자 액션 (재캡처/폐기/취소 dialog) 이 필요한 보고인지 판정.
+ *
+ * 분류 기준 (plan §188):
+ *  - `fresh` (모든 source) → 사용자 액션 불필요 (false).
+ *  - `rotated` 또는 `stale` 하나라도 → dialog 표시 필요 (true).
+ *  - `inflight` 하나라도 → dialog 표시 필요 (true, 재시도 안내 톤).
+ *
+ * `mat freshness` CLI 의 exit 1 (`hasUnsafe` in cli.tsx) 와는 별도 — 본 predicate
+ * 는 TUI dialog 의 표시 여부 결정에만 사용. CLI 의 unsafe 판정은 chain 차단을
+ * 위해 더 엄격하다 (low-confidence rotated 도 unsafe).
+ *
+ * 빈 sources 케이스 (`report.sources.length === 0`) 는 false 반환 — 정상 동작.
+ * BUILTIN_CLI_DEFS / plugin loader 가 sources >= 1 invariant 를 보장하므로
+ * 실제로는 dead branch. CLI def 의 sources 가 비어 있는 anomaly 는 cli-defs
+ * 단계에서 차단되어야지 본 predicate 에 도달하지 말아야 한다.
+ *
+ * 불변식: `hasInflight(report) ⇒ needsUserAttention(report)` — `inflight` 는
+ * `fresh` 가 아니므로 inflight 검사가 attention 검사를 함의한다. caller 가 분기
+ * 순서를 바꿀 때 본 함의를 깨지 않도록 freshness.test.ts 에서 invariant 검증.
+ */
+export function needsUserAttention(report: FreshnessReport): boolean {
+  return report.sources.some((s) => s.result.kind !== 'fresh');
+}
+
+/**
+ * `inflight` 보고 — multi-source CLI 의 부분 갱신 race. 재시도 안내가 적절.
+ * TUI 가 일반 3-옵션 dialog 대신 "잠시 후 재시도" 안내로 분기할 수 있도록 별도 헬퍼.
+ */
+export function hasInflight(report: FreshnessReport): boolean {
+  return report.sources.some((s) => s.result.kind === 'inflight');
 }
 
 /**
