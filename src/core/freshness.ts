@@ -349,6 +349,17 @@ export async function inspectLiveFreshness(
  *
  * `inflight` confidence: medium — 일시적 race 일 가능성이 가장 높지만 (retry 로
  * 해결 가능) 실제 multi-account 운영 중 swap race 가능성도 배제 못 함.
+ *
+ * 한계 (PR-S Codex iter 1 valid HIGH critique):
+ *  - 옛 분류 (rotated value-only + stale identity 변경) 가 race 아닌 의도된 사용자
+ *    액션 (token rotation 직후 다른 계정 로그인) 일 수 있음 — 이 경우 사용자는
+ *    재캡처/swap 진행이 합리적. 본 PR 은 보수적으로 inflight 분류 + TUI dialog (PR-G
+ *    의 recapture/discard/cancel) 로 사용자가 결정 가능.
+ *  - `rotated + rotated` (각 source 토큰만 부분 갱신) 또는 `rotated + fresh` 는
+ *    현재 race 감지 대상 외 — 추후 sample-based detection (짧은 retry 후 동일 →
+ *    실제 stale fallback) 으로 확장 가능.
+ *  - 향후 더 정교한 race detection (time window / N회 retry / source-level
+ *    aggregate fixture v2) 는 별도 follow-up PR.
  */
 function aggregateInflight(sources: SourceFreshness[]): SourceFreshness[] {
   if (sources.length < 2) return sources;
