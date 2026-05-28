@@ -36,6 +36,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | File swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | File swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS-agnostic, XDG standard) | File swap |
+| Goose | macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain; Linux needs `GOOSE_DISABLE_KEYRING=1` — see below) |
 
 ### Switch flow (lossless)
 
@@ -206,7 +207,7 @@ Drop a JSON file at `~/.multi-account-tool/cli-defs/<id>.json`. Example template
 }
 ```
 
-mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`) cannot be overridden — id collision is rejected.
+mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) cannot be overridden — id collision is rejected.
 
 Field rules:
 - `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).
@@ -245,7 +246,8 @@ See [ROADMAP.md](./ROADMAP.md) for v0.2+ plans:
 - ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3)
 - ~~Aider built-in support~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - Session-scoped credential isolation (different account per `lterm` session)
-- More built-in CLIs — Goose / Copilot / Amp are deferred until mat's source abstraction is extended (optional `account` field on `KeychainSource` + Linux Secret Service / Windows Credential Manager source types). Cursor Agent: plugin recommended (keychain service name not publicly documented).
+- More built-in CLIs — ~~Goose~~ ✅ (v0.4-pre, account-scoped Keychain). Copilot / Amp are deferred until mat's source abstraction is further extended (Linux Secret Service / Windows Credential Manager source types). Cursor Agent: plugin recommended (keychain service name not publicly documented).
+- **Goose limitation**: mat swaps only macOS Keychain (`goose`/`secrets`) and the `~/.config/goose/*.yaml` files. If you run Goose on Linux with the default `secret-service` backend (libsecret, GNOME Keyring/KWallet), mat cannot reach it — disable Goose's keyring (`GOOSE_DISABLE_KEYRING=1` or file backend in `~/.config/goose/config.yaml`) so credentials land in `secrets.yaml`.
 - `lterm claude --profile <name>` shim wrapper
 
 ---

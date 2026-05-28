@@ -36,6 +36,7 @@
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | 파일 swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | 파일 swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) | 파일 swap |
+| Goose | macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account scoped Keychain; Linux 는 `GOOSE_DISABLE_KEYRING=1` 필요 — 아래 참고) |
 
 ### 전환 흐름 (데이터 손실 없음)
 
@@ -206,7 +207,7 @@ lterm send-keys "mat exec claude work -- claude" Enter
 }
 ```
 
-mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`) id 와 충돌하면 plugin 이 무시된다 (보안).
+mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) id 와 충돌하면 plugin 이 무시된다 (보안).
 
 필드 규칙:
 - `id`: 영문 시작 + 영숫자/`_`/`-`, 1~32자 (빌트인 id 와 중복 불가).
@@ -245,7 +246,8 @@ v0.2+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 - ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3)
 - ~~Aider 빌트인 지원~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
-- 빌트인 CLI 추가 확장 — Goose / Copilot / Amp 는 mat 추상화 확장 (KeychainSource `account` 필드 + Linux Secret Service / Windows Credential Manager source type) 후 별도 PR 묶음 예정. Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
+- 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4-pre, account-scoped Keychain). Copilot / Amp 는 mat 추상화 추가 확장 (Linux Secret Service / Windows Credential Manager source type) 후 별도 PR 묶음 예정. Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
+- **Goose 한계**: mat 는 macOS Keychain (`goose`/`secrets`) 과 `~/.config/goose/*.yaml` 만 swap. Linux 에서 Goose 가 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 쓰면 mat 가 접근할 수 없으므로, Goose 의 keyring 을 끄고 (`GOOSE_DISABLE_KEYRING=1` 또는 `~/.config/goose/config.yaml` 의 file backend 설정) credentials 가 `secrets.yaml` 에 저장되도록 해야 한다.
 - `lterm claude --profile <name>` 같은 shim wrapper
 
 ---

@@ -29,6 +29,46 @@ function claudeSource(): Source {
   return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
 }
 
+/**
+ * Goose (Block 의 오픈소스 AI agent — https://github.com/block/goose) 의 자격증명 source 들.
+ *
+ * Goose 의 credential 백엔드 (crates/goose/src/config/base.rs):
+ *  - macOS: Keychain — `KEYRING_SERVICE = "goose"`, `KEYRING_USERNAME = "secrets"` (단일 entry).
+ *    service 명이 generic 단어라 mat 의 `KeychainSource.service` 만으로는 wrong-entry 위험
+ *    → PR-A 의 `account: 'secrets'` 명시로 `-s goose -a secrets` 항목 하나만 안전하게 swap.
+ *  - Linux: 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) — **mat 미지원**.
+ *    `secret-service` 미사용 환경에서는 file fallback (`~/.config/goose/secrets.yaml`).
+ *  - 모든 OS: 비-secret config (model/provider 라우팅 등) 는 `~/.config/goose/config.yaml` 평문.
+ *
+ * mat 의 swap 전략:
+ *  - **macOS**: keychain (`account: secrets`) + `secrets.yaml` (사용자가 file backend 로 강제
+ *    설정한 경우만 사용 — 기본 backend 는 keychain 단일 진실 소스) + `config.yaml`. 부재
+ *    source 는 자동 skip 이므로 keychain 만 쓰는 사용자, file 만 쓰는 사용자 모두 안전.
+ *    keychain 과 yaml 두 backend 를 동시 사용하지 말 것 (stale 위험).
+ *  - **그 외 OS**: `secrets.yaml` + `config.yaml`. Linux 의 secret-service 활성 환경은 미지원
+ *    (PR #29 quad-review Codex HIGH 결정 — KeychainSource 추상화는 macOS Keychain 전용).
+ *
+ * 한계 (README/ROADMAP 명시):
+ *  - Linux secret-service 환경에서는 mat swap 무효 — `secret-service` 데몬이 우선해서
+ *    secrets.yaml 의 내용을 사용하지 않을 수 있음. 사용자에게 file backend 강제 안내 필요
+ *    (Goose 의 `GOOSE_DISABLE_KEYRING` env 또는 file backend 설정).
+ *  - shell env (`GOOSE_*`, provider 별 `OPENAI_API_KEY` 등) 는 mat scope 밖.
+ *  - project-local override 도 mat scope 밖.
+ */
+function gooseSources(): Source[] {
+  const yamlSources: Source[] = [
+    { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
+    { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+  ];
+  if (process.platform === 'darwin') {
+    return [
+      { type: 'keychain', service: 'goose', account: 'secrets', saveAs: 'goose-keyring.json' },
+      ...yamlSources
+    ];
+  }
+  return yamlSources;
+}
+
 
 export const BUILTIN_CLI_DEFS: CliDef[] = [
   {
@@ -135,6 +175,15 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
     ]
+  },
+  {
+    // Block 의 오픈소스 AI agent (https://github.com/block/goose).
+    // PR-A 의 KeychainSource.account optional 필드를 사용하는 첫 builtin —
+    // service `goose` 가 generic 단어라 account scope 가 필수 (wrong-entry 차단).
+    // platform 분기 및 한계는 gooseSources() 의 JSDoc 참고.
+    id: 'goose',
+    name: 'Goose',
+    sources: gooseSources()
   }
 ];
 
