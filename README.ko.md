@@ -49,11 +49,27 @@
 | OpenCode | provider 별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex 와 동일 |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (PR-H adapter, high-confidence rotation 분류) |
 | Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider 라우팅) | 🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account) | `mat freshness goose` 가 source 별 결과 보고, identity-aware |
-| Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap 으로 충분 |
+| Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap 으로 충분 — 단 환경변수 / project-local 설정이 mat 의 swap 을 우회할 수 있음 (아래 "플랫폼 지원" 참고) |
 
 `mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = `stale` 감지 (identity 변경 또는 프로필 부재). 장기 실행 세션은 `mat exec` 사용을 권장 — 명령 종료 후 자동으로 이전 프로필 복원. 단 mat 자체가 `SIGKILL` 을 받으면 복원이 일어나지 않는다 (보안 섹션 참조).
 
 > **OAuth rotation 대응 (PR-G/PR-I\*/PR-H 모두 머지):** TUI 의 swap 흐름이 swap 직전 라이브 freshness 를 점검하고 차이 감지 시 **재캡처 / 폐기 / 취소** 3-옵션 dialog 를 표시한다 (PR-G). 재캡처는 라이브를 `snapshotLiveToProfile` 로 활성 프로필에 저장 후 swap, 폐기는 자동 snapshot 을 건너뛰고 swap (데이터 손실), 취소는 swap 미실행. `mat exec` 는 종료 시 라이브를 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원 (PR-I\*) — `SIGINT`/`SIGTERM`/`SIGHUP` 까지 보호 (`SIGKILL` 은 OS 보장상 trap 불가 → 다음 `mat` 호출의 stale-recovery 가 사용자에게 안내). Claude/Goose identity-aware adapter (PR-H) 가 `high`/`medium` confidence 로 rotation vs 다른 계정을 분류 — 안전한 swap 에서 `[low conf]` dialog noise 제거.
+
+### 플랫폼 지원
+
+| CLI | macOS | Linux | Windows | Override / 알려진 한계 |
+| --- | --- | --- | --- | --- |
+| Claude Code | ✅ | ❌ | ❌ | macOS Keychain 전용 — Linux/Windows credential-store 백엔드 미지원 |
+| Codex CLI | ✅ | ✅ | ⚠️ 미검증 | `~/.codex/auth.json` (cross-platform file path) |
+| Gemini / Antigravity | ✅ | ✅ | ⚠️ 미검증 | `~/.gemini/oauth_creds.json` + `google_accounts.json` |
+| Aider | ✅ | ✅ | ⚠️ 미검증 | **env override**: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_BASE` 등이 `~/.aider.conf.yml` 을 우회 — mat 는 shell env 를 swap 할 수 없음 |
+| Kimi CLI | ✅ | ✅ | ⚠️ 미검증 | **env override**: `MOONSHOT_API_KEY` 등이 `~/.kimi/config.toml` 을 우회 |
+| Qwen Code CLI | ✅ | ✅ | ⚠️ 미검증 | 자격증명 우선순위: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. mat 는 두 파일 모두 swap 하지만 shell env 는 영향 없음 |
+| Crush | ✅ | ✅ | ⚠️ 미검증 | **project-local override**: CWD 의 `./.crush.json` / `./crush.json` 이 `~/.config/crush/*` 보다 우선; `CRUSH_GLOBAL_*` env 도 우선 |
+| OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로 (`~/.local/share/opencode/auth.json`, 모든 OS 에서 `xdg-basedir` 사용) |
+| Goose | ✅ | ⚠️ file-only | ❌ | macOS Keychain (`goose`/`secrets`) + `~/.config/goose/*.yaml`. Linux 는 `GOOSE_DISABLE_KEYRING=1` (또는 `config.yaml` 의 file backend) 필요 — mat 가 `secret-service`/libsecret 아직 미지원 |
+
+"⚠️ 미검증" = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.
 
 ### 전환 흐름 (데이터 손실 없음)
 
@@ -91,12 +107,24 @@ npm run build
 npm link
 ```
 
+### 설치 확인
+
+```bash
+mat --version                  # 설치된 semver 출력
+mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat freshness`)
+node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke test (CLI 정의 로드 + path resolve 확인, 자격증명 미수정)
+```
+
+smoke test 는 read-only 라 활성 mat 프로필이 있는 환경에서도 안전하다.
+
 ---
 
 ## 사용
 
 ```bash
-mat
+mat              # TUI 실행
+mat --version    # 설치된 버전 출력
+mat --help       # 짧은 사용법 (subcommand: exec / freshness)
 ```
 
 TUI 가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
@@ -141,7 +169,7 @@ mat exec <cli> <profile> -- <cmd...>
 # 한 번의 Claude 세션만 work 프로필로 실행, 종료 후 personal 로 원복
 mat exec claude work -- claude
 
-# lterm 과 조합
+# lterm 과 조합 (선택 — `npm install -g @ictechgy/lterm` 으로 별도 설치 필요)
 lterm send-keys "mat exec claude work -- claude" Enter
 ```
 
@@ -205,14 +233,24 @@ CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 
 ```
 ~/.multi-account-tool/
 ├── config.json                   # 활성 프로필 포인터 + 플래그
+├── cli-defs/                     # 사용자 플러그인 (선택) — "새 CLI 추가하기" 참고
+│   └── <id>.json
+├── locks/                        # CLI 별 `mat exec` lock (stale 자동 회수)
+│   └── <cli>.lock/
 └── profiles/
-    ├── claude/
+    ├── claude/                   # credentials.json (macOS Keychain 백업, 평문 JSON)
     │   ├── personal/
-    │   │   ├── credentials.json  # Keychain 항목 백업 (평문 JSON)
+    │   │   ├── credentials.json
     │   │   └── meta.json
     │   └── work/...
-    ├── codex/...
-    └── gemini/...
+    ├── codex/                    # auth.json
+    ├── gemini/                   # oauth_creds.json + google_accounts.json
+    ├── aider/                    # aider.yml
+    ├── kimi/                     # config.toml
+    ├── qwen/                     # qwen-settings.json + qwen.env (prefix 적용된 saveAs)
+    ├── crush/                    # crush-config.json + crush-data.json (config + data 레이어)
+    ├── opencode/                 # auth.json (OS 공통 XDG 경로)
+    └── goose/                    # goose-keyring.json (macOS) + goose-secrets.yaml + goose-config.yaml
 ```
 
 파일은 `0600`, 디렉토리는 `0700` 권한으로 생성된다.

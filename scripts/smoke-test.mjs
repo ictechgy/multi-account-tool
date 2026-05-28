@@ -27,8 +27,8 @@ console.log(`${GRAY}data dir: ${dataDir()}${RESET}`);
 console.log(`${GRAY}config:   ${configPath()}${RESET}`);
 console.log('');
 
-// 1) CLI 정의가 모두 잘 로드되는가
-check('CLI 정의 로드', BUILTIN_CLI_DEFS.length === 3, `(${BUILTIN_CLI_DEFS.length}개)`);
+// 1) CLI 정의가 모두 잘 로드되는가 (최소 1개 이상 + 각 def 의 sources 비어있지 않음)
+check('CLI 정의 로드', BUILTIN_CLI_DEFS.length >= 1, `(${BUILTIN_CLI_DEFS.length}개)`);
 for (const def of BUILTIN_CLI_DEFS) {
   check(
     `  ${def.id} (${def.name}) sources 정의`,
@@ -41,9 +41,9 @@ for (const def of BUILTIN_CLI_DEFS) {
 const cfg = await loadConfig();
 check('config 로드', cfg.version === 1, `active=${JSON.stringify(cfg.active)}`);
 
-// 3) detector — 라이브 자격증명 감지 (read-only)
+// 3) detector — 라이브 자격증명 감지 (read-only). builtin CLI 갯수와 일치해야 함
 const results = await detectAll();
-check('detector 실행', results.length === 3);
+check('detector 실행', results.length === BUILTIN_CLI_DEFS.length, `(${results.length}건)`);
 console.log('');
 console.log(`${CYAN}-- 라이브 자격증명 감지 결과 --${RESET}`);
 for (const r of results) {
