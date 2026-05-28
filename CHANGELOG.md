@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-29
+
+v0.4.0 publish 후 사용자 가시 docs 정확화 + freshness adapter 보안·DRY 강화 +
+Goose YAML parser 정식 lib 교체 사이클. 5 PR (PR-J/PR-K/PR-L/PR-M/PR-N) 머지.
+
+### Changed
+
+- **README docs publish-followup 6건 + smoke-test 단언 갱신 — PR-J (#40)** —
+  데이터 layout tree 가 9 CLI (claude/codex/gemini/aider/kimi/qwen/crush/opencode/
+  goose) + `cli-defs/` + `locks/<cli>.lock/` 디렉토리 모두 명시. Usage 섹션에
+  `mat --version` / `mat --help` 안내. lterm 예시 footnote (`npm install -g
+  @ictechgy/lterm` 별도 설치 필요). OAuth Rotation Safety Matrix 의 Aider/Kimi/
+  Qwen/Crush 행에 env/project-local override 한계 footnote. 신규 "플랫폼 지원"
+  섹션 — per-CLI macOS/Linux/Windows 지원 + Override/한계 매트릭스. Install 섹션
+  에 "설치 확인" 하위 섹션 (`mat --version` / `mat --help` / `node scripts/
+  smoke-test.mjs` 안내, read-only 명시). `scripts/smoke-test.mjs` 의 stale 단언
+  (`BUILTIN_CLI_DEFS.length === 3`) 을 `>= 1` + `=== BUILTIN_CLI_DEFS.length` 로
+  완화 — v0.3.x 이후 빌트인 확장 시 false-negative 방지. README.md 와 README.ko.md
+  대칭 적용. quad-review iter 1 의 MED 1건 (qwen/crush profile tree filename
+  mismatch: 실제 saveAs 는 `qwen-settings.json` + `qwen.env` + `crush-config.json`
+  + `crush-data.json` 의 prefix 적용 형태) fix.
+- **`_shared.parseJsonObject` 5 adapter DRY 통일 — PR-K (#41)** — PR-H 에서
+  claude/goose 에만 적용된 `_shared.parseJsonObject` 를 codex/gemini/opencode 3
+  adapter 에도 적용. local `parse()` / `parseObject()` 함수 제거 → `parseJsonObject
+  <T>` 사용. 의도된 strictness 강화: `parseJsonObject` 는 `Array.isArray(v) ===
+  true` 도 reject (옛 local parse 는 `typeof === 'object'` 만 검사 → array 통과).
+  array 입력은 명시적 null → `rotated/both/low confidence parse 실패` 분류 — 옛
+  opencode 의 `Object.keys(s)` loop 가 numeric index 로 잘못 진입할 위험 차단.
+  회귀 가드 +4 (codex/gemini oauth_creds/gemini google_accounts/opencode 의 array
+  reject 가드). 5 adapter 가 단일 helper 사용 → 향후 보안 정책 변경 시 single
+  point of update 확보.
+- **Goose YAML parser → `yaml@~2.9.0` 정식 lib 교체 — PR-M (#43)** — 옛 간이
+  flat YAML parser (`parseFlatYaml`) 의 한계 (block scalar `|`/`>` 감지 시
+  confidence 강등, 사용자 multi-line API key 사용 시 false-positive low-conf
+  다발) 를 `yaml` v2 (YAML 1.2 spec, eemeli.org/yaml, zero-dep) 로 교체. block
+  scalar / quoted / anchor / alias 정식 해석 → resolved string 이 entries 에
+  그대로. `BLOCK_SCALAR_VALUE_RE` / `hasBlockScalar` / `downgradeForBlockScalar`
+  / `stripQuotes` 제거. YAML parse 실패 (spec 위반, 닫히지 않은 quote, multi-
+  document, malformed indentation 등) → `hasParseError` flag → `downgradeFor
+  ParseError` 로 confidence 강등 + detail hint. 1-depth `Record<string, string>`
+  contract 유지 — nested object / array 는 매트릭스 미진입 (follow-up). `Object.
+  create(null)` + `DANGEROUS_KEYS` (M3 prototype pollution 가드) 유지.
+  quad-review (Claude×2 + Codex×2) 2 iteration HIGH 3 + MED 2 + LOW 3 fix:
+  (1) block scalar trailing newline 비대칭 회귀 — yaml v2 `|` clip = `"v\n"` vs
+  `|-` strip = `"v"` 로 동일 본문이 value-only 오분류, `parseGooseYaml` 에서
+  entries[key] 저장 전 `/\n+$/` strip 정규화 — chomping 마커 차이만 있는 동일
+  secret 은 meta-only 로 정확 분류. (2) numeric/boolean/null silent skip 회귀 —
+  YAML 1.2 scalar tag resolution 으로 `3.5` / `true` / `null` 등 비-string type
+  parse, 옛 string-only filter 가 silent skip → `sameKeySet` 비대칭 → false-
+  positive stale, `coerceToIdentityString` 도입으로 number/boolean/bigint primitive
+  를 `String()` 강제 변환 (null/undefined/nested 는 skip 유지). (3) `yaml@^2`
+  caret range → `~2.9.0` narrow (parser behavior 가 분류 결과에 직접 영향, npm
+  publish 사용자가 lockfile 없이 install 시 minor bump 차단). (4) JSDoc 의
+  "strict 옵션 미사용 (default lenient)" 정정 → "yaml v2 default 는 strict, spec
+  위반은 throw → catch 로 hasParseError surface" 명시. (5) `parseYaml(raw, {
+  maxAliasCount: 100, logLevel: 'error' })` 옵션 추가 — billion laughs / anchor-
+  alias exponential expansion 방어 lock-in + warning stderr side effect 차단.
+  회귀 가드 +9 (block scalar chomping / numeric / boolean / null / multi-doc /
+  parse 실패 / matrix-key boolean / matrix-key null).
+- **`RECAPTURE_TIMEOUT_MS` lazy function 전환 — PR-N (#44)** — 옛 코드의
+  module-level `const RECAPTURE_TIMEOUT_MS = parseRecaptureTimeoutMs()` 는 module-
+  load 시점 1회 평가. `MAT_EXEC_RECAPTURE_TIMEOUT_MS` env 가 module import 후
+  set 되면 무효 — test / daemon-TUI 통합 케이스에서 env override 가 첫 spawn 후
+  무시. `getRecaptureTimeoutMs()` getter 함수로 전환 → 호출 시점 평가. daemon/TUI
+  가 mat exec 를 여러 번 spawn 할 때 env 변경이 다음 spawn 부터 즉시 반영. 회귀
+  가드 +1 (env 동적 설정 + fake-timer 600ms advance → `timeout after 500ms`
+  메시지 검증).
+
+### Fixed
+
+- **freshness adapter throw path 의 secret leak 차단 — PR-L (#42)** —
+  `SourceAdapter` contract (`freshness.ts:76-87`) 는 정상 return 의 `detail` 만
+  secret leak 방어 의무화. throw path 는 `freshness.ts:364-376` catch 가
+  `(err as Error).message` 를 그대로 detail 에 append → adapter 가 raw payload
+  (refresh_token / JWT / accountId) 일부를 error message 에 포함했을 경우
+  `mat freshness --json` CI 로그 / TUI dialog 에 secret 누설. PR-H 에서 `_shared.
+  redactSecretLikeMessage` helper 만 export 하고 catch 적용은 deferred 됐던 M4
+  완성. catch 의 `adapterMsg` 를 `redactSecretLikeMessage` 통과 → base64-like 20자+
+  → `<redacted>`, JWT prefix → `<redacted-jwt>`, 120자 cap. 회귀 가드 +1 (JWT-
+  like prefix + base64-like 20자+ 포함 throw → detail 원본 시퀀스 부재 + `<redacted>`
+  마커 검증, 가짜 토큰은 runtime concat 으로 구성해 정적 secret scanner 회피).
+
+### Security
+
+- **`yaml@~2.9.0` (zero-dep, npm audit 0 vulnerabilities)** — PR-M. `package.json`
+  dependencies 에 `yaml` 추가 + `~2.9.0` narrow 로 lockfile 없는 install 환경에서도
+  minor bump 차단. `maxAliasCount: 100` explicit (billion laughs / YAML bomb
+  방어, yaml lib default 변경 대비 lock-in). `logLevel: 'error'` 로 parse warning
+  의 stderr 출력 차단 (compare() 의 pure return contract 보존).
+
 ## [0.4.0] - 2026-05-28
 
 OAuth refresh token rotation 종합 대응 사이클 + Goose 빌트인 추가. plan
@@ -134,7 +224,8 @@ Manager source type 도입 후 재PR 예정으로 보류.
 - **Homebrew**: `ictechgy/homebrew-mat` tap (mat.rb @ 0.2.0) — `brew tap ictechgy/mat && brew install mat`.
 - **GitHub**: https://github.com/ictechgy/multi-account-tool
 
-[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.2.0...v0.3.0
