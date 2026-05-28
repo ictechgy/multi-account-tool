@@ -14,6 +14,7 @@
 
 import { findCliDef } from './cli-defs.js';
 import { getActiveProfile, setActiveProfile } from './config.js';
+import { UnknownCliError } from './errors.js';
 import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
 import {
   createProfile,
@@ -216,6 +217,8 @@ async function safeInspectFreshness(
 
 function mustFindCli(cliId: string): CliDef {
   const def = findCliDef(cliId);
-  if (!def) throw new Error(`알 수 없는 CLI: ${cliId}`);
+  // UnknownCliError 일원화 — generic Error 대신 typed throw (quad-review iter 2 LOW fix).
+  // exec / TUI 등 호출자가 instanceof 분기로 exit 2 매핑 가능.
+  if (!def) throw new UnknownCliError(cliId);
   return def;
 }
