@@ -67,8 +67,10 @@ const PROVIDER_KEY_PATTERNS: RegExp[] = [
 ];
 
 /**
- * config.yaml 의 routing identity 매트릭스 (M1 fix). provider type 변경은 routing
- * identity 의 핵심 — 다른 provider 의 다른 계정으로 swap 됐다는 의미. stale 분류.
+ * config.yaml 의 routing identity 매트릭스 (M1 fix). routing 키 매트릭스는 동일
+ * 키 + 값 변경 시 그 의미가 키마다 다르다 — `GOOSE_PROVIDER__TYPE: anthropic →
+ * openai` 같은 provider 전환은 다른 provider 의 다른 계정 swap 을 의미하므로
+ * stale, model 만 변경은 rotation 으로 분류.
  */
 const CONFIG_ROUTING_KEY_PATTERNS: RegExp[] = [
   /^GOOSE_PROVIDER__TYPE$/,
@@ -77,11 +79,28 @@ const CONFIG_ROUTING_KEY_PATTERNS: RegExp[] = [
 ];
 
 /**
- * block scalar 마커 (`|` 또는 `>`) 가 단독 value 인 라인 패턴 (H2 fix).
- * 예: `ANTHROPIC_API_KEY: |` — flat parser 가 다음 indent 라인의 secret 본문을
- * skip 하므로 비교 신뢰도 손상.
+ * config.yaml 에서 값 변경 시 stale 로 분류해야 하는 routing identity 키 집합
+ * (iter 2 Codex-3 #2 fix — spec/code 불일치 해소).
+ *
+ * `GOOSE_PROVIDER__TYPE` / `GOOSE_PROVIDER` 변경은 사용자가 다른 provider 의 다른
+ * 계정으로 swap 했음을 의미 — rotation 이 아니라 identity 변경. `GOOSE_MODEL` 만
+ * 변경은 동일 provider 의 model 선호도 변경이라 rotation 으로 분류.
  */
-const BLOCK_SCALAR_VALUE_RE = /^\s*[|>][+-]?\s*$/;
+const CONFIG_STALE_ON_VALUE_CHANGE_RE = /^(GOOSE_PROVIDER__TYPE|GOOSE_PROVIDER)$/;
+
+/**
+ * block scalar 마커 (`|` 또는 `>`) 가 단독 value 인 라인 패턴 (H2 + iter 2 Codex-3 #1 fix).
+ *
+ * YAML spec 의 block scalar header 전체 커버:
+ *  - bare: `|`, `>`
+ *  - chomping indicator: `|-`, `|+`, `>-`, `>+`
+ *  - indentation indicator: `|2`, `|-2`, `|2-`, `>+2`, `>2+` 등 (1-9 digit, optional)
+ *  - trailing comment: `| # comment` (YAML 은 block scalar header 뒤 주석 허용)
+ *
+ * 모두 단독 value 라인일 때만 매칭 — inline scalar value 와 충돌 회피.
+ * flat parser 가 다음 indent 라인의 secret 본문을 skip 하므로 비교 신뢰도 손상.
+ */
+const BLOCK_SCALAR_VALUE_RE = /^\s*[|>](?:[+-]?[1-9]?|[1-9][+-]?)?\s*(?:#.*)?$/;
 
 /** 간이 flat YAML 처리 결과 + block scalar 감지 플래그. */
 interface YamlParseResult {
@@ -159,11 +178,18 @@ function sameKeySet(a: Record<string, string>, b: Record<string, string>): boole
  *
  * 빈 매트릭스 (양쪽 모두 0건) 케이스는 caller 가 별도 분기 (H1 fix). 본 함수는
  * 양쪽 모두 최소 1건 추출됐을 때만 호출.
+ *
+ * `staleOnValueChangeRe` (iter 2 Codex-3 #2 fix): config.yaml 의
+ * `GOOSE_PROVIDER__TYPE` 같이 값 변경 자체가 identity 변경을 의미하는 키 집합.
+ * 매칭되는 키 중 하나라도 값이 다르면 rotation 이 아닌 stale 로 분류.
+ * provider 매트릭스는 staleOnValueChangeRe=undefined — 키 값 변경은 단순 rotation
+ * (API key rotation 등).
  */
 function compareIdentityMatrix(
   sIds: Record<string, string>,
   lIds: Record<string, string>,
-  label: string
+  label: string,
+  staleOnValueChangeRe?: RegExp
 ): CompareResult {
   if (!sameKeySet(sIds, lIds)) {
     const sKeys = Object.keys(sIds).sort().join(',') || '<none>';
@@ -173,6 +199,18 @@ function compareIdentityMatrix(
       confidence: 'medium',
       detail: `${label} 키 set 변경: ${maskIdentifier(sKeys)} → ${maskIdentifier(lKeys)}`
     };
+  }
+  if (staleOnValueChangeRe) {
+    const identityChange = Object.keys(sIds).find(
+      (k) => staleOnValueChangeRe.test(k) && sIds[k] !== lIds[k]
+    );
+    if (identityChange) {
+      return {
+        kind: 'stale',
+        confidence: 'medium',
+        detail: `${label} identity 키 '${identityChange}' 값 변경 — 다른 provider/계정 swap 추정`
+      };
+    }
   }
   const valueChanged = Object.keys(sIds).some((k) => sIds[k] !== lIds[k]);
   if (valueChanged) {
@@ -201,15 +239,16 @@ function compareGooseYaml(saveAs: string, stored: string, live: string): Compare
   }
   const sParsed = parseFlatYaml(stored);
   const lParsed = parseFlatYaml(live);
-  const patterns =
-    saveAs === 'goose-config.yaml' ? CONFIG_ROUTING_KEY_PATTERNS : PROVIDER_KEY_PATTERNS;
-  const label = saveAs === 'goose-config.yaml' ? 'routing' : 'provider';
+  const isConfig = saveAs === 'goose-config.yaml';
+  const patterns = isConfig ? CONFIG_ROUTING_KEY_PATTERNS : PROVIDER_KEY_PATTERNS;
+  const label = isConfig ? 'routing' : 'provider';
+  const staleOnChange = isConfig ? CONFIG_STALE_ON_VALUE_CHANGE_RE : undefined;
   const sIds = extractByPatterns(sParsed.entries, patterns);
   const lIds = extractByPatterns(lParsed.entries, patterns);
   if (Object.keys(sIds).length === 0 && Object.keys(lIds).length === 0) {
     return emptyMatrixVerdict(sParsed.hasBlockScalar || lParsed.hasBlockScalar, label);
   }
-  const verdict = compareIdentityMatrix(sIds, lIds, label);
+  const verdict = compareIdentityMatrix(sIds, lIds, label, staleOnChange);
   if (sParsed.hasBlockScalar || lParsed.hasBlockScalar) {
     return downgradeForBlockScalar(verdict);
   }
@@ -281,24 +320,47 @@ function compareGooseKeyring(stored: string, live: string): CompareResult {
   return compareGooseYaml('goose-secrets.yaml', sOuter.value, lOuter.value);
 }
 
+/**
+ * KeychainStored.account 의 identity 검사 (H4 + iter 2 Codex-3 #3 정밀화).
+ *
+ * 존재 판정은 `typeof === 'string'` — 빈 문자열 `''` 도 유효 string. 이전
+ * truthiness 는 `''` 를 absent 로 잘못 분류해 XOR 우회 가능.
+ *
+ * 분기 (mutually exclusive):
+ *  - 양쪽 모두 string + 다름 → stale (high).
+ *  - 양쪽 모두 string + 동일 → null (inner value 비교 위임).
+ *  - 한쪽만 string (XOR) → stale (low). wrapper 손상.
+ *  - 양쪽 모두 비-string → stale (low). 정의된 wrapper 형식 (account 필드 string)
+ *    이 아닌 손상 — 양쪽 모두 wrapper damage 로 surface (이전엔 silent skip).
+ */
 function compareKeyringAccount(s: unknown, l: unknown): CompareResult | null {
-  const sStr = typeof s === 'string' ? s : null;
-  const lStr = typeof l === 'string' ? l : null;
-  if (sStr && lStr) {
-    if (sStr !== lStr) {
+  const sIsString = typeof s === 'string';
+  const lIsString = typeof l === 'string';
+  if (sIsString && lIsString) {
+    if (s !== l) {
       return {
         kind: 'stale',
         confidence: 'high',
-        detail: `Keychain account 변경: ${maskIdentifier(sStr)} → ${maskIdentifier(lStr)}`
+        detail: `Keychain account 변경: ${maskIdentifier(s as string)} → ${maskIdentifier(l as string)}`
       };
     }
     return null;
   }
-  if (sStr || lStr) {
+  if (sIsString !== lIsString) {
     return {
       kind: 'stale',
       confidence: 'low',
       detail: 'KeychainStored.account 비대칭 — keyring 손상 추정'
+    };
+  }
+  // 양쪽 모두 비-string — Goose keyring wrapper 가 account 를 항상 string 으로
+  // 가져야 한다는 contract 위반. iter 2 Codex-3 #3 fix: 이전엔 null 반환으로
+  // silent skip 됐으나 wrapper damage 로 surface.
+  if (s !== undefined || l !== undefined) {
+    return {
+      kind: 'stale',
+      confidence: 'low',
+      detail: 'KeychainStored.account 양쪽 모두 비-string — keyring 손상 추정'
     };
   }
   return null;

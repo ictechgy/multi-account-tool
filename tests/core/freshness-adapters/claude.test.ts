@@ -181,4 +181,26 @@ describe('claudeAdapter — quad-review iter 1 HIGH fix (H3/H4/H5)', () => {
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('value-only');
   });
+
+  it('iter 2 Codex-3 #3 fix: empty-string account `""` 도 유효 string — XOR truthiness 우회 차단', () => {
+    // 이전 truthiness 는 '' && ... 가 false 라 empty string account 를 absent 로
+    // 잘못 분류 → XOR 분기 우회 가능. typeof === 'string' 정밀화 후 동작 검증.
+    //
+    // 동일 inner credentials + 양쪽 모두 empty string account → 동일성 인정 (fresh).
+    const inner = makeCreds({ subscriptionType: 'pro', accessToken: 'a' });
+    const stored = makeWrapped(inner, '');
+    const live = makeWrapped(inner, '');
+    expect(claudeAdapter.compare(SAVE_AS, stored, live)).toEqual({ kind: 'fresh', confidence: 'high' });
+  });
+
+  it('iter 2 Codex-3 #3 fix: empty-string vs non-empty account → stale high (다름 검출)', () => {
+    // '' 와 'user' 가 다르다는 사실이 typeof 검사 후에 정확히 stale 분류.
+    const inner = makeCreds({ subscriptionType: 'pro', accessToken: 'a' });
+    const stored = makeWrapped(inner, '');
+    const live = makeWrapped(inner, 'user');
+    const r = claudeAdapter.compare(SAVE_AS, stored, live);
+    expect(r.kind).toBe('stale');
+    expect(r.confidence).toBe('high');
+    expect(r.detail).toMatch(/Keychain account 변경/);
+  });
 });

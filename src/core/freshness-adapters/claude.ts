@@ -108,14 +108,18 @@ function compareClaude(stored: string, live: string): CompareResult {
 }
 
 /**
- * KeychainStored.account 의 identity 검사 (H4 quad-review iter 1 Strong HIGH fix).
+ * KeychainStored.account 의 identity 검사 (H4 + iter 2 Codex-3 #3 정밀화).
  *
- * 분기:
- *  - 양쪽 모두 account 보유 + 다름 → stale (high). 다른 macOS keychain user 추정.
- *  - 한쪽만 account 보유 (XOR) → stale (low). credentials wrapper 손상 추정 —
- *    silent skip 시 identity 안전망 우회 (예: 공격자가 account 만 제거).
- *  - 양쪽 모두 account 부재 → null (다음 단계 위임). non-macOS file source 정상 경로.
- *  - wrapper 형태 자체가 비대칭 (한쪽만 wrapper) → stale (low). 같은 이유로 우회 차단.
+ * `account` 의 존재 판정은 `typeof === 'string'` — 빈 문자열 `''` 도 유효한 string
+ * 으로 취급. 이전 truthiness (`s.account && ...`) 는 빈 string 을 absent 로 잘못
+ * 분류해 XOR 분기 우회 가능 (iter 2 Codex-3 #3 fix).
+ *
+ * 분기 (mutually exclusive):
+ *  - wrapper 형태 자체가 비대칭 → stale (low). 같은 이유로 우회 차단.
+ *  - 양쪽 모두 string + 다름 → stale (high). 다른 macOS keychain user.
+ *  - 양쪽 모두 string + 동일 → null (다음 단계 위임).
+ *  - 한쪽만 string (XOR) → stale (low). wrapper 손상 추정.
+ *  - 양쪽 모두 string 아님 → null (다음 단계 위임). non-macOS file source 정상 경로.
  */
 function checkAccountIdentity(s: Unwrapped, l: Unwrapped): CompareResult | null {
   if (s.hasWrapper !== l.hasWrapper) {
@@ -125,17 +129,19 @@ function checkAccountIdentity(s: Unwrapped, l: Unwrapped): CompareResult | null 
       detail: 'KeychainStored wrapper 비대칭 — credentials 손상 추정'
     };
   }
-  if (s.account && l.account) {
+  const sIsString = typeof s.account === 'string';
+  const lIsString = typeof l.account === 'string';
+  if (sIsString && lIsString) {
     if (s.account !== l.account) {
       return {
         kind: 'stale',
         confidence: 'high',
-        detail: `Keychain account 변경: ${maskIdentifier(s.account)} → ${maskIdentifier(l.account)}`
+        detail: `Keychain account 변경: ${maskIdentifier(s.account!)} → ${maskIdentifier(l.account!)}`
       };
     }
     return null;
   }
-  if (s.account || l.account) {
+  if (sIsString !== lIsString) {
     return {
       kind: 'stale',
       confidence: 'low',

@@ -110,15 +110,26 @@ describe('gooseAdapter — config.yaml routing 매트릭스 (M1 fix)', () => {
     expect(r.subtype).toBe('value-only');
   });
 
-  it('GOOSE_PROVIDER__TYPE 변경 (anthropic → openai) → rotated value-only (provider 자체 swap)', () => {
-    // M1 fix 의 핵심 회귀 가드: routing 키 set 동일 + provider type 값 변경.
+  it('iter 2 Codex-3 #2 fix: GOOSE_PROVIDER__TYPE 변경 (anthropic → openai) → stale (다른 provider/계정 swap)', () => {
+    // iter 1 의 잘못된 expectation (value-only) 정정. CONFIG_STALE_ON_VALUE_CHANGE_RE
+    // 에 매칭되는 키 (GOOSE_PROVIDER__TYPE / GOOSE_PROVIDER) 의 값 변경은 단순
+    // rotation 이 아닌 identity 변경 (다른 provider 의 다른 계정 swap 의미).
     const stored = makeYaml({ GOOSE_PROVIDER__TYPE: 'anthropic', GOOSE_MODEL: 'm' });
     const live = makeYaml({ GOOSE_PROVIDER__TYPE: 'openai', GOOSE_MODEL: 'm' });
     const r = gooseAdapter.compare(YAML_CONFIG, stored, live);
-    expect(r.kind).toBe('rotated');
-    expect(r.subtype).toBe('value-only');
-    expect(r.detail).toMatch(/routing/);
+    expect(r.kind).toBe('stale');
+    expect(r.confidence).toBe('medium');
+    expect(r.detail).toMatch(/identity 키 'GOOSE_PROVIDER__TYPE' 값 변경/);
   });
+
+  it('iter 2 Codex-3 #2 fix: GOOSE_PROVIDER 도 stale-on-change 매트릭스', () => {
+    const stored = makeYaml({ GOOSE_PROVIDER: 'a', GOOSE_MODEL: 'm' });
+    const live = makeYaml({ GOOSE_PROVIDER: 'b', GOOSE_MODEL: 'm' });
+    const r = gooseAdapter.compare(YAML_CONFIG, stored, live);
+    expect(r.kind).toBe('stale');
+    expect(r.detail).toMatch(/identity 키 'GOOSE_PROVIDER' 값 변경/);
+  });
+
 
   it('config.yaml 의 non-routing 키만 변경 (CUSTOM_VAR) → meta-only', () => {
     // routing 매트릭스 미매칭 키 변경은 meta-only.
@@ -155,6 +166,30 @@ describe('gooseAdapter — H1 empty-matrix + H2 block scalar', () => {
   it('H2: block scalar `>` 도 동일 감지', () => {
     const stored = ['OPENAI_API_KEY: >', '  sk-O-OLD'].join('\n');
     const live = ['OPENAI_API_KEY: >', '  sk-O-NEW'].join('\n');
+    const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/block scalar/);
+  });
+
+  it('iter 2 Codex-3 #1 fix: block scalar 의 indentation indicator (`|2`, `|-2`, `>+2`) 도 감지', () => {
+    // BLOCK_SCALAR_VALUE_RE 확장 회귀 가드. YAML spec 의 valid block scalar header
+    // 전체 커버 — 이전 regex 는 bare `|`/`>` + chomping `|+`/`|-` 만 감지.
+    const cases = [
+      ['ANTHROPIC_API_KEY: |2', '  sk-A'],
+      ['ANTHROPIC_API_KEY: |-2', '  sk-A'],
+      ['ANTHROPIC_API_KEY: >+2', '  sk-A'],
+      ['ANTHROPIC_API_KEY: |2-', '  sk-A']
+    ];
+    for (const lines of cases) {
+      const r = gooseAdapter.compare(YAML_SECRETS, lines.join('\n'), 'ANTHROPIC_API_KEY: sk-DIFFERENT\n');
+      expect(r.confidence).toBe('low');
+      expect(r.detail).toMatch(/block scalar/);
+    }
+  });
+
+  it('iter 2 Codex-3 #1 fix: block scalar header + trailing comment (`| # comment`) 도 감지', () => {
+    const stored = ['ANTHROPIC_API_KEY: | # inline comment', '  sk-OLD'].join('\n');
+    const live = ['ANTHROPIC_API_KEY: |', '  sk-NEW'].join('\n');
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
     expect(r.confidence).toBe('low');
     expect(r.detail).toMatch(/block scalar/);
@@ -236,6 +271,38 @@ describe('gooseAdapter — keyring wrapper', () => {
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('low');
     expect(r.detail).toMatch(/account 비대칭/);
+  });
+
+  it('iter 2 Codex-3 #3 fix: empty-string account `""` 는 유효 string 으로 취급 (typeof 정밀화)', () => {
+    // 이전 truthiness ('' && ...) 는 empty string 을 absent 로 잘못 분류해 XOR 분기
+    // 우회 가능. typeof === 'string' 정밀화 후 양쪽 모두 empty string 동일 → null
+    // (다음 단계 위임) → inner YAML 동일 → fresh.
+    const yaml = makeYaml({ ANTHROPIC_API_KEY: 'sk-A' });
+    const stored = makeKeyring(yaml, '');
+    const live = makeKeyring(yaml, '');
+    expect(gooseAdapter.compare(KEYRING, stored, live)).toEqual({ kind: 'fresh', confidence: 'high' });
+  });
+
+  it('iter 2 Codex-3 #3 fix: empty-string vs missing account → XOR stale (truthiness 우회 차단)', () => {
+    // 한쪽 ''(string), 다른쪽 undefined — XOR stale 로 분류돼야.
+    const yaml = makeYaml({ ANTHROPIC_API_KEY: 'sk-A' });
+    const stored = makeKeyring(yaml, '');
+    const live = makeKeyring(yaml);  // account 키 자체 없음
+    const r = gooseAdapter.compare(KEYRING, stored, live);
+    expect(r.kind).toBe('stale');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/account 비대칭/);
+  });
+
+  it('iter 2 Codex-3 #3 fix: 양쪽 모두 비-string (number) → keyring 손상 surface', () => {
+    // 이전엔 silent skip (null 반환). fix 후 wrapper damage 명시.
+    const yaml = makeYaml({ ANTHROPIC_API_KEY: 'sk-A' });
+    const stored = JSON.stringify({ value: yaml, account: 42 });
+    const live = JSON.stringify({ value: yaml, account: true });
+    const r = gooseAdapter.compare(KEYRING, stored, live);
+    expect(r.kind).toBe('stale');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/양쪽 모두 비-string/);
   });
 
   it('keyring wrapper 동일 account + inner YAML rotation → rotated value-only', () => {
