@@ -125,3 +125,60 @@ describe('claudeAdapter — identity-aware 비교', () => {
     expect(r.confidence).toBe('medium');
   });
 });
+
+describe('claudeAdapter — quad-review iter 1 HIGH fix (H3/H4/H5)', () => {
+  it('H3: subscriptionType XOR (한쪽만 string) → stale (low) — identity 우회 차단', () => {
+    // 공격/손상 시나리오: stored 에서 subscriptionType 만 제거 → token 비교로 떨어져
+    // value-only rotated high 로 잘못 분류. fix 후: XOR → stale low.
+    const stored = makeCreds({ subscriptionType: 'pro', accessToken: 'a', refreshToken: 'r' });
+    const live = makeCreds({ accessToken: 'b', refreshToken: 's' });  // subscriptionType 누락
+    const r = claudeAdapter.compare(SAVE_AS, stored, live);
+    expect(r.kind).toBe('stale');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/subscriptionType 비대칭/);
+  });
+
+  it('H4: KeychainStored account XOR (한쪽만 account) → stale (low) — wrapper 손상 추정', () => {
+    // 한쪽 wrapper 에만 account 있는 경우 silent skip 하면 multi-account 보호 우회.
+    const inner = makeCreds({ subscriptionType: 'pro', accessToken: 'a' });
+    const stored = makeWrapped(inner, 'alice');  // account 있음
+    const live = makeWrapped(inner);              // account 없음 (wrapper 만)
+    const r = claudeAdapter.compare(SAVE_AS, stored, live);
+    expect(r.kind).toBe('stale');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/account 비대칭/);
+  });
+
+  it('H4: wrapper 형태 자체가 비대칭 (한쪽만 wrapper) → stale (low)', () => {
+    // stored 는 KeychainStored wrapper, live 는 raw credentials → 비대칭 분기.
+    const inner = makeCreds({ subscriptionType: 'pro', accessToken: 'a' });
+    const stored = makeWrapped(inner, 'user');
+    const live = inner;  // raw credentials (wrapper 없음)
+    const r = claudeAdapter.compare(SAVE_AS, stored, live);
+    expect(r.kind).toBe('stale');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/wrapper 비대칭/);
+  });
+
+  it('H5: OAuth token 양쪽 모두 부재 → rotated both (low) — 손상 추정', () => {
+    // claudeAiOauth 객체는 있지만 access/refresh 모두 없는 손상 케이스.
+    // expiresAt 만 비교하면 meta-only 로 잘못 분류 가능. fix 후 low-conf both.
+    const stored = JSON.stringify({ claudeAiOauth: { subscriptionType: 'pro', expiresAt: 100 } });
+    const live = JSON.stringify({ claudeAiOauth: { subscriptionType: 'pro', expiresAt: 200 } });
+    const r = claudeAdapter.compare(SAVE_AS, stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('both');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/OAuth token 양쪽 모두 부재/);
+  });
+
+  it('H5: stored 에 token 있음 + live 에 token 부재 → rotated value-only (high) — 정상 분류 유지', () => {
+    // 한쪽만 token 부재는 XOR 차이 → token 변경으로 value-only 분류 (정상).
+    // 양쪽 모두 부재 시만 low-conf 분기 활성화.
+    const stored = makeCreds({ subscriptionType: 'pro', accessToken: 'a', refreshToken: 'r' });
+    const live = JSON.stringify({ claudeAiOauth: { subscriptionType: 'pro' } });  // token 부재
+    const r = claudeAdapter.compare(SAVE_AS, stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('value-only');
+  });
+});

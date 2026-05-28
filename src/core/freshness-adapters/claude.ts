@@ -19,10 +19,12 @@
  *     }
  *   }
  *
- * identity 분류:
- *  - KeychainStored.account 가 다르면 → stale (다른 macOS keychain account — 안전망).
- *  - claudeAiOauth.subscriptionType 가 다르면 → stale, medium confidence (다른 plan/
- *    계정 추정). plan 만으로 100% 계정 동일성 단정 불가지만 fallback 보다 정확.
+ * identity 분류 (PR-H iter 1 quad-review 5건 HIGH 반영):
+ *  - KeychainStored.account 양쪽 모두 string 이고 다르면 → stale (high).
+ *  - account 가 한쪽만 string (XOR) → stale (low) — identity 안전망 우회 차단 (H4).
+ *  - claudeAiOauth.subscriptionType 양쪽 모두 string 이고 다르면 → stale (medium).
+ *  - subscriptionType 가 한쪽만 string (XOR) → stale (low) — identity downgrade 차단 (H3).
+ *  - 양쪽 모두 subscriptionType 부재 + token 양쪽 부재 → rotated both (low) — 손상 추정 (H5).
  *  - subscriptionType 동일 + accessToken/refreshToken 변경 → rotated value-only (high).
  *  - token 동일 + expiresAt 만 변경 → rotated meta-only (high).
  *  - 그 외 차이 (scopes 추가 등) → rotated both (medium).
@@ -36,6 +38,7 @@
 
 import { maskIdentifier } from '../errors.js';
 import type { CompareResult, SourceAdapter } from '../freshness.js';
+import { parseJsonObject } from './_shared.js';
 
 interface KeychainOuter {
   value?: unknown;
@@ -55,16 +58,8 @@ interface ClaudeCredentials {
 interface Unwrapped {
   credentials: ClaudeCredentials | null;
   account: string | null;
-}
-
-function parseJsonObject<T>(raw: string): T | null {
-  try {
-    const v: unknown = JSON.parse(raw);
-    if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
-    return v as T;
-  } catch {
-    return null;
-  }
+  /** wrapper 형태로 들어왔는지 (account 필드 자체 부재 여부). XOR 가드용. */
+  hasWrapper: boolean;
 }
 
 /**
@@ -73,16 +68,24 @@ function parseJsonObject<T>(raw: string): T | null {
  * wrapper 판정 휴리스틱: 최상위가 `value`(string) 키를 가지면 wrapper 로 간주.
  * `value` 가 string 이 아닌 경우 raw credentials 로 fallback (Claude credentials.json
  * 자체에도 `value` 필드가 등장하지 않으므로 충돌 위험 낮음).
+ *
+ * `hasWrapper` 는 outer wrapper 존재 여부 — wrapper 에서 account 부재(undefined)와
+ * raw credentials 의 account-없음(true negative)을 구분해 XOR 분기에 사용.
  */
 function unwrap(raw: string): Unwrapped {
   const outer = parseJsonObject<KeychainOuter>(raw);
   if (outer && typeof outer.value === 'string') {
     return {
       credentials: parseJsonObject<ClaudeCredentials>(outer.value),
-      account: typeof outer.account === 'string' ? outer.account : null
+      account: typeof outer.account === 'string' ? outer.account : null,
+      hasWrapper: true
     };
   }
-  return { credentials: parseJsonObject<ClaudeCredentials>(raw), account: null };
+  return {
+    credentials: parseJsonObject<ClaudeCredentials>(raw),
+    account: null,
+    hasWrapper: false
+  };
 }
 
 function compareClaude(stored: string, live: string): CompareResult {
@@ -99,14 +102,47 @@ function compareClaude(stored: string, live: string): CompareResult {
       detail: 'Claude credentials JSON parse 실패 — 손상 가능성'
     };
   }
-  if (s.account && l.account && s.account !== l.account) {
+  const accountVerdict = checkAccountIdentity(s, l);
+  if (accountVerdict) return accountVerdict;
+  return compareClaudeCredentials(s.credentials, l.credentials);
+}
+
+/**
+ * KeychainStored.account 의 identity 검사 (H4 quad-review iter 1 Strong HIGH fix).
+ *
+ * 분기:
+ *  - 양쪽 모두 account 보유 + 다름 → stale (high). 다른 macOS keychain user 추정.
+ *  - 한쪽만 account 보유 (XOR) → stale (low). credentials wrapper 손상 추정 —
+ *    silent skip 시 identity 안전망 우회 (예: 공격자가 account 만 제거).
+ *  - 양쪽 모두 account 부재 → null (다음 단계 위임). non-macOS file source 정상 경로.
+ *  - wrapper 형태 자체가 비대칭 (한쪽만 wrapper) → stale (low). 같은 이유로 우회 차단.
+ */
+function checkAccountIdentity(s: Unwrapped, l: Unwrapped): CompareResult | null {
+  if (s.hasWrapper !== l.hasWrapper) {
     return {
       kind: 'stale',
-      confidence: 'high',
-      detail: `Keychain account 변경: ${maskIdentifier(s.account)} → ${maskIdentifier(l.account)}`
+      confidence: 'low',
+      detail: 'KeychainStored wrapper 비대칭 — credentials 손상 추정'
     };
   }
-  return compareClaudeCredentials(s.credentials, l.credentials);
+  if (s.account && l.account) {
+    if (s.account !== l.account) {
+      return {
+        kind: 'stale',
+        confidence: 'high',
+        detail: `Keychain account 변경: ${maskIdentifier(s.account)} → ${maskIdentifier(l.account)}`
+      };
+    }
+    return null;
+  }
+  if (s.account || l.account) {
+    return {
+      kind: 'stale',
+      confidence: 'low',
+      detail: 'KeychainStored.account 비대칭 — credentials 손상 추정'
+    };
+  }
+  return null;
 }
 
 function compareClaudeCredentials(s: ClaudeCredentials, l: ClaudeCredentials): CompareResult {
@@ -120,16 +156,67 @@ function compareClaudeCredentials(s: ClaudeCredentials, l: ClaudeCredentials): C
       detail: 'claudeAiOauth 필드 부재 — API key 모드 또는 손상'
     };
   }
-  if (sOauth.subscriptionType && lOauth.subscriptionType && sOauth.subscriptionType !== lOauth.subscriptionType) {
+  const subscriptionVerdict = checkSubscriptionType(sOauth.subscriptionType, lOauth.subscriptionType);
+  if (subscriptionVerdict) return subscriptionVerdict;
+  return compareOauthTokens(sOauth, lOauth);
+}
+
+/**
+ * subscriptionType 비교 (H3 quad-review iter 1 Strong HIGH fix).
+ *
+ * 분기:
+ *  - 양쪽 동일 (둘 다 string 같은 값) → null (다음 단계 위임).
+ *  - 양쪽 모두 string + 다름 → stale (medium).
+ *  - 한쪽만 string (XOR) → stale (low) — Anthropic schema 변경 또는 손상.
+ *    silent skip 시 token 비교 분기로 떨어져 identity downgrade attack.
+ *  - 양쪽 모두 부재 → null (token 비교에 위임).
+ */
+function checkSubscriptionType(
+  sType: string | undefined,
+  lType: string | undefined
+): CompareResult | null {
+  if (sType === lType) return null;
+  if (sType && lType) {
     return {
       kind: 'stale',
       confidence: 'medium',
       detail: `subscriptionType 변경 — 다른 plan/계정 추정`
     };
   }
+  return {
+    kind: 'stale',
+    confidence: 'low',
+    detail: 'subscriptionType 비대칭 — identity 확정 불가'
+  };
+}
+
+/**
+ * OAuth token 비교 (H5 quad-review iter 1 Strong HIGH fix).
+ *
+ * 분기:
+ *  - 양쪽 모두 token 부재 + expiresAt 부재 → rotated both (low). 손상 추정.
+ *  - 양쪽 모두 token 부재 + expiresAt 만 변경 → rotated meta-only (medium).
+ *  - access/refresh 변경 → rotated value-only (high).
+ *  - token 동일 + expiresAt 변경 → rotated meta-only (high).
+ *  - 그 외 차이 → rotated both (medium).
+ */
+function compareOauthTokens(
+  s: NonNullable<ClaudeCredentials['claudeAiOauth']>,
+  l: NonNullable<ClaudeCredentials['claudeAiOauth']>
+): CompareResult {
+  const sHasTokens = !!(s.accessToken || s.refreshToken);
+  const lHasTokens = !!(l.accessToken || l.refreshToken);
+  if (!sHasTokens && !lHasTokens) {
+    return {
+      kind: 'rotated',
+      subtype: 'both',
+      confidence: 'low',
+      detail: 'OAuth token 양쪽 모두 부재 — credentials 손상 추정'
+    };
+  }
   const tokenChanged =
-    sOauth.accessToken !== lOauth.accessToken ||
-    sOauth.refreshToken !== lOauth.refreshToken;
+    s.accessToken !== l.accessToken ||
+    s.refreshToken !== l.refreshToken;
   if (tokenChanged) {
     return {
       kind: 'rotated',
@@ -138,7 +225,7 @@ function compareClaudeCredentials(s: ClaudeCredentials, l: ClaudeCredentials): C
       detail: 'subscriptionType 동일, OAuth token rotation'
     };
   }
-  if (sOauth.expiresAt !== lOauth.expiresAt) {
+  if (s.expiresAt !== l.expiresAt) {
     return {
       kind: 'rotated',
       subtype: 'meta-only',
