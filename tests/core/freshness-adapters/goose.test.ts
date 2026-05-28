@@ -271,6 +271,39 @@ describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', ()
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('meta-only');
   });
+
+  it('PR-M Codex iter 2 LOW fix: matrix-key boolean value (true ↔ false) — coerce 후 매트릭스 진입', () => {
+    // 옛 string-only filter 라면 boolean value 인 ANTHROPIC_API_KEY (악성 / 오타) 는
+    // silent skip 되어 매트릭스 비대칭 → false-positive stale 위험.
+    // coerceToIdentityString 으로 boolean 도 String() coerce → 매트릭스 진입 →
+    // 동일 키 + 값 변경 → value-only.
+    const stored = 'ANTHROPIC_API_KEY: true\n';
+    const live = 'ANTHROPIC_API_KEY: false\n';
+    const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.subtype).toBe('value-only');
+  });
+
+  it('PR-M Codex iter 2 LOW fix: matrix-key null literal — skip 후 사용자 알림', () => {
+    // ANTHROPIC_API_KEY: null (yaml lib → JS null) → coerceToIdentityString skip.
+    // 양쪽 모두 null → 양쪽 매트릭스 0건 → empty matrix verdict (low-conf rotated both).
+    const stored = 'ANTHROPIC_API_KEY: null\n';
+    const live = 'ANTHROPIC_API_KEY: ~\n'; // YAML 1.2 의 null 별명
+    const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
+    expect(r.kind).toBe('rotated');
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/provider 키 미감지/);
+  });
+
+  it('PR-M Codex iter 2 LOW fix: multi-document YAML (---) → throw → parse 실패 hint', () => {
+    // yaml.parse 는 multi-doc 입력에 throw. 본 코드는 hasParseError 로 surface.
+    // Goose 의 secrets.yaml/config.yaml 은 단일 문서 가정이므로 multi-doc 은 손상 추정.
+    const stored = 'ANTHROPIC_API_KEY: sk-A\n---\nOPENAI_API_KEY: sk-B\n';
+    const live = 'ANTHROPIC_API_KEY: sk-A\n';
+    const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
+    expect(r.confidence).toBe('low');
+    expect(r.detail).toMatch(/YAML parse 실패/);
+  });
 });
 
 describe('gooseAdapter — M2 _TOKEN$ regex 제거 (non-provider 흡수 차단)', () => {
