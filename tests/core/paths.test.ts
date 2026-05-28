@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  appLogPath,
   cliLockPath,
   cliProfilesDir,
   configPath,
@@ -46,6 +47,12 @@ describe('paths', () => {
 
     it('locksDir 는 dataDir/locks 이다', () => {
       expect(locksDir()).toBe(join(tmp.home, '.multi-account-tool', 'locks'));
+    });
+
+    it('PR-R: appLogPath 는 dataDir/app.log 이다 (TUI best-effort 로그 — Ink 충돌 회피)', () => {
+      // 옛 코드: persist 실패 시 process.stderr.write → Ink alternate-buffer 충돌 가능.
+      // 새 코드: dataDir/app.log 에 append. 본 path 헬퍼가 일관된 위치 제공.
+      expect(appLogPath()).toBe(join(tmp.home, '.multi-account-tool', 'app.log'));
     });
   });
 

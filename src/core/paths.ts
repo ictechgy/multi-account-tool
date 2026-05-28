@@ -74,6 +74,17 @@ export function locksDir(): string {
   return join(dataDir(), 'locks');
 }
 
+/**
+ * TUI 의 best-effort 경고 / 로그 한 줄을 쌓는 파일.
+ *
+ * 도입 (PR-R): Ink alternate-buffer 모드에서 `process.stderr.write` 가 화면 렌더와
+ * 충돌 가능 (PR-G Claude-1 LOW finding). best-effort 정보 (예: persist 실패) 는
+ * stderr 대신 본 파일에 append → 사용자 경험 무영향 + 디버그 audit trail 보존.
+ */
+export function appLogPath(): string {
+  return join(dataDir(), 'app.log');
+}
+
 /** 특정 CLI 의 lock 디렉토리 경로 (mkdir-lock 패턴). cliId 자체 검증. */
 export function cliLockPath(cliId: string): string {
   const safeCli = validateCliId(cliId);
