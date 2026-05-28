@@ -329,7 +329,45 @@ export async function inspectLiveFreshness(
     const live = await readSource(src);
     sources.push({ saveAs: src.saveAs, result: compareOne(adapter, src.saveAs, stored, live) });
   }
-  return { cliId, profileName, sources };
+  return { cliId, profileName, sources: aggregateInflight(sources) };
+}
+
+/**
+ * multi-source CLI 의 cross-source 부분 갱신 race 를 `inflight` 로 reclassify (PR-S).
+ *
+ * 모순 시나리오:
+ *  - 한 source 는 `rotated` (token 변경, identity 동일) 인데
+ *  - 다른 source 는 `stale` (identity 변경 — 다른 계정 추정)
+ *
+ * 같은 swap 시점에 한 CLI 의 source 가 동시에 "같은 계정" + "다른 계정" 으로 보일
+ * 수는 없다 — CLI 가 자체적으로 두 source 를 갱신하는 중간 race 상태 추정. 사용자
+ * 가 swap 진행 시 어느 source 의 결과를 신뢰할지 모호 → `inflight` 로 reclassify
+ * 해 TUI dialog 가 "재시도 권장" 안내. exit code 1 (unsafe) 도 자동 트리거.
+ *
+ * 적용 대상: `rotated` 또는 `stale` 로 분류된 source 만. `fresh` source 는 race
+ * 와 무관하므로 그대로 보존. single-source CLI 는 no-op (length < 2).
+ *
+ * `inflight` confidence: medium — 일시적 race 일 가능성이 가장 높지만 (retry 로
+ * 해결 가능) 실제 multi-account 운영 중 swap race 가능성도 배제 못 함.
+ */
+function aggregateInflight(sources: SourceFreshness[]): SourceFreshness[] {
+  if (sources.length < 2) return sources;
+  const hasRotated = sources.some((s) => s.result.kind === 'rotated');
+  const hasStale = sources.some((s) => s.result.kind === 'stale');
+  if (!hasRotated || !hasStale) return sources;
+  return sources.map((s) => {
+    if (s.result.kind === 'rotated' || s.result.kind === 'stale') {
+      return {
+        saveAs: s.saveAs,
+        result: {
+          kind: 'inflight' as const,
+          confidence: 'medium' as const,
+          detail: `cross-source race (옛 분류: ${s.result.kind}) — 재시도 권장`
+        }
+      };
+    }
+    return s;
+  });
 }
 
 /**
