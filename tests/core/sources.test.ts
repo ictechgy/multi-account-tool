@@ -23,7 +23,7 @@ vi.mock('node:child_process', () => ({
 
 import { spawn } from 'node:child_process';
 
-import { readSource, sourceExists, writeSource } from '../../src/core/sources.js';
+import { readSource, runCommand, sourceExists, writeSource } from '../../src/core/sources.js';
 import { KeychainAccountMissingError } from '../../src/core/errors.js';
 import type { FileSource, KeychainSource, KeychainStored, OsKeyringSource } from '../../src/core/types.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
@@ -40,6 +40,41 @@ const mockSpawn = vi.mocked(spawn);
  * 반환 타입은 `ChildProcessWithoutNullStreams` 로 cast (spawn 호환) — `as never`
  * 캐스트를 callsite 마다 반복하지 않고 한 곳에 격리.
  */
+/**
+ * fakeProc 의 writable stdin sink.
+ * runCommand 의 stdin 주입 경로 (proc.stdin.write/end) 를 검증할 수 있도록 write 호출을
+ * 기록한다. `stdinError` 가 주어지면 write 시 'error' 이벤트를 emit 해 EPIPE 류를 시뮬레이션.
+ * `throwOnWrite` 가 주어지면 write 호출 시 동기 throw — Node 의 write-after-end /
+ * destroyed stdin (ERR_STREAM_*) 동기 throw 를 재현해 runCommand 의 try/catch 흡수를 검증한다.
+ */
+class FakeStdin extends EventEmitter {
+  /** write 로 전달된 chunk 누적 — secret 이 stdin 으로 전달됐는지 검증용. */
+  public readonly writes: string[] = [];
+  /** end() 가 호출됐는지 기록 — stdin EOF 전달 검증용. */
+  public ended = false;
+
+  constructor(
+    private readonly stdinError?: Error,
+    /** write 시 동기 throw 할 에러 (write-after-end / destroyed 재현용) */
+    private readonly throwOnWrite?: Error,
+  ) {
+    super();
+  }
+
+  write(chunk: string): boolean {
+    // 동기 throw 재현: settled-guard 우회 (Promise reject) 가 일어나면 안 됨을 검증하기 위한 결함 주입.
+    if (this.throwOnWrite) throw this.throwOnWrite;
+    this.writes.push(chunk);
+    // EPIPE 시뮬레이션: 자식이 stdin 을 먼저 닫은 경우 write 가 error 이벤트를 낸다.
+    if (this.stdinError) setImmediate(() => this.emit('error', this.stdinError));
+    return true;
+  }
+
+  end(): void {
+    this.ended = true;
+  }
+}
+
 function fakeProc(opts: {
   code?: number;
   stdout?: string;
@@ -47,10 +82,19 @@ function fakeProc(opts: {
   error?: Error;
   /** error 후 close 도 emit (production 의 ENOENT 시 실제 동작 — settled-guard 검증용) */
   emitCloseAfterError?: boolean;
+  /** stdin.write 시 emit 할 에러 (EPIPE 류 — settled-guard 검증용) */
+  stdinError?: Error;
+  /** stdin.write 시 동기 throw 할 에러 (write-after-end / destroyed 재현 — HIGH 결함 가드) */
+  stdinThrowOnWrite?: Error;
 }): ChildProcessWithoutNullStreams {
-  const proc = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    stdin: FakeStdin;
+  };
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
+  proc.stdin = new FakeStdin(opts.stdinError, opts.stdinThrowOnWrite);
 
   setImmediate(() => {
     if (opts.error) {
@@ -672,6 +716,80 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       // throw 1회만 발생 — race 로 두 번 throw 되거나 unhandled rejection 발생하면 안 됨.
       await expect(readSource(KEYCHAIN_SRC)).rejects.toThrow(/keychain 읽기 실패/);
     });
+  });
+});
+
+describe('runCommand — stdin 주입 (PR-3a infra, secret-tool store 전제)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('(a) stdinData 주어지면 그 값이 proc.stdin.write 에 전달되고 end() 호출됨', async () => {
+    // FakeStdin 의 writes/ended 를 검증하기 위해 fakeProc 를 직접 참조한다.
+    const proc = fakeProc({ code: 0, stdout: 'ok' });
+    mockSpawn.mockReturnValueOnce(proc);
+
+    await runCommand('/usr/bin/secret-tool', ['store'], 'my-secret-value');
+
+    const stdin = (proc as unknown as { stdin: { writes: string[]; ended: boolean } }).stdin;
+    expect(stdin.writes).toEqual(['my-secret-value']);
+    expect(stdin.ended).toBe(true);
+  });
+
+  it('(b) stdinData 로 준 secret 은 argv (spawn args) 에 절대 나타나지 않음 — 미노출 회귀 가드', async () => {
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0 }));
+
+    const secret = 'super-secret-token-xyz';
+    await runCommand('/usr/bin/secret-tool', ['store', '--label=Test'], secret);
+
+    // spawn 의 모든 호출의 argv (call[1]) 어디에도 secret 이 없어야 한다.
+    for (const call of mockSpawn.mock.calls) {
+      const argv = call[1] as string[];
+      expect(argv).not.toContain(secret);
+      expect(argv.some(a => a.includes(secret))).toBe(false);
+    }
+  });
+
+  it('(c) stdin write 에러(EPIPE) 는 흡수되고 settle 은 close 의 exit code 로 수행 — error 가 settle 을 가로채지 않음', async () => {
+    // stdin.write 시 error 를 emit 하는 fakeProc (stdin error 가 close 보다 먼저 큐잉됨 — 결정론적).
+    // 채택 설계(흡수+close): stdin error 는 흡수만 하고 settle 은 close 가 실제 exit code(0)로 수행해야 한다.
+    mockSpawn.mockReturnValueOnce(
+      fakeProc({ code: 0, stdout: 'done', stdinError: new Error('EPIPE') })
+    );
+
+    const result = await runCommand('/usr/bin/secret-tool', ['store'], 'val');
+    // stdin EPIPE 후에도 close 의 code(0)로 settle — stdin error 가 settle(-1) 로 가로채면 실패.
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('done');
+  });
+
+  it('(c-2) stdin write 가 동기 throw 해도 Promise reject 없이 close 의 exit code 로 settle — HIGH 결함 회귀 가드', async () => {
+    // write-after-end / destroyed stdin 의 동기 throw 재현. fix 전이면 throw 가 Promise executor 를
+    // 빠져나가 settled-guard 를 우회 → Promise reject. fix 후엔 try/catch 흡수 → close 가 정상 settle.
+    mockSpawn.mockReturnValueOnce(
+      fakeProc({ code: 0, stdout: 'done', stdinThrowOnWrite: new Error('ERR_STREAM_WRITE_AFTER_END') })
+    );
+
+    // reject 없이 단일 값으로 완료해야 하며, code 는 close 의 값(0)이어야 한다.
+    const result = await runCommand('/usr/bin/secret-tool', ['store'], 'val');
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('done');
+  });
+
+  it('(d) stdinData 미주어지면 stdin 미접촉 — 기존 동작 byte-동등 (write/end 미호출)', async () => {
+    const proc = fakeProc({ code: 0, stdout: 'plain' });
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const result = await runCommand('/usr/bin/security', ['find-generic-password']);
+
+    const stdin = (proc as unknown as { stdin: { writes: string[]; ended: boolean } }).stdin;
+    expect(stdin.writes).toEqual([]);
+    expect(stdin.ended).toBe(false);
+    expect(result.stdout).toBe('plain');
+    expect(result.code).toBe(0);
   });
 });
 
