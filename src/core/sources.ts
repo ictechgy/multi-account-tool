@@ -17,6 +17,7 @@ import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
 import { KeychainAccountMissingError, redactMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
+import { readOsKeyringSerialized, writeOsKeyringSerialized, osKeyringExists } from './os-keyring.js';
 import type { KeychainSource, KeychainStored, Source } from './types.js';
 
 /** macOS 의 `security` CLI 절대경로. PATH shim 공격을 방지. */
@@ -338,8 +339,7 @@ export async function readSource(src: Source): Promise<string | null> {
     case 'keychain':
       return readKeychainSerialized(src);
     case 'os-keyring':
-      // PR-3 에서 secret-tool 구현 예정.
-      throw new Error('os-keyring source 는 아직 구현되지 않았습니다 (PR-3 예정).');
+      return readOsKeyringSerialized(src);
     default:
       return assertNever(src);
   }
@@ -353,8 +353,7 @@ export async function writeSource(src: Source, value: string): Promise<void> {
     case 'keychain':
       return writeKeychainSerialized(src, value);
     case 'os-keyring':
-      // PR-3 에서 secret-tool 구현 예정.
-      throw new Error('os-keyring source 는 아직 구현되지 않았습니다 (PR-3 예정).');
+      return writeOsKeyringSerialized(src, value);
     default:
       return assertNever(src);
   }
@@ -369,8 +368,7 @@ export async function sourceExists(src: Source): Promise<boolean> {
       assertValidKeychainSource(src);
       return keychainExists(src.service, src.account);
     case 'os-keyring':
-      // PR-3 에서 secret-tool 구현 예정.
-      throw new Error('os-keyring source 는 아직 구현되지 않았습니다 (PR-3 예정).');
+      return osKeyringExists(src);
     default:
       return assertNever(src);
   }

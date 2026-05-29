@@ -62,3 +62,6 @@ coverage/
 
 # 개인 작업 메모 (핸드오프용, 로컬 전용 — 다음 세션이 fresh context 로 이어받기 위함)
 /HANDOFF.md
+
+# os-keyring 실측 캡처(가변: timestamp/service) — scripts/secret-tool-e2e.sh --capture 로 재생성, 단위테스트는 inline mock 사용
+tests/fixtures/os-keyring/
