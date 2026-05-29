@@ -18,7 +18,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
-import type { CliDef, FileSource, KeychainSource, Source } from './types.js';
+import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from './types.js';
 
 /** plugin 파일이 모이는 디렉토리: `~/.multi-account-tool/cli-defs/`. */
 const CLI_DEFS_DIR_NAME = 'cli-defs';
@@ -47,8 +47,8 @@ interface SourceParseResult {
 /** 단일 source 객체 검증 + 정규화. 실패 시 error 메시지 반환. */
 function parseSource(raw: unknown, idx: number): SourceParseResult {
   if (!isPlainObject(raw)) return { error: `sources[${idx}] 는 객체여야 합니다.` };
-  if (raw.type !== 'file' && raw.type !== 'keychain') {
-    return { error: `sources[${idx}].type 는 'file' 또는 'keychain' 이어야 합니다.` };
+  if (raw.type !== 'file' && raw.type !== 'keychain' && raw.type !== 'os-keyring') {
+    return { error: `sources[${idx}].type 는 'file', 'keychain' 또는 'os-keyring' 이어야 합니다.` };
   }
   if (typeof raw.saveAs !== 'string') return { error: `sources[${idx}].saveAs 는 문자열이어야 합니다.` };
   let safeSaveAs: string;
@@ -79,9 +79,26 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     }
     account = raw.account;
   }
-  const src: KeychainSource = account !== undefined
-    ? { type: 'keychain', service: raw.service, account, saveAs: safeSaveAs }
-    : { type: 'keychain', service: raw.service, saveAs: safeSaveAs };
+  if (raw.type === 'keychain') {
+    const src: KeychainSource = account !== undefined
+      ? { type: 'keychain', service: raw.service, account, saveAs: safeSaveAs }
+      : { type: 'keychain', service: raw.service, saveAs: safeSaveAs };
+    return { source: src };
+  }
+  // os-keyring 분기: keychain 과 동형이나 backend 필드 추가.
+  // backend 가 명시된 경우 'auto'/'secret-service' 만 허용 — 아직 미지원인 백엔드
+  // 식별자 (예: 'kwallet') 가 silent 통과하지 않도록 명시적 거부.
+  let backend: 'auto' | 'secret-service' | undefined;
+  if (raw.backend !== undefined) {
+    if (raw.backend !== 'auto' && raw.backend !== 'secret-service') {
+      return { error: `sources[${idx}].backend 는 'auto' 또는 'secret-service' 여야 합니다.` };
+    }
+    backend = raw.backend;
+  }
+  // 선택 필드는 명시됐을 때만 부여 — undefined 키를 객체에 넣지 않는다.
+  const src: OsKeyringSource = { type: 'os-keyring', service: raw.service, saveAs: safeSaveAs };
+  if (account !== undefined) src.account = account;
+  if (backend !== undefined) src.backend = backend;
   return { source: src };
 }
 
