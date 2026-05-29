@@ -99,6 +99,69 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.def?.sources[1].type).toBe('keychain');
   });
 
+  describe('os-keyring source 파싱', () => {
+    it('service+saveAs 만 → OsKeyringSource (account/backend 없음)', () => {
+      const r = validateCliDefRaw({
+        id: 'ok', name: 'OK',
+        sources: [{ type: 'os-keyring', service: 'mat-creds', saveAs: 'creds.json' }]
+      });
+      expect(r.error).toBeUndefined();
+      const src = r.def!.sources[0] as { type: string; service: string; account?: string; backend?: string; saveAs: string };
+      expect(src.type).toBe('os-keyring');
+      expect(src.service).toBe('mat-creds');
+      expect(src.account).toBeUndefined();
+      expect(src.backend).toBeUndefined();
+      expect(src.saveAs).toBe('creds.json');
+    });
+
+    it('service+account+saveAs → account 반영', () => {
+      const r = validateCliDefRaw({
+        id: 'ok', name: 'OK',
+        sources: [{ type: 'os-keyring', service: 'mat-creds', account: 'user@example.com', saveAs: 'creds.json' }]
+      });
+      expect(r.error).toBeUndefined();
+      const src = r.def!.sources[0] as { account?: string };
+      expect(src.account).toBe('user@example.com');
+    });
+
+    it("service+backend('auto')+saveAs → backend 반영", () => {
+      const r = validateCliDefRaw({
+        id: 'ok', name: 'OK',
+        sources: [{ type: 'os-keyring', service: 'mat-creds', backend: 'auto', saveAs: 'creds.json' }]
+      });
+      expect(r.error).toBeUndefined();
+      const src = r.def!.sources[0] as { backend?: string };
+      expect(src.backend).toBe('auto');
+    });
+
+    it("service+backend('secret-service')+account+saveAs → 모든 필드 반영", () => {
+      const r = validateCliDefRaw({
+        id: 'ok', name: 'OK',
+        sources: [{ type: 'os-keyring', service: 'mat-creds', backend: 'secret-service', account: 'alice', saveAs: 'creds.json' }]
+      });
+      expect(r.error).toBeUndefined();
+      const src = r.def!.sources[0] as { type: string; service: string; account?: string; backend?: string; saveAs: string };
+      expect(src.type).toBe('os-keyring');
+      expect(src.service).toBe('mat-creds');
+      expect(src.account).toBe('alice');
+      expect(src.backend).toBe('secret-service');
+      expect(src.saveAs).toBe('creds.json');
+    });
+
+    it.each([
+      [{ type: 'os-keyring', saveAs: 'a.json' }, 'service'],
+      [{ type: 'os-keyring', service: '', saveAs: 'a.json' }, 'service'],
+      [{ type: 'os-keyring', service: 'svc', account: '', saveAs: 'a.json' }, 'account'],
+      [{ type: 'os-keyring', service: 'svc', account: 'has\x00nul', saveAs: 'a.json' }, 'NUL'],
+      [{ type: 'os-keyring', service: 'svc', backend: 'kwallet', saveAs: 'a.json' }, 'backend'],
+      [{ type: 'os-keyring', service: 'svc', backend: '', saveAs: 'a.json' }, 'backend']
+    ])('os-keyring 거부 케이스 → error 에 "%s" 포함', (source, expectedKeyword) => {
+      const r = validateCliDefRaw({ id: 'bad', name: 'Bad', sources: [source] });
+      expect(r.def).toBeUndefined();
+      expect(r.error).toContain(expectedKeyword as string);
+    });
+  });
+
   describe('keychain source 의 account optional 필드', () => {
     it('account 미지정 → keychain source 에 account 필드 없음 (기존 동작 유지)', () => {
       const r = validateCliDefRaw({
