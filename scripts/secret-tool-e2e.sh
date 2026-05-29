@@ -32,6 +32,19 @@ FAIL=0
 ok()   { echo "  ✅ PASS: $1"; PASS=$((PASS + 1)); }
 bad()  { echo "  ❌ FAIL: $1"; FAIL=$((FAIL + 1)); }
 
+# 중단(Ctrl-C)/예외 종료에도 테스트 항목이 keyring 에 잔류하지 않도록 trap 으로
+# 정리를 보장한다. SVC 초기화 직후 등록 — 정상 경로 말미 정리만으로는
+# 호스트 keyring 공유 시 누수가 생긴다. cleanup 은 멱등하다.
+cleanup() {
+  secret-tool clear service "$SVC" >/dev/null 2>&1 || true
+  local acct
+  for acct in alice bob carol weird; do
+    secret-tool clear service "$SVC" account "$acct" >/dev/null 2>&1 || true
+  done
+  secret-tool clear "_mat_e2e_probe_$$" ready >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
 # secret-tool 가용성 사전 점검.
 if ! command -v secret-tool >/dev/null 2>&1; then
   echo "secret-tool 미설치 — 이 스크립트는 docker/run.sh 안에서 실행하세요." >&2
@@ -44,7 +57,15 @@ fi
 secret-tool clear "_mat_e2e_probe_$$" ready >/dev/null 2>&1 || true
 
 # 매칭된 search 블록(stdout 의 '[/N]' 헤더) 개수를 센다 = 실제 N 카운트.
-count_blocks() { secret-tool search --all "$@" 2>/dev/null | grep -c '^\[/' || true; }
+# secret-tool search 자체가 실패(daemon/D-Bus 오류 등)하면 "ERR" 를 반환해
+# 정상 부재(exit 0 + 빈 출력 → 0)와 구별한다. `2>/dev/null | grep -c ... || true`
+# 로 묶으면 search 실패를 "0 매칭" 으로 흡수해 거짓 PASS 가 날 수 있어 분리한다.
+count_blocks() {
+  local out rc
+  out="$(secret-tool search --all "$@" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { echo "ERR"; return 1; }
+  printf '%s' "$out" | grep -c '^\[/'
+}
 
 echo "================================================================"
 echo " secret-tool 실측 round-trip e2e  (service=$SVC)"
@@ -138,12 +159,9 @@ if [ -n "$CAPTURE_DIR" ]; then
   # 별도 처리(이 파일들은 '실측 grounding 원본'으로만 사용).
 fi
 
-# ── 정리 ────────────────────────────────────────────────────────
-secret-tool clear service "$SVC" 2>/dev/null || true
-for acct in alice bob carol weird; do
-  secret-tool clear service "$SVC" account "$acct" 2>/dev/null || true
-done
-
+# ── 결과 ────────────────────────────────────────────────────────
+# 정리는 trap cleanup(EXIT) 이 담당한다. 아래 종료 코드가 trap 트리거 시점의
+# exit status 로 보존된다(cleanup 핸들러는 exit 를 호출하지 않으므로).
 echo "================================================================"
 echo " 결과: PASS=$PASS  FAIL=$FAIL"
 echo "================================================================"

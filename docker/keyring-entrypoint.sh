@@ -25,12 +25,25 @@ if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
 fi
 
 # 2) login keyring 을 빈 password 로 생성 + unlock + daemon 시작.
-#    gnome-keyring-daemon 의 출력(GNOME_KEYRING_CONTROL/SSH_AUTH_SOCK)을
-#    eval 해야 secret-tool 이 같은 daemon 에 연결된다.
+#    gnome-keyring-daemon 은 GNOME_KEYRING_CONTROL/SSH_AUTH_SOCK 등 KEY=VALUE
+#    줄을 stdout 으로 내보내며, secret-tool 이 같은 daemon 에 연결되려면 이 값을
+#    환경에 반영해야 한다. 단 daemon stdout 을 `eval` 로 직접 실행하면 예상 밖
+#    출력이 셸 코드로 실행될 수 있으므로(command injection 면), 화이트리스트한
+#    KEY=VALUE 줄만 파싱해 export 한다.
+apply_keyring_env() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      GNOME_KEYRING_CONTROL=*|SSH_AUTH_SOCK=*|GNOME_KEYRING_PID=*)
+        # export "K=V" 는 값을 코드로 해석하지 않는다(eval 과 달리 안전).
+        export "${line%%=*}=${line#*=}"
+        ;;
+    esac
+  done
+}
 mkdir -p "$HOME/.local/share/keyrings"
-eval "$(printf '\n' | gnome-keyring-daemon --unlock 2>/dev/null)" || true
-eval "$(printf '\n' | gnome-keyring-daemon --start  2>/dev/null)" || true
-export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+printf '\n' | gnome-keyring-daemon --unlock 2>/dev/null | apply_keyring_env || true
+printf '\n' | gnome-keyring-daemon --start  2>/dev/null | apply_keyring_env || true
 
 # 3) daemon ready polling — store probe 가 성공할 때까지 최대 ~6초 대기.
 keyring_ready=0
