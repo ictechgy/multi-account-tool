@@ -25,7 +25,7 @@ import { spawn } from 'node:child_process';
 
 import { readSource, sourceExists, writeSource } from '../../src/core/sources.js';
 import { KeychainAccountMissingError } from '../../src/core/errors.js';
-import type { FileSource, KeychainSource, KeychainStored } from '../../src/core/types.js';
+import type { FileSource, KeychainSource, KeychainStored, OsKeyringSource } from '../../src/core/types.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
@@ -672,5 +672,28 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       // throw 1회만 발생 — race 로 두 번 throw 되거나 unhandled rejection 발생하면 안 됨.
       await expect(readSource(KEYCHAIN_SRC)).rejects.toThrow(/keychain 읽기 실패/);
     });
+  });
+});
+
+describe('sources — os-keyring branch (PR-1: 타입만, 미구현)', () => {
+  // PR-1 은 OsKeyringSource 타입 + switch/assertNever exhaustiveness 가드만 도입한다.
+  // 실제 secret-tool 구현은 PR-3 예정이므로, 세 소비자 모두 명시적 throw 로 미구현을 알린다.
+  // assertNever 가 컴파일 타임에 case 누락을 막으므로, 이 런타임 가드는 "아직 미구현" 계약을 고정한다.
+  const OS_KEYRING_SRC: OsKeyringSource = {
+    type: 'os-keyring',
+    service: 'goose',
+    saveAs: 'goose-os-keyring.json',
+  };
+
+  it('readSource(os-keyring): 미구현 throw (PR-3 예정)', async () => {
+    await expect(readSource(OS_KEYRING_SRC)).rejects.toThrow(/아직 구현되지 않았습니다/);
+  });
+
+  it('writeSource(os-keyring): 미구현 throw (PR-3 예정)', async () => {
+    await expect(writeSource(OS_KEYRING_SRC, '{"v":1}')).rejects.toThrow(/아직 구현되지 않았습니다/);
+  });
+
+  it('sourceExists(os-keyring): 미구현 throw (PR-3 예정)', async () => {
+    await expect(sourceExists(OS_KEYRING_SRC)).rejects.toThrow(/아직 구현되지 않았습니다/);
   });
 });

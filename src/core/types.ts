@@ -2,8 +2,9 @@
  * 자격증명 source 의 종류.
  * - file: 파일시스템 경로
  * - keychain: macOS Keychain의 generic password 항목
+ * - os-keyring: Linux Secret Service (secret-tool) 기반 자격증명 항목
  */
-export type SourceType = 'file' | 'keychain';
+export type SourceType = 'file' | 'keychain' | 'os-keyring';
 
 /**
  * 파일 기반 자격증명 source.
@@ -49,7 +50,43 @@ export interface KeychainSource {
   saveAs: string;
 }
 
-export type Source = FileSource | KeychainSource;
+/**
+ * Linux Secret Service (secret-tool) 기반 자격증명 source.
+ *
+ * `secret-tool lookup <attribute> <value>` 를 사용해 자격증명을 조회·저장한다.
+ * PR-1 시점에는 타입 정의만 존재하며 실제 backend 구현은 PR-3 에서 추가될 예정이다.
+ *
+ * `account` 가 정의되면 KeychainSource 와 동일한 multi-account scope 시맨틱을
+ * 적용한다 — 동일 service 의 타 account 항목에 영향을 주지 않는다.
+ * `account` 가 없으면 service 만으로 조회하는 단일-account 동작.
+ *
+ * `backend` 는 Linux 에서 사용할 keyring 구현을 선택한다.
+ * - `'auto'` (기본): 시스템 기본 구현 (GNOME Keyring 등) 사용.
+ * - `'secret-service'`: D-Bus Secret Service API 를 명시적으로 사용.
+ * kwallet 등 추가 backend 는 향후 지원 예정.
+ */
+export interface OsKeyringSource {
+  type: 'os-keyring';
+  /** Secret Service 의 service 속성 값 (예: "mat-credentials"). */
+  service: string;
+  /**
+   * 선택. Secret Service 항목의 account 속성 값. 지정하면 mat 가 정확히 이
+   * account 의 항목만 읽고 쓴다. 미지정 시 단일 account 사용자 전제.
+   *
+   * KeychainSource.account 와 동일한 multi-account scope 시맨틱을 따른다.
+   */
+  account?: string;
+  /**
+   * 선택. Linux keyring backend 선택.
+   * - `'auto'`: 시스템 기본 구현 사용 (기본값).
+   * - `'secret-service'`: D-Bus Secret Service API 명시적 사용.
+   */
+  backend?: 'auto' | 'secret-service';
+  /** 프로필 디렉토리 내 저장될 파일명. */
+  saveAs: string;
+}
+
+export type Source = FileSource | KeychainSource | OsKeyringSource;
 
 /**
  * 하나의 AI CLI 정의.
