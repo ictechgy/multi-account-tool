@@ -17,7 +17,7 @@ import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
 import { KeychainAccountMissingError, redactMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
-import type { KeychainSource, KeychainStored, Source } from './types.js';
+import type { KeychainSource, KeychainStored, OsKeyringSource, Source } from './types.js';
 
 /** macOS 의 `security` CLI 절대경로. PATH shim 공격을 방지. */
 const SECURITY_BIN = '/usr/bin/security';
@@ -27,6 +27,15 @@ const KEYCHAIN_NOT_FOUND_CODE = 44;
 
 /** "could not be found" stderr 패턴 (코드 변동에 대비한 보조 매칭). */
 const KEYCHAIN_NOT_FOUND_RE = /could not be found/i;
+
+/**
+ * discriminated union 의 모든 case 처리를 컴파일 타임에 강제하는 헬퍼.
+ * switch 의 default 분기에서 호출하면 Source 에 새 type 이 추가될 때
+ * TypeScript 가 컴파일 에러를 발생시켜 누락된 case 를 즉시 감지한다.
+ */
+function assertNever(x: never): never {
+  throw new Error('처리되지 않은 source type: ' + JSON.stringify(x));
+}
 
 interface CmdResult {
   code: number;
@@ -294,19 +303,46 @@ async function fileExists(path: string): Promise<boolean> {
 
 /** 임의 source 의 현재 라이브 값을 캡처해 문자열로 반환 (저장 가능한 형태). */
 export async function readSource(src: Source): Promise<string | null> {
-  if (src.type === 'file') return readFileOrNull(src.path);
-  return readKeychainSerialized(src);
+  switch (src.type) {
+    case 'file':
+      return readFileOrNull(src.path);
+    case 'keychain':
+      return readKeychainSerialized(src);
+    case 'os-keyring':
+      // PR-3 에서 secret-tool 구현 예정.
+      throw new Error('os-keyring source 는 아직 구현되지 않았습니다 (PR-3 예정).');
+    default:
+      return assertNever(src);
+  }
 }
 
 /** 임의 source 에 저장된 문자열을 라이브 위치로 복원. */
 export async function writeSource(src: Source, value: string): Promise<void> {
-  if (src.type === 'file') return writeFileAtomic(expandTilde(src.path), value);
-  return writeKeychainSerialized(src, value);
+  switch (src.type) {
+    case 'file':
+      return writeFileAtomic(expandTilde(src.path), value);
+    case 'keychain':
+      return writeKeychainSerialized(src, value);
+    case 'os-keyring':
+      // PR-3 에서 secret-tool 구현 예정.
+      throw new Error('os-keyring source 는 아직 구현되지 않았습니다 (PR-3 예정).');
+    default:
+      return assertNever(src);
+  }
 }
 
 /** 임의 source 의 라이브 존재 여부. */
 export async function sourceExists(src: Source): Promise<boolean> {
-  if (src.type === 'file') return fileExists(src.path);
-  assertValidKeychainSource(src);
-  return keychainExists(src.service, src.account);
+  switch (src.type) {
+    case 'file':
+      return fileExists(src.path);
+    case 'keychain':
+      assertValidKeychainSource(src);
+      return keychainExists(src.service, src.account);
+    case 'os-keyring':
+      // PR-3 에서 secret-tool 구현 예정.
+      throw new Error('os-keyring source 는 아직 구현되지 않았습니다 (PR-3 예정).');
+    default:
+      return assertNever(src);
+  }
 }
