@@ -73,13 +73,23 @@ export function runCommand(cmd: string, args: string[], stdinData?: string): Pro
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
     proc.on('error', (err) => settle(-1, err.message));
     proc.on('close', (code) => settle(code ?? -1));
-    // stdin 주입 — stdin 쪽 EPIPE 등 에러도 동일 settled 가드 경유로 처리해
-    // double-resolve 를 막고, settle 이후 발생한 stdin 에러는 무시한다 (자식이 이미
-    // 종료해 stdin 을 닫은 정상 race — unhandled error 로 터지지 않게 흡수).
+    // stdin 주입 — secret 을 argv (ps 등으로 관측 가능) 가 아니라 stdin 으로 전달 (PR-3b secret-tool store).
+    // stdin 쪽 에러(EPIPE / write-after-end / destroyed)는 흡수만 한다 (빈 처리가 아니라 의도된 흡수):
+    //   - settle 은 항상 proc 의 'close'/'error' 가 실제 exit code 로 수행한다.
+    //     → stdin error 로 조기 settle 하면 stdout/stderr 미drain + exit code 미상의 불완전 CmdResult 가 된다.
+    //   - 'error' 이벤트 미처리 시 자식이 stdin 을 먼저 닫은 race 에서 unhandled error 로 프로세스가 죽는다.
+    //   - write()/end() 는 write-after-end / destroyed stdin 에서 동기 throw 가능 (ERR_STREAM_*).
+    //     이 throw 가 Promise executor 본문을 빠져나가면 settled-guard 를 우회해 Promise 가 reject 된다 → try/catch 로 흡수.
+    // 전제: secret-tool store 의 stdin 실패는 자식 종료를 동반(close 따라옴)하고, spawn 실패는 proc 'error' 가
+    //   settle 하므로, "stdin error 만 오고 close 가 안 오는" hang 케이스는 실무상 발생하지 않는다.
     if (stdinData !== undefined) {
-      proc.stdin.on('error', (err) => settle(-1, err.message));
-      proc.stdin.write(stdinData);
-      proc.stdin.end();
+      proc.stdin.on('error', () => { /* 흡수 — settle 은 'close'/'error' 가 수행 */ });
+      try {
+        proc.stdin.write(stdinData);
+        proc.stdin.end();
+      } catch {
+        // write-after-end / destroyed stdin 의 동기 throw 흡수 — settle 은 'close'/'error' 가 수행.
+      }
     }
   });
 }

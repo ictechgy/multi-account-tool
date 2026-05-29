@@ -44,6 +44,8 @@ const mockSpawn = vi.mocked(spawn);
  * fakeProc 의 writable stdin sink.
  * runCommand 의 stdin 주입 경로 (proc.stdin.write/end) 를 검증할 수 있도록 write 호출을
  * 기록한다. `stdinError` 가 주어지면 write 시 'error' 이벤트를 emit 해 EPIPE 류를 시뮬레이션.
+ * `throwOnWrite` 가 주어지면 write 호출 시 동기 throw — Node 의 write-after-end /
+ * destroyed stdin (ERR_STREAM_*) 동기 throw 를 재현해 runCommand 의 try/catch 흡수를 검증한다.
  */
 class FakeStdin extends EventEmitter {
   /** write 로 전달된 chunk 누적 — secret 이 stdin 으로 전달됐는지 검증용. */
@@ -51,11 +53,17 @@ class FakeStdin extends EventEmitter {
   /** end() 가 호출됐는지 기록 — stdin EOF 전달 검증용. */
   public ended = false;
 
-  constructor(private readonly stdinError?: Error) {
+  constructor(
+    private readonly stdinError?: Error,
+    /** write 시 동기 throw 할 에러 (write-after-end / destroyed 재현용) */
+    private readonly throwOnWrite?: Error,
+  ) {
     super();
   }
 
   write(chunk: string): boolean {
+    // 동기 throw 재현: settled-guard 우회 (Promise reject) 가 일어나면 안 됨을 검증하기 위한 결함 주입.
+    if (this.throwOnWrite) throw this.throwOnWrite;
     this.writes.push(chunk);
     // EPIPE 시뮬레이션: 자식이 stdin 을 먼저 닫은 경우 write 가 error 이벤트를 낸다.
     if (this.stdinError) setImmediate(() => this.emit('error', this.stdinError));
@@ -76,6 +84,8 @@ function fakeProc(opts: {
   emitCloseAfterError?: boolean;
   /** stdin.write 시 emit 할 에러 (EPIPE 류 — settled-guard 검증용) */
   stdinError?: Error;
+  /** stdin.write 시 동기 throw 할 에러 (write-after-end / destroyed 재현 — HIGH 결함 가드) */
+  stdinThrowOnWrite?: Error;
 }): ChildProcessWithoutNullStreams {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter;
@@ -84,7 +94,7 @@ function fakeProc(opts: {
   };
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
-  proc.stdin = new FakeStdin(opts.stdinError);
+  proc.stdin = new FakeStdin(opts.stdinError, opts.stdinThrowOnWrite);
 
   setImmediate(() => {
     if (opts.error) {
@@ -743,16 +753,30 @@ describe('runCommand — stdin 주입 (PR-3a infra, secret-tool store 전제)', 
     }
   });
 
-  it('(c) stdin write 에러(EPIPE) 는 settled-guard 안에서 처리 — double-resolve / unhandled rejection 없음', async () => {
-    // stdin.write 시 error 를 emit 하는 fakeProc. close 도 정상 emit 되므로
-    // settled-guard 가 둘 중 먼저 온 것 하나만 resolve 해야 한다 (단일 settle).
+  it('(c) stdin write 에러(EPIPE) 는 흡수되고 settle 은 close 의 exit code 로 수행 — error 가 settle 을 가로채지 않음', async () => {
+    // stdin.write 시 error 를 emit 하는 fakeProc (stdin error 가 close 보다 먼저 큐잉됨 — 결정론적).
+    // 채택 설계(흡수+close): stdin error 는 흡수만 하고 settle 은 close 가 실제 exit code(0)로 수행해야 한다.
     mockSpawn.mockReturnValueOnce(
       fakeProc({ code: 0, stdout: 'done', stdinError: new Error('EPIPE') })
     );
 
-    // resolve 가 한 번만 일어나면 await 가 단일 값으로 정상 완료한다 (reject/hang 없음).
     const result = await runCommand('/usr/bin/secret-tool', ['store'], 'val');
-    expect(result).toHaveProperty('code');
+    // stdin EPIPE 후에도 close 의 code(0)로 settle — stdin error 가 settle(-1) 로 가로채면 실패.
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('done');
+  });
+
+  it('(c-2) stdin write 가 동기 throw 해도 Promise reject 없이 close 의 exit code 로 settle — HIGH 결함 회귀 가드', async () => {
+    // write-after-end / destroyed stdin 의 동기 throw 재현. fix 전이면 throw 가 Promise executor 를
+    // 빠져나가 settled-guard 를 우회 → Promise reject. fix 후엔 try/catch 흡수 → close 가 정상 settle.
+    mockSpawn.mockReturnValueOnce(
+      fakeProc({ code: 0, stdout: 'done', stdinThrowOnWrite: new Error('ERR_STREAM_WRITE_AFTER_END') })
+    );
+
+    // reject 없이 단일 값으로 완료해야 하며, code 는 close 의 값(0)이어야 한다.
+    const result = await runCommand('/usr/bin/secret-tool', ['store'], 'val');
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('done');
   });
 
   it('(d) stdinData 미주어지면 stdin 미접촉 — 기존 동작 byte-동등 (write/end 미호출)', async () => {
