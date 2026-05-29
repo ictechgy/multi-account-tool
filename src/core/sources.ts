@@ -17,7 +17,7 @@ import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
 import { KeychainAccountMissingError, redactMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
-import type { KeychainSource, KeychainStored, OsKeyringSource, Source } from './types.js';
+import type { KeychainSource, KeychainStored, Source } from './types.js';
 
 /** macOS 의 `security` CLI 절대경로. PATH shim 공격을 방지. */
 const SECURITY_BIN = '/usr/bin/security';
@@ -32,9 +32,14 @@ const KEYCHAIN_NOT_FOUND_RE = /could not be found/i;
  * discriminated union 의 모든 case 처리를 컴파일 타임에 강제하는 헬퍼.
  * switch 의 default 분기에서 호출하면 Source 에 새 type 이 추가될 때
  * TypeScript 가 컴파일 에러를 발생시켜 누락된 case 를 즉시 감지한다.
+ *
+ * 정상 경로에선 도달 불가하지만, 잘못된 입력이 런타임에 도달했을 때 source 객체
+ * 전체를 직렬화하면 service/account 같은 식별자가 에러 메시지에 노출된다. 따라서
+ * discriminant(type) 만 surface 한다 (mat 의 PII 마스킹 정책과 일관).
  */
 function assertNever(x: never): never {
-  throw new Error('처리되지 않은 source type: ' + JSON.stringify(x));
+  const type = (x as { type?: unknown }).type;
+  throw new Error('처리되지 않은 source type: ' + String(type));
 }
 
 interface CmdResult {
