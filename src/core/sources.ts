@@ -42,7 +42,7 @@ function assertNever(x: never): never {
   throw new Error('처리되지 않은 source type: ' + String(type));
 }
 
-interface CmdResult {
+export interface CmdResult {
   code: number;
   stdout: string;
   stderr: string;
@@ -51,8 +51,14 @@ interface CmdResult {
 /**
  * 외부 명령을 spawn 으로 안전하게 실행.
  * error/close 이벤트가 모두 발생할 수 있으므로 settled 가드로 단일 resolve 보장.
+ *
+ * `stdinData` 가 주어지면 그 값을 자식 프로세스의 stdin 으로 write 후 end 한다.
+ * 이는 secret 을 argv (외부에서 ps 등으로 관측 가능) 가 아니라 stdin 으로 전달하기
+ * 위한 경로다 — Linux `secret-tool store` 가 value 를 stdin 으로 받기 때문이며,
+ * PR-3b 의 os-keyring 구현이 이 경로를 사용한다. `stdinData` 미주어지면 stdin 을
+ * 전혀 건드리지 않아 기존 keychain/file 호출과 동작이 byte-동등하다.
  */
-function runCommand(cmd: string, args: string[]): Promise<CmdResult> {
+export function runCommand(cmd: string, args: string[], stdinData?: string): Promise<CmdResult> {
   return new Promise((resolve) => {
     const proc = spawn(cmd, args);
     let stdout = '';
@@ -67,6 +73,14 @@ function runCommand(cmd: string, args: string[]): Promise<CmdResult> {
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
     proc.on('error', (err) => settle(-1, err.message));
     proc.on('close', (code) => settle(code ?? -1));
+    // stdin 주입 — stdin 쪽 EPIPE 등 에러도 동일 settled 가드 경유로 처리해
+    // double-resolve 를 막고, settle 이후 발생한 stdin 에러는 무시한다 (자식이 이미
+    // 종료해 stdin 을 닫은 정상 race — unhandled error 로 터지지 않게 흡수).
+    if (stdinData !== undefined) {
+      proc.stdin.on('error', (err) => settle(-1, err.message));
+      proc.stdin.write(stdinData);
+      proc.stdin.end();
+    }
   });
 }
 
