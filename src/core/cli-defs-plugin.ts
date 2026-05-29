@@ -86,8 +86,8 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     return { source: src };
   }
   // os-keyring 분기: keychain 과 동형이나 backend 필드 추가.
-  // backend 가 명시된 경우 'auto'/'secret-service' 만 허용 — forward-declared
-  // dead config ('kwallet' 등 오타) 가 silent 통과하지 않도록 명시적 거부.
+  // backend 가 명시된 경우 'auto'/'secret-service' 만 허용 — 아직 미지원인 백엔드
+  // 식별자 (예: 'kwallet') 가 silent 통과하지 않도록 명시적 거부.
   let backend: 'auto' | 'secret-service' | undefined;
   if (raw.backend !== undefined) {
     if (raw.backend !== 'auto' && raw.backend !== 'secret-service') {
@@ -95,12 +95,10 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     }
     backend = raw.backend;
   }
-  const osBase = { type: 'os-keyring' as const, service: raw.service, saveAs: safeSaveAs };
-  const src: OsKeyringSource = {
-    ...osBase,
-    ...(account !== undefined ? { account } : {}),
-    ...(backend !== undefined ? { backend } : {})
-  };
+  // 선택 필드는 명시됐을 때만 부여 — undefined 키를 객체에 넣지 않는다.
+  const src: OsKeyringSource = { type: 'os-keyring', service: raw.service, saveAs: safeSaveAs };
+  if (account !== undefined) src.account = account;
+  if (backend !== undefined) src.backend = backend;
   return { source: src };
 }
 
