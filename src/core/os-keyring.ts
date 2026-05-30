@@ -8,7 +8,9 @@
  *    헤더 출현 횟수(secret 내용/멀티라인 비의존), account 역조회는 stderr 의
  *    `attribute.account`.
  *  - 부재 = **exit 0 + 빈 출력** (exit code 로 부재 판정 불가). exit code≠0 은
- *    미설치(spawn ENOENT) 또는 daemon-down 으로 구분해 throw.
+ *    미설치(spawn ENOENT) 또는 daemon-down 으로 구분해 throw (fail-closed). Goose
+ *    file-backend 사용자용 skip 은 source 정의(cli-defs.ts gooseUsesFileBackend)에서
+ *    GOOSE_DISABLE_KEYRING 양성 증거로 처리한다 — primitive 는 부재를 추정하지 않는다 (#59).
  *  - `store` 는 **upsert**(덮어쓰기), value 는 **stdin**(argv 미노출, PR-3a).
  *  - `clear` 는 **deletes-all** — service+account 2-attribute 매칭은 실측상
  *    단일 삭제지만, backup 단계에서 N>1 을 거부해 sibling 파괴를 차단한다.
@@ -135,7 +137,7 @@ async function rawSearch(service: string, scopeAccount?: string): Promise<CmdRes
 
 /**
  * backup 로드 (loadKeychainBackup 미러). search --all 의 0/1/N 분기:
- *  - exit code≠0 → 미설치/daemon-down throw (osKeyringErr).
+ *  - exit code≠0 → 미설치/daemon-down throw (osKeyringErr, fail-closed).
  *  - N=0 → null (정상 부재; exit 0 + 빈 출력).
  *  - N>1 → OsKeyringAccountMissingError (clear deletes-all 로 인한 data loss 차단).
  *  - N=1 → { value, account }. secret 추출 실패 시 raw output 미포함 구조적 throw.

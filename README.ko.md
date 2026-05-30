@@ -67,7 +67,7 @@
 | Qwen Code CLI | ✅ | ✅ | ⚠️ 미검증 | 자격증명 우선순위: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. mat 는 두 파일 모두 swap 하지만 shell env 는 영향 없음 |
 | Crush | ✅ | ✅ | ⚠️ 미검증 | **project-local override**: CWD 의 `./.crush.json` / `./crush.json` 이 `~/.config/crush/*` 보다 우선; `CRUSH_GLOBAL_*` env 도 우선 |
 | OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로 (`~/.local/share/opencode/auth.json`, 모든 OS 에서 `xdg-basedir` 사용) |
-| Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service (`goose`/`secrets`, `secret-tool` 경유) + `~/.config/goose/*.yaml`. Linux 는 `secret-tool` (libsecret-tools) + keyring daemon 필요; `GOOSE_DISABLE_KEYRING=1` (file backend) 시 os-keyring 항목 부재라 `secrets.yaml` 을 swap. Windows Credential Manager 미지원 |
+| Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service (`goose`/`secrets`, `secret-tool` 경유) + `~/.config/goose/*.yaml`. Linux 는 기본적으로 os-keyring 을 포함하며 `secret-tool` (libsecret-tools) + keyring daemon 이 필요 — 미설치/daemon-down 시 stale YAML 로 조용히 swap 하지 않고 **명시 에러** (Goose 는 libsecret *라이브러리* 로 keyring 에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않음). file backend 면 `GOOSE_DISABLE_KEYRING=1` 설정 시 mat 가 os-keyring 을 생략하고 `secrets.yaml` 을 swap. Windows Credential Manager 미지원 |
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.
 
@@ -351,7 +351,9 @@ v0.4+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 - ~~Aider 빌트인 지원~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
 - 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service 는 `os-keyring` source type 으로 추가됨). Copilot / Amp 는 보류 — Copilot 은 multi-account `/user switch` application-state swap 이 필요하고, Windows Credential Manager 지원도 아직 미해결 (별도 후속). Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
-- **Goose Linux**: Linux 에서 mat 는 Goose 의 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) 로 swap 하고 `~/.config/goose/*.yaml` 도 함께 swap 한다. `secret-tool` (libsecret-tools) 와 keyring daemon 이 있어야 한다. Goose 의 keyring 을 끄면 (`GOOSE_DISABLE_KEYRING=1` 또는 `~/.config/goose/config.yaml` 의 file backend), os-keyring 항목이 부재라 mat 가 `secrets.yaml` 을 swap 한다 — 두 모드 모두 동작.
+- **Goose Linux**: Linux 에서 mat 는 Goose 의 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) 로 swap 하고 `~/.config/goose/*.yaml` 도 함께 swap 한다. 설정별 동작:
+  - **기본 (keyring)**: os-keyring source 가 포함되며 `secret-tool` (libsecret-tools) + keyring daemon 이 필요하다. 미설치이거나 daemon 이 down/접근거부면 **명시 에러** — yaml 로 조용히 fallback 하지 *않는다*. Goose 는 keyring 에 libsecret *라이브러리* (`secret-tool` CLI 와 별도 패키지) 로 접근하므로, CLI 부재가 keyring 미사용을 증명하지 못한다. 활성 keyring 사용자에게 `secrets.yaml` 을 조용히 swap 하면 wrong-account 가 된다. (도구 부재가 아니라) keyring 항목 자체의 부재는 정상 "not found" 로 yaml 로 넘어간다.
+  - **file backend**: `GOOSE_DISABLE_KEYRING=1` (truthy: `1`/`true`/`yes`) 로 설정. 그러면 mat 가 os-keyring source 를 **생략** 하고 `secrets.yaml` + `config.yaml` 만 swap 한다. mat 는 이 env 를 file backend 의 양성 증거로 사용한다 — `config.yaml` 만의 file-backend 설정은 자동 감지하지 않으니 env 도 함께 지정하라.
 - `lterm claude --profile <name>` 같은 shim wrapper
 
 ---

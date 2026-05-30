@@ -47,21 +47,49 @@ function claudeSource(): Source {
  *    설정한 경우만 사용 — 기본 backend 는 keychain 단일 진실 소스) + `config.yaml`. 부재
  *    source 는 자동 skip 이므로 keychain 만 쓰는 사용자, file 만 쓰는 사용자 모두 안전.
  *    keychain 과 yaml 두 backend 를 동시 사용하지 말 것 (stale 위험).
- *  - **Linux**: os-keyring (`service=goose, account=secrets`, backend `secret-service`) +
- *    `secrets.yaml` + `config.yaml`. macOS 와 동형 (keychain → os-keyring 만 교체). secret-tool
- *    (libsecret-tools) + keyring daemon 이 있어야 os-keyring 이 동작하며, 미설치/daemon-down 시
- *    명시 에러 (os-keyring.ts). file backend (GOOSE_DISABLE_KEYRING) 사용자는 os-keyring 항목이
- *    부재라 자동 skip → yaml fallback.
+ *  - **Linux (기본 keyring)**: os-keyring (`service=goose, account=secrets`, backend
+ *    `secret-service`) + `secrets.yaml` + `config.yaml`. macOS 와 동형 (keychain → os-keyring
+ *    만 교체). macOS 와 마찬가지로 os-keyring 과 yaml 두 backend 를 동시 사용하지 말 것
+ *    (stale 위험). secret-tool (libsecret-tools) + keyring daemon 이 있어야 동작하며, 미설치/
+ *    daemon-down 시 **명시 에러** (os-keyring.ts, fail-closed). entry 부재(exit 0+빈 출력)는
+ *    정상 skip → yaml fallback.
+ *  - **Linux (file backend)**: `GOOSE_DISABLE_KEYRING` 가 truthy 면 (gooseUsesFileBackend)
+ *    os-keyring 을 **생략**하고 `secrets.yaml` + `config.yaml` 만 swap. file backend 가 양성
+ *    증거로 확실할 때만 생략하는 이유는 gooseUsesFileBackend 주석 참고 (#59).
  *  - **그 외 OS** (win32/freebsd 등): `secrets.yaml` + `config.yaml` 만. Windows Credential
  *    Manager 는 별도 후속 plan (PR-W).
  *
  * 한계 (README/ROADMAP 명시):
- *  - Linux 는 secret-tool (libsecret-tools) + keyring daemon (gnome-keyring 등) 전제. 미설치
- *    환경은 명시 에러로 안내 — file backend (`GOOSE_DISABLE_KEYRING=1` 또는 config.yaml) 로
- *    전환하면 yaml source 로 swap 된다.
+ *  - Linux 기본(keyring) 사용자는 secret-tool (libsecret-tools) + keyring daemon 이 필요하다.
+ *    미설치/daemon-down 은 명시 에러로 안내 — file backend 면 `GOOSE_DISABLE_KEYRING=1` 로
+ *    os-keyring 을 끄면 yaml 로 swap 된다.
  *  - shell env (`GOOSE_*`, provider 별 `OPENAI_API_KEY` 등) 는 mat scope 밖.
  *  - project-local override 도 mat scope 밖.
  */
+/**
+ * Goose 가 file backend(`secrets.yaml`) 를 쓰도록 강제됐는지 — **양성 증거만** 신뢰한다.
+ *
+ * `GOOSE_DISABLE_KEYRING` 가 truthy(`1`/`true`/`yes`, 대소문자/공백 무시) 일 때만 file-backend
+ * 로 판정해 Linux 에서 os-keyring source 를 생략한다. 그 외(미설정 / `0` / `false` / 빈 문자열)는
+ * Goose 기본값인 secret-service(keyring) 로 가정해 os-keyring 을 포함한다.
+ *
+ * **왜 secret-tool CLI 부재를 신호로 쓰지 않는가** (#59 quad-review HIGH 합의): Goose 는
+ * libsecret **라이브러리**(`libsecret-1-0`) 로 keyring 에 접근하고, mat 는 별도 패키지인
+ * `secret-tool` CLI(`libsecret-tools`) 로 읽는다. 둘은 독립 패키지라 secret-tool CLI 없이도
+ * Goose 가 keyring 을 활성 사용할 수 있다. CLI 부재를 file-backend 로 오인해 os-keyring 을
+ * skip 하면 활성 keyring 사용자가 stale `secrets.yaml` 로 swap 되는 wrong-account 사고가 난다.
+ * 따라서 확실한 disable 신호가 없으면 os-keyring 을 포함하고, secret-tool 미설치는 부재로
+ * 처리하지 않고 명시 에러(os-keyring.ts)로 안내한다.
+ *
+ * 한계: `~/.config/goose/config.yaml` 의 file-backend 설정은 자동 감지하지 않는다. 그 경우
+ * `GOOSE_DISABLE_KEYRING=1` 을 함께 지정하거나, secret-tool 미설치 명시 에러 안내를 따른다.
+ */
+function gooseUsesFileBackend(): boolean {
+  const raw = process.env.GOOSE_DISABLE_KEYRING;
+  if (raw == null) return false;
+  return ['1', 'true', 'yes'].includes(raw.trim().toLowerCase());
+}
+
 function gooseSources(): Source[] {
   const yamlSources: Source[] = [
     { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
@@ -75,7 +103,8 @@ function gooseSources(): Source[] {
   }
   // Linux 는 Goose 의 기본 secret-service 백엔드를 os-keyring source 로 swap (PR-4).
   // macOS keychain 분기와 동형 — service/account/saveAs 동일, backend 만 secret-service 명시.
-  if (process.platform === 'linux') {
+  // 단, file backend 가 양성 증거로 확실할 때만 os-keyring 을 생략한다 (#59, gooseUsesFileBackend).
+  if (process.platform === 'linux' && !gooseUsesFileBackend()) {
     return [
       {
         type: 'os-keyring',
