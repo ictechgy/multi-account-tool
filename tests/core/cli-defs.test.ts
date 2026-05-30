@@ -94,13 +94,17 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
-  it('goose source 수는 현재 platform 에 따라 darwin=3 / 그 외=2', () => {
+  it('goose source 수는 현재 platform 에 따라 darwin=3(keychain) / linux=3(os-keyring) / 그 외=2(file)', () => {
     // 본 테스트는 process.platform 그대로 사용. 양쪽 분기 상세는 아래 별도 describe 에서 stub.
     const goose = BUILTIN_CLI_DEFS.find((c) => c.id === 'goose');
     expect(goose).toBeDefined();
     if (process.platform === 'darwin') {
       expect(goose!.sources).toHaveLength(3);
       expect(goose!.sources[0].type).toBe('keychain');
+    } else if (process.platform === 'linux') {
+      expect(goose!.sources).toHaveLength(3);
+      expect(goose!.sources[0].type).toBe('os-keyring');
+      expect(goose!.sources.slice(1).every((s) => s.type === 'file')).toBe(true);
     } else {
       expect(goose!.sources).toHaveLength(2);
       expect(goose!.sources.every((s) => s.type === 'file')).toBe(true);
@@ -206,8 +210,9 @@ describe('opencode source — platform 무관 단일 경로 (xdg-basedir 동작)
  * Goose 의 platform 분기 — Block 의 오픈소스 AI agent.
  *  - darwin: macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml`
  *    + `~/.config/goose/config.yaml` 의 3-source.
- *  - 그 외 (linux/win32/freebsd): yaml 2-source 만 (Linux 의 기본 secret-service 백엔드는 mat 미지원
- *    이라 file fallback 만 표현). 사용자가 secret-service 사용 중이면 mat swap 결과 무효 — README 명시.
+ *  - linux: os-keyring (service `goose`, account `secrets`, backend `secret-service`) + 2 yaml 의
+ *    3-source (PR-4 — Goose 의 기본 secret-service 백엔드를 secret-tool 로 swap). macOS 와 동형.
+ *  - 그 외 (win32/freebsd): yaml 2-source 만 (Windows Credential Manager 는 별도 후속 PR-W).
  *
  * PR-A 의 `KeychainSource.account` 필드를 사용하는 첫 builtin — service `goose` 가 generic 단어라
  * scope 가 필수. account 누락 시 (PR #29 closed 사유) wrong-entry 위험.
@@ -230,8 +235,26 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     ]);
   });
 
-  it.each(['linux', 'win32', 'freebsd'])(
-    'platform=%s → file source 2개 (secrets.yaml + config.yaml, keychain 미포함)',
+  it('platform=linux → os-keyring(service=goose, account=secrets, secret-service) + secrets.yaml + config.yaml', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'linux' });
+    vi.resetModules();
+    const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+    const goose = defs.find((c) => c.id === 'goose');
+    expect(goose!.sources).toEqual([
+      {
+        type: 'os-keyring',
+        service: 'goose',
+        account: 'secrets',
+        backend: 'secret-service',
+        saveAs: 'goose-keyring.json'
+      },
+      { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
+      { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+    ]);
+  });
+
+  it.each(['win32', 'freebsd'])(
+    'platform=%s → file source 2개 (secrets.yaml + config.yaml, keyring 미포함)',
     async (platform) => {
       vi.stubGlobal('process', { ...process, platform });
       vi.resetModules();

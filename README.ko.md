@@ -36,7 +36,7 @@
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | 파일 swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | 파일 swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) | 파일 swap |
-| Goose | macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account scoped Keychain; Linux 는 `GOOSE_DISABLE_KEYRING=1` 필요 — 아래 참고) |
+| Goose | macOS Keychain / Linux Secret Service (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account scoped Keychain/os-keyring; Linux 는 `secret-tool` 로 swap — 아래 참고) |
 
 ### OAuth Rotation 안전성 매트릭스
 
@@ -67,7 +67,7 @@
 | Qwen Code CLI | ✅ | ✅ | ⚠️ 미검증 | 자격증명 우선순위: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. mat 는 두 파일 모두 swap 하지만 shell env 는 영향 없음 |
 | Crush | ✅ | ✅ | ⚠️ 미검증 | **project-local override**: CWD 의 `./.crush.json` / `./crush.json` 이 `~/.config/crush/*` 보다 우선; `CRUSH_GLOBAL_*` env 도 우선 |
 | OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로 (`~/.local/share/opencode/auth.json`, 모든 OS 에서 `xdg-basedir` 사용) |
-| Goose | ✅ | ⚠️ file-only | ❌ | macOS Keychain (`goose`/`secrets`) + `~/.config/goose/*.yaml`. Linux 는 `GOOSE_DISABLE_KEYRING=1` (또는 `config.yaml` 의 file backend) 필요 — mat 가 `secret-service`/libsecret 아직 미지원 |
+| Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service (`goose`/`secrets`, `secret-tool` 경유) + `~/.config/goose/*.yaml`. Linux 는 `secret-tool` (libsecret-tools) + keyring daemon 필요; `GOOSE_DISABLE_KEYRING=1` (file backend) 시 os-keyring 항목 부재라 `secrets.yaml` 을 swap. Windows Credential Manager 미지원 |
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.
 
@@ -250,7 +250,7 @@ CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 
     ├── qwen/                     # qwen-settings.json + qwen.env (prefix 적용된 saveAs)
     ├── crush/                    # crush-config.json + crush-data.json (config + data 레이어)
     ├── opencode/                 # auth.json (OS 공통 XDG 경로)
-    └── goose/                    # goose-keyring.json (macOS) + goose-secrets.yaml + goose-config.yaml
+    └── goose/                    # goose-keyring.json (macOS Keychain / Linux Secret Service) + goose-secrets.yaml + goose-config.yaml
 ```
 
 파일은 `0600`, 디렉토리는 `0700` 권한으로 생성된다.
@@ -350,8 +350,8 @@ v0.4+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 - ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3)
 - ~~Aider 빌트인 지원~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
-- 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4.0, account-scoped Keychain). Copilot / Amp 는 mat 추상화 추가 확장 (Linux Secret Service / Windows Credential Manager source type) 후 별도 PR 묶음 예정. Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
-- **Goose 한계**: mat 는 macOS Keychain (`goose`/`secrets`) 과 `~/.config/goose/*.yaml` 만 swap. Linux 에서 Goose 가 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 쓰면 mat 가 접근할 수 없으므로, Goose 의 keyring 을 끄고 (`GOOSE_DISABLE_KEYRING=1` 또는 `~/.config/goose/config.yaml` 의 file backend 설정) credentials 가 `secrets.yaml` 에 저장되도록 해야 한다.
+- 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service 는 `os-keyring` source type 으로 추가됨). Copilot / Amp 는 보류 — Copilot 은 multi-account `/user switch` application-state swap 이 필요하고, Windows Credential Manager 지원도 아직 미해결 (별도 후속). Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
+- **Goose Linux**: Linux 에서 mat 는 Goose 의 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) 로 swap 하고 `~/.config/goose/*.yaml` 도 함께 swap 한다. `secret-tool` (libsecret-tools) 와 keyring daemon 이 있어야 한다. Goose 의 keyring 을 끄면 (`GOOSE_DISABLE_KEYRING=1` 또는 `~/.config/goose/config.yaml` 의 file backend), os-keyring 항목이 부재라 mat 가 `secrets.yaml` 을 swap 한다 — 두 모드 모두 동작.
 - `lterm claude --profile <name>` 같은 shim wrapper
 
 ---
