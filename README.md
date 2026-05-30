@@ -36,7 +36,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | File swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | File swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS-agnostic, XDG standard) | File swap |
-| Goose | macOS Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain; Linux needs `GOOSE_DISABLE_KEYRING=1` — see below) |
+| Goose | macOS Keychain / Linux Secret Service (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain/os-keyring; Linux swaps via `secret-tool` — see below) |
 
 ### OAuth Rotation Safety Matrix
 
@@ -67,7 +67,7 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 | Qwen Code CLI | ✅ | ✅ | ⚠️ untested | Credential precedence: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. `mat` swaps both files but cannot affect shell env |
 | Crush | ✅ | ✅ | ⚠️ untested | **project-local override**: `./.crush.json` / `./crush.json` in CWD takes precedence over `~/.config/crush/*`; `CRUSH_GLOBAL_*` env vars also override |
 | OpenCode | ✅ | ✅ | ⚠️ untested | OS-agnostic XDG path (`~/.local/share/opencode/auth.json` on every OS via `xdg-basedir`) |
-| Goose | ✅ | ⚠️ file-only | ❌ | macOS Keychain (`goose`/`secrets`) + `~/.config/goose/*.yaml`. Linux needs `GOOSE_DISABLE_KEYRING=1` (or file backend in `config.yaml`) so credentials land in `secrets.yaml` — mat does not reach `secret-service`/libsecret yet |
+| Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service (`goose`/`secrets` via `secret-tool`) + `~/.config/goose/*.yaml`. Linux requires `secret-tool` (libsecret-tools) + a keyring daemon; with `GOOSE_DISABLE_KEYRING=1` (file backend) the os-keyring entry is absent and mat swaps `secrets.yaml` instead. Windows Credential Manager not yet supported |
 
 "⚠️ untested" = swap logic is platform-agnostic file I/O, but the project's CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI's documentation, not exercised. Patches and bug reports welcome.
 
@@ -250,7 +250,7 @@ See the OAuth Rotation Safety Matrix at the top of this README for per-CLI class
     ├── qwen/                     # qwen-settings.json + qwen.env (prefixed saveAs to disambiguate)
     ├── crush/                    # crush-config.json + crush-data.json (config + data layers)
     ├── opencode/                 # auth.json (OS-agnostic XDG)
-    └── goose/                    # goose-keyring.json (macOS) + goose-secrets.yaml + goose-config.yaml
+    └── goose/                    # goose-keyring.json (macOS Keychain / Linux Secret Service) + goose-secrets.yaml + goose-config.yaml
 ```
 
 Files are created with `0600`, directories with `0700`.
@@ -350,8 +350,8 @@ See [ROADMAP.md](./ROADMAP.md) for v0.4+ plans:
 - ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3)
 - ~~Aider built-in support~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - Session-scoped credential isolation (different account per `lterm` session)
-- More built-in CLIs — ~~Goose~~ ✅ (v0.4.0, account-scoped Keychain). Copilot / Amp are deferred until mat's source abstraction is further extended (Linux Secret Service / Windows Credential Manager source types). Cursor Agent: plugin recommended (keychain service name not publicly documented).
-- **Goose limitation**: mat swaps only macOS Keychain (`goose`/`secrets`) and the `~/.config/goose/*.yaml` files. If you run Goose on Linux with the default `secret-service` backend (libsecret, GNOME Keyring/KWallet), mat cannot reach it — disable Goose's keyring (`GOOSE_DISABLE_KEYRING=1` or file backend in `~/.config/goose/config.yaml`) so credentials land in `secrets.yaml`.
+- More built-in CLIs — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service added via the `os-keyring` source type). Copilot / Amp remain deferred — Copilot needs multi-account `/user switch` application-state swap, and Windows Credential Manager support is still pending (a separate follow-up). Cursor Agent: plugin recommended (keychain service name not publicly documented).
+- **Goose Linux**: on Linux, mat swaps Goose's default `secret-service` backend (libsecret, GNOME Keyring/KWallet) through the `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) plus the `~/.config/goose/*.yaml` files. This requires `secret-tool` (libsecret-tools) and a running keyring daemon. If you disable Goose's keyring (`GOOSE_DISABLE_KEYRING=1` or a file backend in `~/.config/goose/config.yaml`), the os-keyring entry is absent and mat swaps `secrets.yaml` instead — both modes work.
 - `lterm claude --profile <name>` shim wrapper
 
 ---
