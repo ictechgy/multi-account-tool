@@ -64,9 +64,13 @@ function osKeyringErr(stage: string, r: CmdResult): Error {
   // 메시지에 raw output 을 넣지 않는 게 1차 방어지만, redactMessage 로도 감싸
   // 심층 방어한다 (keychainErr 와 일관 — 향후 메시지에 실수로 output 이 들어가도
   // token-shaped secret 은 redact). 구조적 메시지라 redact 가 잘라낼 내용은 없다.
+  // 미설치 메시지에는 file-backend 탈출구를 함께 안내한다 — keyring 을 안 쓰는 사용자가
+  // 불필요한 패키지 설치 대신 file backend 전환을 택할 수 있도록 (#59 quad-review LOW).
+  // CLI-중립 문구로 둔다 (primitive 라 특정 env 명을 결합하지 않음 — CLI 별 env 는 README).
   const msg = r.code === -1
     ? `os-keyring ${stage} 실패: secret-tool 을 실행할 수 없습니다 ` +
-      `(${SECRET_TOOL_BIN} 미설치 또는 실행 불가). libsecret-tools 패키지 설치가 필요합니다.`
+      `(${SECRET_TOOL_BIN} 미설치 또는 실행 불가). libsecret-tools 패키지를 설치하거나, ` +
+      `해당 CLI 가 file backend(평문 파일) 모드를 지원하면 그 모드로 전환하세요 (README 참고).`
     : `os-keyring ${stage} 실패 (code=${r.code}): Secret Service keyring daemon 미응답 또는 접근 거부. ` +
       `gnome-keyring 등 keyring daemon 활성화를 확인하세요.`;
   return new Error(redactMessage(msg));

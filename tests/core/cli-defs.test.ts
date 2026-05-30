@@ -223,23 +223,33 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     vi.resetModules();
   });
 
-  it('platform=darwin → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {
-    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+  // 헬퍼: env 에서 GOOSE_DISABLE_KEYRING 제거(미설정) 후 platform stub.
+  const stubPlatform = (platform: string, gooseDisableKeyring?: string) => {
+    const env = { ...process.env };
+    delete env.GOOSE_DISABLE_KEYRING;
+    if (gooseDisableKeyring !== undefined) env.GOOSE_DISABLE_KEYRING = gooseDisableKeyring;
+    vi.stubGlobal('process', { ...process, platform, env });
+  };
+
+  const YAML_SOURCES = [
+    { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
+    { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+  ];
+
+  it('platform=darwin (기본 keyring) → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {
+    stubPlatform('darwin');
     vi.resetModules();
     const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
     const goose = defs.find((c) => c.id === 'goose');
     expect(goose!.sources).toEqual([
       { type: 'keychain', service: 'goose', account: 'secrets', saveAs: 'goose-keyring.json' },
-      { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-      { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+      ...YAML_SOURCES
     ]);
   });
 
   it('platform=linux (기본 keyring) → os-keyring(service=goose, account=secrets, secret-service) + secrets.yaml + config.yaml', async () => {
     // GOOSE_DISABLE_KEYRING 미설정 = Goose 기본 secret-service(keyring) 가정 → os-keyring 포함.
-    const env = { ...process.env };
-    delete env.GOOSE_DISABLE_KEYRING;
-    vi.stubGlobal('process', { ...process, platform: 'linux', env });
+    stubPlatform('linux');
     vi.resetModules();
     const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
     const goose = defs.find((c) => c.id === 'goose');
@@ -251,60 +261,38 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
         backend: 'secret-service',
         saveAs: 'goose-keyring.json'
       },
-      { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-      { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+      ...YAML_SOURCES
     ]);
   });
 
-  it.each(['1', 'true', 'YES'])(
-    'platform=linux + GOOSE_DISABLE_KEYRING=%s (file backend 양성 증거) → os-keyring 생략, yaml 2-source',
-    async (flag) => {
-      // file backend 가 확실할 때만 os-keyring 을 생략한다 (#59 quad-review HIGH 합의):
-      // secret-tool CLI 부재를 file-backend 신호로 쓰면 libsecret 로 keyring 쓰는 사용자가
-      // stale yaml 로 swap 되는 wrong-account 사고 위험. 양성 증거(env truthy)만 신뢰.
-      vi.stubGlobal('process', {
-        ...process,
-        platform: 'linux',
-        env: { ...process.env, GOOSE_DISABLE_KEYRING: flag }
-      });
+  // Goose 의 GOOSE_DISABLE_KEYRING env 시맨틱은 presence-only (`env::var(..).is_ok()`,
+  // base.rs) — 값과 무관하게 **존재하면** file backend 다. mat 도 동일하게 맞춰
+  // (gooseUsesFileBackend = env != null) 값 무관하게 os-keyring 을 생략한다. 0/false/빈
+  // 문자열도 Goose 가 file backend 로 보므로, 이때 os-keyring 을 포함하면 stale keyring
+  // 을 swap 하는 wrong-account 위험이 있다 (#59 quad-review HIGH, Goose 소스로 검증).
+  it.each([
+    ['linux', '1'], ['linux', 'true'], ['linux', 'YES'],
+    ['linux', '0'], ['linux', 'false'], ['linux', ''],
+    ['darwin', '1'], ['darwin', '0'], ['darwin', '']
+  ])(
+    'platform=%s + GOOSE_DISABLE_KEYRING=%j (존재=file backend) → keyring source 생략, yaml 2-source',
+    async (platform, flag) => {
+      stubPlatform(platform, flag);
       vi.resetModules();
       const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
       const goose = defs.find((c) => c.id === 'goose');
-      expect(goose!.sources).toEqual([
-        { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-        { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
-      ]);
-    }
-  );
-
-  it.each(['0', 'false', ''])(
-    'platform=linux + GOOSE_DISABLE_KEYRING=%j (비-truthy = 불확실) → 안전하게 os-keyring 포함 (3-source)',
-    async (flag) => {
-      // '0'/'false'/빈 문자열은 disable 의 확실한 증거가 아니다 → keyring 가정 유지(fail-closed 안전).
-      vi.stubGlobal('process', {
-        ...process,
-        platform: 'linux',
-        env: { ...process.env, GOOSE_DISABLE_KEYRING: flag }
-      });
-      vi.resetModules();
-      const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
-      const goose = defs.find((c) => c.id === 'goose');
-      expect(goose!.sources[0].type).toBe('os-keyring');
-      expect(goose!.sources).toHaveLength(3);
+      expect(goose!.sources).toEqual(YAML_SOURCES);
     }
   );
 
   it.each(['win32', 'freebsd'])(
     'platform=%s → file source 2개 (secrets.yaml + config.yaml, keyring 미포함)',
     async (platform) => {
-      vi.stubGlobal('process', { ...process, platform });
+      stubPlatform(platform);
       vi.resetModules();
       const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
       const goose = defs.find((c) => c.id === 'goose');
-      expect(goose!.sources).toEqual([
-        { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-        { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
-      ]);
+      expect(goose!.sources).toEqual(YAML_SOURCES);
     }
   );
 });
