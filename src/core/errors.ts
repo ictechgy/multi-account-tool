@@ -114,6 +114,45 @@ export class KeychainAccountMissingError extends Error {
 }
 
 /**
+ * os-keyring (Linux Secret Service) 에서 `secret-tool search --all` 결과가 N>1
+ * (collision) 이라 안전 swap 을 거부한 경우.
+ *
+ * service+account 2-attribute 조회는 보통 0/1 매칭이지만, 동일 service 에 같은
+ * account 가 비정상 중복되었거나 account 미지정 service-only 조회 시 N>1 이 될 수
+ * 있다. `secret-tool clear` 는 매칭 항목을 **전부 삭제**(deletes-all) 하므로,
+ * N>1 인 채로 clear/backup 을 진행하면 무관한 sibling 자격증명까지 파괴된다
+ * (data loss). 따라서 N>1 이면 이 에러로 거부한다.
+ *
+ * macOS 의 {@link KeychainAccountMissingError} 와 의미상 구별된다 — 전자는
+ * account 메타데이터 미식별, 본 에러는 다중 매칭(collision). backend 식별
+ * 명확성을 위해 별도 클래스로 둔다.
+ *
+ * message 는 redactMessage 통과 (user-supplied service 대비). Typed caller 는
+ * readonly `service` 로 raw 값 접근 — describeError 가 별도 라인으로 surface.
+ */
+export class OsKeyringAccountMissingError extends Error {
+  readonly service: string;
+  /**
+   * @param matchCount search --all 매칭 수. 1 이면 "account 식별 불가"(stderr 의
+   *   attribute.account 부재 + scope account 도 없음 → blind clear/rollback 위험),
+   *   2 이상이면 collision (deletes-all 로 sibling 파괴 위험). 둘 다 안전 swap 거부.
+   */
+  constructor(service: string, matchCount: number) {
+    const reason = matchCount > 1
+      ? `${matchCount} 개의 항목이 매칭되어(collision)`
+      : `기존 항목의 account 를 식별할 수 없어`;
+    super(redactMessage(
+      `os-keyring service '${service}' 에서 ${reason} 안전 swap 을 거부합니다. ` +
+      `secret-tool clear 는 매칭 항목을 전부 삭제하므로, account 를 확정하지 못한 채 진행하면 ` +
+      `무관한 자격증명까지 손실될 수 있습니다. ` +
+      `secret-tool 또는 keyring 관리 도구에서 해당 service 의 항목을 정리 후 다시 시도하세요.`
+    ));
+    this.name = 'OsKeyringAccountMissingError';
+    this.service = service;
+  }
+}
+
+/**
  * 자격증명/토큰 후보 시퀀스를 redact.
  * JWT (eyJ...) 패턴과 50자 이상 base64-like 시퀀스를 [redacted] 로 대체하고 500자로 절단.
  *
@@ -150,7 +189,7 @@ export function errorMessage(err: unknown): string {
  */
 export function describeError(err: unknown): string {
   const msg = errorMessage(err);
-  if (err instanceof KeychainAccountMissingError) {
+  if (err instanceof KeychainAccountMissingError || err instanceof OsKeyringAccountMissingError) {
     return `${msg}\n→ Service: ${err.service}`;
   }
   return msg;
