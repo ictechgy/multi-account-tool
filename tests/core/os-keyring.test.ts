@@ -130,6 +130,25 @@ describe('os-keyring — readSource (search --all)', () => {
     expect(JSON.parse(r!).value).toContain('[/fake]');
   });
 
+  it('secret 에 정확히 [/2] 형태 단독 줄이 있어도 다음 줄이 label 이 아니면 N=1 (false collision 차단)', async () => {
+    // 헤더는 다음 줄이 'label = ' 인 경우만 카운트 — secret 내부의 [/2] 단독 줄은
+    // 다음 줄이 label 이 아니므로 헤더로 오인되지 않는다 (blockCount 구조화 가드).
+    const stdout =
+      `[/1]\nlabel = mat-svc\nsecret = before\n[/2]\nafter\ncreated = x\nmodified = y\n`;
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, stdout, stderr: 'attribute.account = alice\n' }));
+    const r = await readSource(src);
+    expect(JSON.parse(r!).value).toBe('before\n[/2]\nafter');
+  });
+
+  it('secret 중간에 created = 유사 줄이 있어도 조기 절단하지 않음 (뒤에서 메타만 제거)', async () => {
+    const stdout =
+      `[/1]\nlabel = mat-svc\nsecret = {"a":1}\ncreated = fake-in-secret\nmore\ncreated = 2026\nmodified = 2026\n`;
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, stdout, stderr: 'attribute.account = alice\n' }));
+    const r = await readSource(src);
+    // 끝의 created/modified 메타만 제거, secret 중간의 'created = fake-in-secret' 은 보존.
+    expect(JSON.parse(r!).value).toBe('{"a":1}\ncreated = fake-in-secret\nmore');
+  });
+
   it('N>1 (collision) → OsKeyringAccountMissingError', async () => {
     const serviceOnly: OsKeyringSource = { type: 'os-keyring', service: 'mat-svc', saveAs: 'cred.json' };
     mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, ...searchN2() }));
@@ -243,6 +262,31 @@ describe('os-keyring — writeSource (backup→clear→store→rollback)', () =>
     await expect(writeSource(src, JSON.stringify({ value: 123 }))).rejects.toThrow(/손상/);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
+
+  it('N=1 backup 인데 account 미식별 + service-only → throw, clear/store 미실행 (blind clear 차단)', async () => {
+    // stderr 가 비어 account 역조회 실패 + service-only(src.account 없음) → 지울 대상 불명.
+    const serviceOnly: OsKeyringSource = { type: 'os-keyring', service: 'mat-svc', saveAs: 'c.json' };
+    mockSpawn.mockReturnValueOnce(
+      fakeProc({ code: 0, stdout: '[/1]\nlabel = mat-svc\nsecret = tok\ncreated = x\nmodified = y\n', stderr: '' })
+    );
+    await expect(writeSource(serviceOnly, JSON.stringify({ value: 'v' }))).rejects.toBeInstanceOf(
+      OsKeyringAccountMissingError
+    );
+    expect(findSpawnCallsByArg('clear').length).toBe(0);
+    expect(findSpawnCallsByArg('store').length).toBe(0);
+  });
+
+  it('N=1 backup account 미식별이어도 src.account scope 면 그 account 로 clear (복구 가능)', async () => {
+    // stderr 가 비어도 src.account=alice 로 scope 됐으면 alice 를 지울 대상으로 확정.
+    mockSpawn
+      .mockReturnValueOnce(fakeProc({ code: 0, stdout: '[/1]\nlabel = mat-svc\nsecret = old\ncreated = x\n', stderr: '' }))
+      .mockReturnValueOnce(fakeProc({ code: 0 })) // clear
+      .mockReturnValueOnce(fakeProc({ code: 0 })); // store
+    await writeSource(src, serialized);
+    const [clearCall] = findSpawnCallsByArg('clear');
+    const argv = clearCall[1] as string[];
+    expect(argv[argv.indexOf('account') + 1]).toBe('alice');
+  });
 });
 
 describe('os-keyring — sourceExists / 입력 검증', () => {
@@ -254,6 +298,12 @@ describe('os-keyring — sourceExists / 입력 검증', () => {
   it('N=0 → false', async () => {
     mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, stdout: '', stderr: '' }));
     expect(await sourceExists(src)).toBe(false);
+  });
+
+  it('N>1 → OsKeyringAccountMissingError (unsafe 상태를 true 로 숨기지 않음)', async () => {
+    const serviceOnly: OsKeyringSource = { type: 'os-keyring', service: 'mat-svc', saveAs: 'c.json' };
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, ...searchN2() }));
+    await expect(sourceExists(serviceOnly)).rejects.toBeInstanceOf(OsKeyringAccountMissingError);
   });
 
   it('빈 문자열 account → throw (service-only fallthrough 차단)', async () => {

@@ -18,7 +18,7 @@
  */
 
 import { runCommand, type CmdResult } from './sources.js';
-import { OsKeyringAccountMissingError } from './errors.js';
+import { OsKeyringAccountMissingError, redactMessage } from './errors.js';
 import type { KeychainStored, OsKeyringSource } from './types.js';
 
 /** Linux `secret-tool` 절대경로. PATH shim 공격을 방지 (SECURITY_BIN 미러). */
@@ -59,42 +59,61 @@ function assertValidOsKeyringSource(src: OsKeyringSource): void {
  * 그 외 code≠0 은 daemon 미응답/접근 거부로 판정.
  */
 function osKeyringErr(stage: string, r: CmdResult): Error {
-  if (r.code === -1) {
-    return new Error(
-      `os-keyring ${stage} 실패: secret-tool 을 실행할 수 없습니다 ` +
+  // 메시지에 raw output 을 넣지 않는 게 1차 방어지만, redactMessage 로도 감싸
+  // 심층 방어한다 (keychainErr 와 일관 — 향후 메시지에 실수로 output 이 들어가도
+  // token-shaped secret 은 redact). 구조적 메시지라 redact 가 잘라낼 내용은 없다.
+  const msg = r.code === -1
+    ? `os-keyring ${stage} 실패: secret-tool 을 실행할 수 없습니다 ` +
       `(${SECRET_TOOL_BIN} 미설치 또는 실행 불가). libsecret-tools 패키지 설치가 필요합니다.`
-    );
-  }
-  return new Error(
-    `os-keyring ${stage} 실패 (code=${r.code}): Secret Service keyring daemon 미응답 또는 접근 거부. ` +
-    `gnome-keyring 등 keyring daemon 활성화를 확인하세요.`
-  );
+    : `os-keyring ${stage} 실패 (code=${r.code}): Secret Service keyring daemon 미응답 또는 접근 거부. ` +
+      `gnome-keyring 등 keyring daemon 활성화를 확인하세요.`;
+  return new Error(redactMessage(msg));
 }
+
+/** block-header `[/N]` 라인 정규식 (단독 라인). */
+const BLOCK_HEADER_RE = /^\[\/[^\]]*\]$/;
 
 /**
  * `secret-tool search --all` 의 stdout 에서 매칭 블록 수를 센다.
- * `[/N]` block-header 출현 횟수가 매칭 수 — secret 내용이나 멀티라인 secret 에
- * 비의존이다 (secret 안에 `=`/개행이 있어도 카운트가 흔들리지 않음, plan F2).
+ *
+ * block-header `[/N]` 출현 횟수가 매칭 수다. 단, secret value(멀티라인)에 정확히
+ * `[/2]` 형태 단독 줄이 있으면 헤더로 오인될 수 있으므로, **헤더 다음 줄이
+ * `label = ` 로 시작하는 경우에만** 카운트한다 (실측상 헤더 바로 뒤엔 항상 label).
+ * 이로써 secret 내용에 의한 오카운트(→ 단일 항목의 false N>1 collision 거부)를 차단한다.
  */
 function blockCount(stdout: string): number {
-  const m = stdout.match(/^\[\/[^\]]*\]$/gm);
-  return m ? m.length : 0;
+  const lines = stdout.split('\n');
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (BLOCK_HEADER_RE.test(lines[i]) && lines[i + 1]?.startsWith('label = ')) {
+      count++;
+    }
+  }
+  return count;
 }
 
 /**
- * 단일 블록(N=1) stdout 에서 secret value 를 추출. `secret = ` 다음부터 다음
- * 메타 라인(`created`/`modified`/`schema` = ) 직전까지 — 멀티라인 secret 대응.
+ * 단일 블록(N=1) stdout 에서 secret value 를 추출.
+ *
+ * secret 은 `secret = ` 라인부터 시작하고, 블록 **끝**에 메타 라인
+ * (`created`/`modified`/`schema` = )이 연속한다. 멀티라인 secret 의 중간에
+ * `created = ` 처럼 보이는 줄이 있어도 조기 절단되지 않도록, **뒤에서부터** 메타
+ * 라인만 벗겨내고 그 앞 전체를 secret 으로 본다 (앞에서 첫 메타 만나 break 하면
+ * secret 중간의 메타-유사 줄에서 값이 잘린다).
  * `secret = ` 라인이 없으면 null (파싱 실패).
  */
 function parseSingleSecret(stdout: string): string | null {
   const lines = stdout.split('\n');
   const startIdx = lines.findIndex((l) => l.startsWith('secret = '));
   if (startIdx < 0) return null;
-  const valueLines = [lines[startIdx].slice('secret = '.length)];
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    if (/^(created|modified|schema) = /.test(lines[i])) break;
-    valueLines.push(lines[i]);
-  }
+  let endIdx = lines.length;
+  // 블록 말미의 trailing 빈 줄 + 메타 라인을 뒤에서부터 제거 (secret 보다 항상 뒤).
+  while (endIdx > startIdx + 1 && lines[endIdx - 1] === '') endIdx--;
+  while (endIdx > startIdx + 1 && /^(created|modified|schema) = /.test(lines[endIdx - 1])) endIdx--;
+  const valueLines = [
+    lines[startIdx].slice('secret = '.length),
+    ...lines.slice(startIdx + 1, endIdx),
+  ];
   return valueLines.join('\n');
 }
 
@@ -133,7 +152,8 @@ async function osKeyringBackup(
   const value = parseSingleSecret(r.stdout);
   if (value == null) {
     // raw output(secret co-located on stdout)은 절대 포함하지 않는다 (plan F4).
-    throw new Error('os-keyring search 결과 파싱 실패: 1 블록인데 secret 을 추출하지 못했습니다.');
+    // 구조적 메시지지만 redact 로도 감싼다 (심층 방어).
+    throw new Error(redactMessage('os-keyring search 결과 파싱 실패: 1 블록인데 secret 을 추출하지 못했습니다.'));
   }
   return { value, account: parseSingleAccount(r.stderr) };
 }
@@ -177,7 +197,7 @@ async function osKeyringStoreOrRollback(
       rollbackNote = ` / 백업 복구도 실패 (code=${rb.code})`;
     }
   }
-  throw new Error(`os-keyring 쓰기 실패 (code=${res.code})${rollbackNote}`);
+  throw new Error(redactMessage(`os-keyring 쓰기 실패 (code=${res.code})${rollbackNote}`));
 }
 
 /** os-keyring source 를 직렬화된 JSON 문자열로 캡처 (readKeychainSerialized 미러). */
@@ -214,16 +234,33 @@ export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized:
       : process.env.USER || 'default';
 
   const backup = await osKeyringBackup(src.service, src.account);
-  if (backup && backup.account != null) {
-    await osKeyringClear(src.service, backup.account);
+  if (backup) {
+    // clear/rollback 대상 account 확정: stderr 역조회 account → scope 된 src.account.
+    // 둘 다 없으면 어떤 항목을 지울지 모르는 채 clear/rollback 을 건너뛰어 옛 항목이
+    // 잔류(→ 다음 read 에서 N>1)하거나 rollback 이 무력화된다. macOS loadKeychainBackup
+    // 이 account 미식별 시 throw 하는 것과 동일하게, blind 진행 대신 거부한다.
+    const recoverAccount = backup.account ?? (hasAccount(src.account) ? src.account : null);
+    if (recoverAccount == null) {
+      throw new OsKeyringAccountMissingError(src.service, 1);
+    }
+    backup.account = recoverAccount; // rollback 도 동일 account 로 재기록되도록 확정.
+    await osKeyringClear(src.service, recoverAccount);
   }
   await osKeyringStoreOrRollback(src.service, account, stored.value, backup);
 }
 
-/** os-keyring 항목의 존재 여부 (keychainExists 미러). N>1 도 존재로 본다. */
+/**
+ * os-keyring 항목의 존재 여부 (keychainExists 미러).
+ *
+ * N>1 (collision) 은 `osKeyringBackup` 과 동일하게 `OsKeyringAccountMissingError`
+ * 로 throw 한다 — sourceExists 를 validity check 로 쓰는 호출자에게 unsafe 한
+ * deletes-all 상태를 true 로 숨기지 않기 위함.
+ */
 export async function osKeyringExists(src: OsKeyringSource): Promise<boolean> {
   assertValidOsKeyringSource(src);
   const r = await rawSearch(src.service, src.account);
   if (r.code !== 0) throw osKeyringErr('조회', r);
-  return blockCount(r.stdout) >= 1;
+  const count = blockCount(r.stdout);
+  if (count > 1) throw new OsKeyringAccountMissingError(src.service, count);
+  return count >= 1;
 }
