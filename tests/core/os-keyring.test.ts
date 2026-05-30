@@ -160,7 +160,9 @@ describe('os-keyring — readSource (search --all)', () => {
     await expect(readSource(src)).rejects.toThrow(/keyring daemon/);
   });
 
-  it('spawn error (미설치, code=-1) → throw (libsecret-tools 설치 안내)', async () => {
+  it('spawn error (미설치, code=-1) → throw (libsecret-tools 설치 안내, fail-closed)', async () => {
+    // primitive 는 부재를 추정하지 않고 fail-closed throw 한다. Goose file-backend 사용자용
+    // skip 은 source 정의(cli-defs.ts gooseUsesFileBackend, GOOSE_DISABLE_KEYRING)에서 처리 (#59).
     mockSpawn.mockReturnValueOnce(fakeProc({ error: new Error('spawn ENOENT') }));
     await expect(readSource(src)).rejects.toThrow(/libsecret-tools/);
   });

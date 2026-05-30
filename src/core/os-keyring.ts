@@ -8,7 +8,9 @@
  *    헤더 출현 횟수(secret 내용/멀티라인 비의존), account 역조회는 stderr 의
  *    `attribute.account`.
  *  - 부재 = **exit 0 + 빈 출력** (exit code 로 부재 판정 불가). exit code≠0 은
- *    미설치(spawn ENOENT) 또는 daemon-down 으로 구분해 throw.
+ *    미설치(spawn ENOENT) 또는 daemon-down 으로 구분해 throw (fail-closed). Goose
+ *    file-backend 사용자용 skip 은 source 정의(cli-defs.ts gooseUsesFileBackend)에서
+ *    GOOSE_DISABLE_KEYRING 양성 증거로 처리한다 — primitive 는 부재를 추정하지 않는다 (#59).
  *  - `store` 는 **upsert**(덮어쓰기), value 는 **stdin**(argv 미노출, PR-3a).
  *  - `clear` 는 **deletes-all** — service+account 2-attribute 매칭은 실측상
  *    단일 삭제지만, backup 단계에서 N>1 을 거부해 sibling 파괴를 차단한다.
@@ -62,9 +64,13 @@ function osKeyringErr(stage: string, r: CmdResult): Error {
   // 메시지에 raw output 을 넣지 않는 게 1차 방어지만, redactMessage 로도 감싸
   // 심층 방어한다 (keychainErr 와 일관 — 향후 메시지에 실수로 output 이 들어가도
   // token-shaped secret 은 redact). 구조적 메시지라 redact 가 잘라낼 내용은 없다.
+  // 미설치 메시지에는 file-backend 탈출구를 함께 안내한다 — keyring 을 안 쓰는 사용자가
+  // 불필요한 패키지 설치 대신 file backend 전환을 택할 수 있도록 (#59 quad-review LOW).
+  // CLI-중립 문구로 둔다 (primitive 라 특정 env 명을 결합하지 않음 — CLI 별 env 는 README).
   const msg = r.code === -1
     ? `os-keyring ${stage} 실패: secret-tool 을 실행할 수 없습니다 ` +
-      `(${SECRET_TOOL_BIN} 미설치 또는 실행 불가). libsecret-tools 패키지 설치가 필요합니다.`
+      `(${SECRET_TOOL_BIN} 미설치 또는 실행 불가). libsecret-tools 패키지를 설치하거나, ` +
+      `해당 CLI 가 file backend(평문 파일) 모드를 지원하면 그 모드로 전환하세요 (README 참고).`
     : `os-keyring ${stage} 실패 (code=${r.code}): Secret Service keyring daemon 미응답 또는 접근 거부. ` +
       `gnome-keyring 등 keyring daemon 활성화를 확인하세요.`;
   return new Error(redactMessage(msg));
@@ -135,7 +141,7 @@ async function rawSearch(service: string, scopeAccount?: string): Promise<CmdRes
 
 /**
  * backup 로드 (loadKeychainBackup 미러). search --all 의 0/1/N 분기:
- *  - exit code≠0 → 미설치/daemon-down throw (osKeyringErr).
+ *  - exit code≠0 → 미설치/daemon-down throw (osKeyringErr, fail-closed).
  *  - N=0 → null (정상 부재; exit 0 + 빈 출력).
  *  - N>1 → OsKeyringAccountMissingError (clear deletes-all 로 인한 data loss 차단).
  *  - N=1 → { value, account }. secret 추출 실패 시 raw output 미포함 구조적 throw.

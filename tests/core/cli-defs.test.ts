@@ -223,20 +223,33 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     vi.resetModules();
   });
 
-  it('platform=darwin → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {
-    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+  // 헬퍼: env 에서 GOOSE_DISABLE_KEYRING 제거(미설정) 후 platform stub.
+  const stubPlatform = (platform: string, gooseDisableKeyring?: string) => {
+    const env = { ...process.env };
+    delete env.GOOSE_DISABLE_KEYRING;
+    if (gooseDisableKeyring !== undefined) env.GOOSE_DISABLE_KEYRING = gooseDisableKeyring;
+    vi.stubGlobal('process', { ...process, platform, env });
+  };
+
+  const YAML_SOURCES = [
+    { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
+    { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+  ];
+
+  it('platform=darwin (기본 keyring) → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {
+    stubPlatform('darwin');
     vi.resetModules();
     const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
     const goose = defs.find((c) => c.id === 'goose');
     expect(goose!.sources).toEqual([
       { type: 'keychain', service: 'goose', account: 'secrets', saveAs: 'goose-keyring.json' },
-      { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-      { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+      ...YAML_SOURCES
     ]);
   });
 
-  it('platform=linux → os-keyring(service=goose, account=secrets, secret-service) + secrets.yaml + config.yaml', async () => {
-    vi.stubGlobal('process', { ...process, platform: 'linux' });
+  it('platform=linux (기본 keyring) → os-keyring(service=goose, account=secrets, secret-service) + secrets.yaml + config.yaml', async () => {
+    // GOOSE_DISABLE_KEYRING 미설정 = Goose 기본 secret-service(keyring) 가정 → os-keyring 포함.
+    stubPlatform('linux');
     vi.resetModules();
     const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
     const goose = defs.find((c) => c.id === 'goose');
@@ -248,22 +261,38 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
         backend: 'secret-service',
         saveAs: 'goose-keyring.json'
       },
-      { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-      { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
+      ...YAML_SOURCES
     ]);
   });
+
+  // Goose 의 GOOSE_DISABLE_KEYRING env 시맨틱은 presence-only (`env::var(..).is_ok()`,
+  // base.rs) — 값과 무관하게 **존재하면** file backend 다. mat 도 동일하게 맞춰
+  // (gooseUsesFileBackend = env != null) 값 무관하게 os-keyring 을 생략한다. 0/false/빈
+  // 문자열도 Goose 가 file backend 로 보므로, 이때 os-keyring 을 포함하면 stale keyring
+  // 을 swap 하는 wrong-account 위험이 있다 (#59 quad-review HIGH, Goose 소스로 검증).
+  it.each([
+    ['linux', '1'], ['linux', 'true'], ['linux', 'YES'],
+    ['linux', '0'], ['linux', 'false'], ['linux', ''],
+    ['darwin', '1'], ['darwin', '0'], ['darwin', '']
+  ])(
+    'platform=%s + GOOSE_DISABLE_KEYRING=%j (존재=file backend) → keyring source 생략, yaml 2-source',
+    async (platform, flag) => {
+      stubPlatform(platform, flag);
+      vi.resetModules();
+      const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+      const goose = defs.find((c) => c.id === 'goose');
+      expect(goose!.sources).toEqual(YAML_SOURCES);
+    }
+  );
 
   it.each(['win32', 'freebsd'])(
     'platform=%s → file source 2개 (secrets.yaml + config.yaml, keyring 미포함)',
     async (platform) => {
-      vi.stubGlobal('process', { ...process, platform });
+      stubPlatform(platform);
       vi.resetModules();
       const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
       const goose = defs.find((c) => c.id === 'goose');
-      expect(goose!.sources).toEqual([
-        { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-        { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
-      ]);
+      expect(goose!.sources).toEqual(YAML_SOURCES);
     }
   );
 });
