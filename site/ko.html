@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="여러 AI CLI 계정을 단일 TUI 에서 전환 — 안전 기본값 자격증명 스위처.">
+<meta name="color-scheme" content="light dark">
+<title>multi-account-tool (mat)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="site-title" href="ko.html">multi-account-tool <code>mat</code></a>
+  <nav class="lang-switcher" aria-label="language"><a class="lang-link" href="index.html">English</a><span class="sep">·</span><span class="lang-link active" aria-current="page">한국어</span></nav>
+</header>
+<main class="markdown-body">
+<h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
+<p class="inline-lang" aria-hidden="true"><a href="index.html">English</a> | 한국어</p>
+<p>여러 AI CLI 계정(Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 <strong>하나의 TUI 에서 빠르게 전환</strong>해 사용하는 도구. 매번 <code>logout</code> → <code>login</code> 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시, OAuth refresh 토큰 회전 인지 + TUI 재캡처/폐기/취소 dialog 등 안전장치를 기본 적용.</p>
+<pre><code>╭ Multi-Account Tool ────────────────────────────────╮
+│  AI CLI 계정 스위처                                 │
+╰─────────────────────────────────────────────────────╯
+
+  &gt; Claude Code            [활성: personal] ✓
+    Codex CLI              [활성: work]     ✓
+    Gemini / Antigravity   [활성: personal] ✓
+</code></pre>
+<hr>
+<h2 id="왜-만들었나">왜 만들었나</h2>
+<ul>
+<li>Claude Code, Codex, Gemini 등 여러 AI CLI 를 동시에 쓰면서 각 CLI 마다 계정이 여러 개일 때</li>
+<li>매번 <code>logout</code> / <code>login</code> 반복이 귀찮을 때</li>
+<li>&quot;지금 어느 계정으로 로그인돼 있더라?&quot; 헷갈릴 때</li>
+</ul>
+<h2 id="어떻게-동작하나">어떻게 동작하나</h2>
+<p><code>mat</code> 은 각 CLI 의 <strong>자격증명만 정밀하게 swap</strong> 한다. hooks, agents, <code>CLAUDE.md</code>, 대화 이력, 설정 같은 나머지는 그대로 둔다.</p>
+<table>
+<thead>
+<tr>
+<th>CLI</th>
+<th>자격증명 위치</th>
+<th>보관 방식</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Claude Code</td>
+<td>macOS Keychain (<code>Claude Code-credentials</code>)</td>
+<td>Keychain 항목 swap</td>
+</tr>
+<tr>
+<td>Codex CLI</td>
+<td><code>~/.codex/auth.json</code></td>
+<td>파일 swap</td>
+</tr>
+<tr>
+<td>Gemini / Antigravity</td>
+<td><code>~/.gemini/oauth_creds.json</code>, <code>google_accounts.json</code></td>
+<td>파일 swap</td>
+</tr>
+<tr>
+<td>Aider</td>
+<td><code>~/.aider.conf.yml</code></td>
+<td>파일 swap</td>
+</tr>
+<tr>
+<td>Kimi CLI</td>
+<td><code>~/.kimi/config.toml</code></td>
+<td>파일 swap</td>
+</tr>
+<tr>
+<td>Qwen Code CLI</td>
+<td><code>~/.qwen/settings.json</code>, <code>~/.qwen/.env</code></td>
+<td>파일 swap</td>
+</tr>
+<tr>
+<td>Crush</td>
+<td><code>~/.config/crush/crush.json</code>, <code>~/.local/share/crush/crush.json</code></td>
+<td>파일 swap</td>
+</tr>
+<tr>
+<td>OpenCode</td>
+<td><code>~/.local/share/opencode/auth.json</code> (OS 공통, XDG 표준)</td>
+<td>파일 swap</td>
+</tr>
+<tr>
+<td>Goose</td>
+<td>macOS Keychain / Linux Secret Service (service <code>goose</code>, account <code>secrets</code>) + <code>~/.config/goose/secrets.yaml</code> + <code>config.yaml</code></td>
+<td>Multi-source (account scoped Keychain/os-keyring; Linux 는 <code>secret-tool</code> 로 swap — 아래 참고)</td>
+</tr>
+</tbody></table>
+<h3 id="oauth-rotation-안전성-매트릭스">OAuth Rotation 안전성 매트릭스</h3>
+<p>일부 CLI 는 <strong>OAuth refresh token rotation</strong> (RFC 6749 권장 보안 정책) 을 사용한다 — refresh token 은 한 번 사용되면 invalidate 되어 같은 token 을 다시 쓸 수 없다. <code>mat</code> 이 옛 token 스냅샷을 복원하면 provider 가 &quot;이미 사용된 token&quot; 으로 거부 (<code>refresh_token_reused</code> 401) → 사용자가 강제 재로그인해야 한다. 본 매트릭스는 mat 지원 CLI 중 영향 받는 도구와 mat 의 안전 모드를 정리한다.</p>
+<table>
+<thead>
+<tr>
+<th>CLI</th>
+<th>인증 방식</th>
+<th>rotation 위험</th>
+<th>mat 안전 모드</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Codex CLI</td>
+<td>OAuth (<code>tokens.refresh_token</code>, <code>tokens.account_id</code>)</td>
+<td>🔴 높음 — token revoke 재현됨</td>
+<td>swap 전 <code>mat freshness codex</code> 점검 / 일회성은 <code>mat exec</code></td>
+</tr>
+<tr>
+<td>Gemini / Antigravity</td>
+<td>OAuth (<code>refresh_token</code> + <code>google_accounts.json.active</code>)</td>
+<td>🔴 높음</td>
+<td>Codex 와 동일</td>
+</tr>
+<tr>
+<td>OpenCode</td>
+<td>provider 별 OAuth (<code>provider.refresh</code>, <code>provider.accountId</code>)</td>
+<td>🔴 높음</td>
+<td>Codex 와 동일</td>
+</tr>
+<tr>
+<td>Claude Code</td>
+<td>macOS Keychain (Anthropic OAuth)</td>
+<td>🟢 완화됨 — identity-aware adapter (<code>subscriptionType</code> + macOS keychain account)</td>
+<td><code>mat exec</code> 또는 <code>mat freshness claude</code> (PR-H adapter, high-confidence rotation 분류)</td>
+</tr>
+<tr>
+<td>Goose</td>
+<td>macOS Keychain + <code>secrets.yaml</code> / <code>config.yaml</code> (provider 라우팅)</td>
+<td>🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account)</td>
+<td><code>mat freshness goose</code> 가 source 별 결과 보고, identity-aware</td>
+</tr>
+<tr>
+<td>Aider / Kimi / Qwen / Crush</td>
+<td>정적 API key</td>
+<td>🟢 없음</td>
+<td>일반 swap 으로 충분 — 단 환경변수 / project-local 설정이 mat 의 swap 을 우회할 수 있음 (아래 &quot;플랫폼 지원&quot; 참고)</td>
+</tr>
+</tbody></table>
+<p><code>mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]</code> 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = <code>stale</code> 감지 (identity 변경 또는 프로필 부재). 장기 실행 세션은 <code>mat exec</code> 사용을 권장 — 명령 종료 후 자동으로 이전 프로필 복원. 단 mat 자체가 <code>SIGKILL</code> 을 받으면 복원이 일어나지 않는다 (보안 섹션 참조).</p>
+<blockquote>
+<p><strong>OAuth rotation 대응 (PR-G/PR-I*/PR-H 모두 머지):</strong> TUI 의 swap 흐름이 swap 직전 라이브 freshness 를 점검하고 차이 감지 시 <strong>재캡처 / 폐기 / 취소</strong> 3-옵션 dialog 를 표시한다 (PR-G). 재캡처는 라이브를 <code>snapshotLiveToProfile</code> 로 활성 프로필에 저장 후 swap, 폐기는 자동 snapshot 을 건너뛰고 swap (데이터 손실), 취소는 swap 미실행. <code>mat exec</code> 는 종료 시 라이브를 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원 (PR-I*) — <code>SIGINT</code>/<code>SIGTERM</code>/<code>SIGHUP</code> 까지 보호 (<code>SIGKILL</code> 은 OS 보장상 trap 불가 → 다음 <code>mat</code> 호출의 stale-recovery 가 사용자에게 안내). Claude/Goose identity-aware adapter (PR-H) 가 <code>high</code>/<code>medium</code> confidence 로 rotation vs 다른 계정을 분류 — 안전한 swap 에서 <code>[low conf]</code> dialog noise 제거.</p>
+</blockquote>
+<h3 id="플랫폼-지원">플랫폼 지원</h3>
+<table>
+<thead>
+<tr>
+<th>CLI</th>
+<th>macOS</th>
+<th>Linux</th>
+<th>Windows</th>
+<th>Override / 알려진 한계</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Claude Code</td>
+<td>✅</td>
+<td>❌</td>
+<td>❌</td>
+<td>macOS Keychain 전용 — Linux/Windows credential-store 백엔드 미지원</td>
+</tr>
+<tr>
+<td>Codex CLI</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td><code>~/.codex/auth.json</code> (cross-platform file path)</td>
+</tr>
+<tr>
+<td>Gemini / Antigravity</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td><code>~/.gemini/oauth_creds.json</code> + <code>google_accounts.json</code></td>
+</tr>
+<tr>
+<td>Aider</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td><strong>env override</strong>: <code>OPENAI_API_KEY</code> / <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_BASE</code> 등이 <code>~/.aider.conf.yml</code> 을 우회 — mat 는 shell env 를 swap 할 수 없음</td>
+</tr>
+<tr>
+<td>Kimi CLI</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td><strong>env override</strong>: <code>MOONSHOT_API_KEY</code> 등이 <code>~/.kimi/config.toml</code> 을 우회</td>
+</tr>
+<tr>
+<td>Qwen Code CLI</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td>자격증명 우선순위: <strong>shell env &gt; <code>~/.qwen/.env</code> &gt; <code>~/.qwen/settings.json</code></strong>. mat 는 두 파일 모두 swap 하지만 shell env 는 영향 없음</td>
+</tr>
+<tr>
+<td>Crush</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td><strong>project-local override</strong>: CWD 의 <code>./.crush.json</code> / <code>./crush.json</code> 이 <code>~/.config/crush/*</code> 보다 우선; <code>CRUSH_GLOBAL_*</code> env 도 우선</td>
+</tr>
+<tr>
+<td>OpenCode</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td>OS 공통 XDG 경로 (<code>~/.local/share/opencode/auth.json</code>, 모든 OS 에서 <code>xdg-basedir</code> 사용)</td>
+</tr>
+<tr>
+<td>Goose</td>
+<td>✅</td>
+<td>✅ os-keyring</td>
+<td>❌</td>
+<td>macOS Keychain / Linux Secret Service (<code>goose</code>/<code>secrets</code>, <code>secret-tool</code> 경유) + <code>~/.config/goose/*.yaml</code>. Linux 는 기본적으로 os-keyring 을 포함하며 <code>secret-tool</code> (libsecret-tools) + keyring daemon 이 필요 — 미설치/daemon-down 시 stale YAML 로 조용히 swap 하지 않고 <strong>명시 에러</strong> (Goose 는 libsecret <em>라이브러리</em> 로 keyring 에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않음). file backend 면 <code>GOOSE_DISABLE_KEYRING=1</code> 설정 시 mat 가 os-keyring 을 생략하고 <code>secrets.yaml</code> 을 swap. Windows Credential Manager 미지원</td>
+</tr>
+</tbody></table>
+<p>&quot;⚠️ 미검증&quot; = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.</p>
+<h3 id="전환-흐름-데이터-손실-없음">전환 흐름 (데이터 손실 없음)</h3>
+<ol start="0">
+<li><strong>swap 전 freshness 점검</strong> — 라이브 자격증명이 활성 프로필 저장본과 drift (OAuth refresh 토큰 회전 등) 가 감지되면, 아래 1~3 단계 전에 <strong>재캡처 / 폐기 / 취소</strong> dialog 가 먼저 표시된다. CLI 별 분류 신뢰도는 위의 &quot;OAuth Rotation 안전성 매트릭스&quot; 참고.</li>
+<li>현재 라이브 자격증명을 <strong>현재 활성 프로필</strong>에 자동 스냅샷</li>
+<li>선택한 프로필의 저장된 자격증명을 라이브 위치로 <strong>원자적으로 복원</strong></li>
+<li>활성 프로필 포인터 업데이트</li>
+</ol>
+<p>multi-source CLI (예: Gemini 의 두 파일) 의 경우 <strong>부분 실패 롤백</strong>도 적용된다 — 한 source 복원에 실패하면 이미 복원된 source 를 라이브 백업으로 되돌려 라이브가 절반만 새 프로필인 상태를 막는다.</p>
+<hr>
+<h2 id="설치">설치</h2>
+<h3 id="homebrew-macos-권장">Homebrew (macOS 권장)</h3>
+<pre><code class="language-bash">brew tap ictechgy/mat
+brew install mat
+</code></pre>
+<h3 id="npm">npm</h3>
+<pre><code class="language-bash">npm install -g multi-account-tool
+</code></pre>
+<h3 id="소스에서-빌드">소스에서 빌드</h3>
+<pre><code class="language-bash">git clone https://github.com/ictechgy/multi-account-tool.git
+cd multi-account-tool
+npm install
+npm run build
+npm link
+</code></pre>
+<h3 id="설치-확인">설치 확인</h3>
+<pre><code class="language-bash">mat --version                  # 설치된 semver 출력
+mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat freshness`)
+node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke test (CLI 정의 로드 + path resolve 확인, 자격증명 미수정)
+</code></pre>
+<p>smoke test 는 read-only 라 활성 mat 프로필이 있는 환경에서도 안전하다.</p>
+<hr>
+<h2 id="사용">사용</h2>
+<pre><code class="language-bash">mat              # TUI 실행
+mat --version    # 설치된 버전 출력
+mat --help       # 짧은 사용법 (subcommand: exec / freshness)
+</code></pre>
+<p>TUI 가 열리면 <strong>CLI 선택 → 프로필 선택 → 전환</strong>.</p>
+<h3 id="첫-실행">첫 실행</h3>
+<p>이미 로그인된 자격증명이 감지되면 <code>default</code> 프로필로 가져올지 묻는다. 한 번 답하면 다음 실행부터 자동으로 다시 묻지 않는다 (수동 캡처는 언제나 가능).</p>
+<h3 id="새-계정-추가하기">새 계정 추가하기</h3>
+<ol>
+<li><code>mat</code> → CLI 선택 → <code>a</code> (새 프로필) → 이름 입력 (예: <code>work</code>)</li>
+<li>새 프로필 위에서 <code>Enter</code> 눌러 활성화. 만약 라이브 자격증명이 <strong>활성 프로필</strong>의 저장본과 drift (OAuth refresh 토큰 회전 등) 한 상태면 swap 직전에 <strong>재캡처 / 폐기 / 취소</strong> dialog 가 표시된다 — 위의 전환 흐름 + OAuth Rotation 안전성 매트릭스 참고.</li>
+<li>별도 터미널에서 해당 CLI 의 로그인 명령 실행 (<code>claude</code>, <code>codex</code>, <code>gemini</code> 등). 라이브 자격증명이 새 계정 것으로 덮어쓰인다.</li>
+<li><code>mat</code> 으로 돌아와 같은 프로필 위에서 <code>c</code> (캡처) → 새 라이브 자격증명이 프로필에 저장됨</li>
+<li>이후로는 <code>Enter</code> 만으로 프로필 사이를 자유롭게 전환</li>
+</ol>
+<h3 id="키바인딩">키바인딩</h3>
+<table>
+<thead>
+<tr>
+<th>화면</th>
+<th>키</th>
+<th>동작</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>어디서나</td>
+<td><code>q</code> / <code>Ctrl+C</code></td>
+<td>종료</td>
+</tr>
+<tr>
+<td>어디서나</td>
+<td><code>Esc</code></td>
+<td>뒤로</td>
+</tr>
+<tr>
+<td>홈 / 프로필</td>
+<td><code>↑ ↓</code></td>
+<td>이동</td>
+</tr>
+<tr>
+<td>홈 / 프로필</td>
+<td><code>Enter</code></td>
+<td>선택 / 전환</td>
+</tr>
+<tr>
+<td>프로필</td>
+<td><code>a</code></td>
+<td>새 프로필 추가</td>
+</tr>
+<tr>
+<td>프로필</td>
+<td><code>c</code></td>
+<td>포커스된 프로필에 현재 라이브 자격증명 캡처</td>
+</tr>
+<tr>
+<td>프로필</td>
+<td><code>r</code></td>
+<td>이름 변경</td>
+</tr>
+<tr>
+<td>프로필</td>
+<td><code>d</code></td>
+<td>삭제</td>
+</tr>
+<tr>
+<td>Freshness dialog</td>
+<td><code>r</code> / <code>Enter</code></td>
+<td>재캡처 (swap 전에 라이브를 활성 프로필에 저장)</td>
+</tr>
+<tr>
+<td>Freshness dialog</td>
+<td><code>d</code></td>
+<td>폐기 (자동 snapshot 건너뜀 — 데이터 손실)</td>
+</tr>
+<tr>
+<td>Freshness dialog</td>
+<td><code>c</code> / <code>Esc</code></td>
+<td>swap 취소</td>
+</tr>
+</tbody></table>
+<h3 id="mat-exec-한-명령에-한해-프로필-swap"><code>mat exec</code> — 한 명령에 한해 프로필 swap</h3>
+<pre><code class="language-bash">mat exec &lt;cli&gt; &lt;profile&gt; -- &lt;cmd...&gt;
+</code></pre>
+<p><code>&lt;profile&gt;</code> 로 일시 swap → <code>&lt;cmd&gt;</code> 실행 → 명령 종료 시 원래 활성 프로필로 자동 원복.</p>
+<pre><code class="language-bash"># 한 번의 Claude 세션만 work 프로필로 실행, 종료 후 personal 로 원복
+mat exec claude work -- claude
+
+# lterm 과 조합 (선택 — `npm install -g @ictechgy/lterm` 으로 별도 설치 필요)
+lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
+</code></pre>
+<p>동작:</p>
+<ul>
+<li><code>&lt;cli&gt;</code> 에 이미 활성 프로필이 설정되어 있어야 한다 (먼저 TUI 로 라이브 자격증명을 캡처).</li>
+<li>CLI 별 lockfile (<code>~/.multi-account-tool/locks/&lt;cli&gt;.lock</code>) 로 동일 CLI 의 <code>mat exec</code> 가 동시에 race 하지 않도록 직렬화. 비정상 종료로 남은 stale lock 은 자동 복구.</li>
+<li>자식에 <code>SIGINT</code> / <code>SIGTERM</code> / <code>SIGHUP</code> 을 전달하고, 자식의 종료 코드/시그널을 그대로 반영한다.</li>
+<li><strong>종료 시 라이브 자격증명을 <code>&lt;profile&gt;</code> 으로 재캡처한 뒤 원래 활성 프로필로 원복</strong>한다 (<code>&lt;cmd&gt;</code> 가 OAuth refresh rotation 등으로 토큰을 갱신했을 가능성 보존). 재캡처는 기본 10s timeout (<code>MAT_EXEC_RECAPTURE_TIMEOUT_MS</code> env override) 으로 keychain prompt hang 차단.</li>
+<li>원복은 <code>finally</code> 블록에서 일어나 정상 종료, 에러, trap 가능 시그널 모두에서 실행된다. <strong>단 <code>mat</code> 자체가 <code>SIGKILL</code> (또는 <code>SIGSEGV</code> / <code>SIGBUS</code> 등 trap 불가 시그널) 을 받으면 원복은 일어나지 않는다</strong> — 다음 <code>mat</code> 실행 시 stale lock 자동 회수 + 사용자에게 &quot;라이브 자격증명이 이전 활성 프로필이 아닌 <code>&lt;profile&gt;</code> 의 것일 수 있음&quot; stderr 안내 (정책 B: warn + drop).</li>
+</ul>
+<p>이는 <strong>시간 격리</strong>이지 세션 격리가 아니다. 자식이 실행되는 동안 OS 전역 자격증명은 <code>&lt;profile&gt;</code> 의 것. 두 터미널에서 서로 다른 <code>mat exec</code> 를 동시에 띄우면 lock 으로 직렬화되며, 진짜 세션별 격리는 로드맵.</p>
+<p>종료 코드:</p>
+<table>
+<thead>
+<tr>
+<th>코드</th>
+<th>의미</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>0</code></td>
+<td>자식 정상 종료 0 (원복 성공)</td>
+</tr>
+<tr>
+<td><code>2</code></td>
+<td>사용 오류 (<code>UsageError</code> — spawn 전 검증 실패)</td>
+</tr>
+<tr>
+<td><code>74</code></td>
+<td><code>mat</code> 자체의 원복 실패 (<code>restoreError</code>) — 자식 결과는 stdout/stderr 로 출력됨</td>
+</tr>
+<tr>
+<td><code>75</code></td>
+<td>다른 <code>mat exec</code> 가 CLI lock 보유 중 (<code>LockHeldError</code> — spawn 전)</td>
+</tr>
+<tr>
+<td><code>128+N</code></td>
+<td>자식이 시그널 <code>N</code> 으로 종료 (예: SIGINT 면 <code>130</code>)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>자식이 종료 코드 <code>1</code> 로 끝났거나, <code>mat</code> 자체가 spawn 전후로 예상치 못한 에러</td>
+</tr>
+<tr>
+<td><em>그 외 (예: <code>3</code>, <code>42</code>)</em></td>
+<td>자식의 non-zero 종료 코드를 그대로 propagate</td>
+</tr>
+</tbody></table>
+<p>참고: <code>2</code> / <code>74</code> / <code>75</code> 는 <code>mat</code> 자체의 에러 모델로 예약 (spawn 전 검증 / lock 경합 / spawn 후 원복 실패). 그 외의 <code>128</code> 미만 non-zero 코드는 모두 자식의 종료 코드를 투명하게 그대로 전달. <code>74</code> 가 <code>mat</code> 의 원복 실패인지 자식의 exit 74 인지 헷갈리면 stderr 의 <code>restoreError</code> 로그를 확인.</p>
+<h3 id="mat-session-세션별-격리-터미널마다-다른-계정-동시에"><code>mat session</code> — 세션별 격리 (터미널마다 다른 계정, 동시에)</h3>
+<pre><code class="language-bash">mat session start &lt;cli&gt; &lt;profile&gt;   # &lt;profile&gt; 로 격리된 subshell 실행
+mat session list                    # 실행 중 / orphan 세션 목록
+mat session stop &lt;id&gt;               # 세션 종료 또는 orphan 정리
+</code></pre>
+<p><code>mat exec</code> (lock 으로 직렬화되는 시간 격리)와 달리 <code>mat session</code> 은 <strong>진짜 동시 격리</strong> — 두 터미널이 같은 CLI 의 <em>다른</em> 계정을 동시에 쓸 수 있다:</p>
+<pre><code class="language-bash"># 터미널 A
+mat session start codex work        # CODEX_HOME 이 격리 디렉토리 → &quot;work&quot; 계정
+
+# 터미널 B (동시)
+mat session start codex personal    # 독립 격리 디렉토리 → &quot;personal&quot; 계정
+</code></pre>
+<p><strong>메커니즘 — env 주입 + copy-isolate.</strong> <code>mat session start</code> 는 <code>$SHELL</code> 을 spawn 하되 CLI 의 config-dir env (예: <code>CODEX_HOME</code>) 를 <code>~/.multi-account-tool/sessions/&lt;id&gt;/</code> 아래 세션 전용 디렉토리로 가리킨다. 프로필 자격증명을 그 디렉토리에 <strong>복사</strong>(0600)하므로 subshell 안의 CLI 는 격리된 계정을 읽는다. 종료 시 (OAuth rotation 됐을 수 있는) 자격증명을 프로필로 <strong>재캡처</strong>하고 세션 디렉토리를 삭제한다. OS 전역 자격증명과 <code>mat exec</code> lock 은 건드리지 않아 세션이 서로 간섭 없이 동시 실행된다.</p>
+<p><strong>지원 CLI</strong> (자격증명 디렉토리를 env 로 재배치할 수 있는 것):</p>
+<table>
+<thead>
+<tr>
+<th>CLI</th>
+<th>env var</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Codex</td>
+<td><code>CODEX_HOME</code></td>
+</tr>
+<tr>
+<td>Qwen Code</td>
+<td><code>QWEN_HOME</code></td>
+</tr>
+<tr>
+<td>Kimi</td>
+<td><code>KIMI_SHARE_DIR</code></td>
+</tr>
+<tr>
+<td>Crush</td>
+<td><code>CRUSH_GLOBAL_CONFIG</code> + <code>CRUSH_GLOBAL_DATA</code></td>
+</tr>
+</tbody></table>
+<p><strong>미지원</strong> (자격증명 재배치 env 없음; <code>mat session start</code> 가 명시 에러): <code>gemini</code> (env override 없음 — <a href="https://github.com/google-gemini/gemini-cli/issues/2815">gemini-cli#2815</a>), <code>claude</code> (macOS Keychain service name env override 불가), <code>aider</code> (자격증명이 파일 아닌 provider env), <code>opencode</code>, <code>goose</code>, 그리고 사용자 <strong>플러그인</strong> CLI (1차는 빌트인 전용).</p>
+<p>종료 코드는 <code>mat exec</code> 와 동형: <code>0</code> 성공, <code>2</code> 사용법 에러, <code>74</code> 재캡처 실패, <code>128+N</code> 자식 시그널 <code>N</code> (self-raise), 그 외 자식 종료 코드 전달.</p>
+<p><strong>한계 (사용 전 필독):</strong></p>
+<ul>
+<li><strong>자격증명만 격리, 비-secret config 는 공유 안 됨 (1차).</strong> 자격증명 파일 외(모델 설정·history·sessions·캐시)는 세션에 materialize 하지 않는다 — CLI 는 기본값을 쓰고, 세션 안에서 생성한 것은 <strong>종료 시 폐기</strong>(자격증명만 재캡처). 의도된 fail-closed 기본값. <code>mat exec</code> 는 실제 config 디렉토리를 써서 history 가 보존되는 것과 대비: <strong>장기 단일 계정 작업은 <code>mat exec</code>, 동시 다계정은 <code>mat session</code></strong> 을 쓰라. (Codex <code>config.toml</code> 같은 read-mostly config 공유 allow-list 메커니즘은 구현돼 있으나 내용 검증 전까지 비활성 — follow-up.)</li>
+<li><strong><code>SIGKILL</code></strong> 은 세션 디렉토리를 orphan 으로 남긴다 (trap 불가, <code>mat exec</code> 와 동일) — 다음 <code>mat session</code> 호출이 회수 (소유 프로세스 사망 — 프로세스 시작서명으로 <strong>PID 재사용까지 식별</strong> — <strong>그리고</strong> 세션 시작시각·디렉토리 mtime 둘 다 1h 초과 시).</li>
+<li><strong>부모 신뢰 전제:</strong> 격리는 <code>~/.multi-account-tool</code> 과 그 부모가 신뢰됨을 전제 — <code>~/.multi-account-tool</code> 자체가 symlink 로 바꿔치기된 경우는 범위 밖.</li>
+<li><strong>같은 프로필 동시 2세션:</strong> 재캡처가 직렬화되지 않는다 — 단일 자격증명 CLI 는 last-writer-wins, 멀티 자격증명 CLI(Qwen/Crush)는 파일별로 서로 다른 세션의 것이 섞일 수 있다. 둘 다 항상 <strong>같은 계정</strong>의 유효한 자격증명이며(wrong-account 아님·손상 아님) 다음 사용 시 자가 치유된다. 터미널마다 다른 프로필 사용 권장 — 프로필 단위 lock 은 follow-up.</li>
+<li><strong><code>mat session stop</code></strong> 은 소유 프로세스의 신원(PID + 시작서명)을 확인할 수 있을 때만 <code>SIGTERM</code> 을 보낸다. 확인 불가 시(드묾 — 예: <code>ps</code> 미사용 가능) PID 를 재사용한 무관 프로세스를 죽일 위험을 피해 세션을 건드리지 않고 재시도를 안내한다.</li>
+</ul>
+<h3 id="mat-freshness-swap-전-안전성-점검"><code>mat freshness</code> — swap 전 안전성 점검</h3>
+<pre><code class="language-bash">mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]
+</code></pre>
+<p>라이브 자격증명과 활성 (또는 지정) 프로필 저장본을 비교해 swap 전에 drift 를 보고. CI chain (<code>mat freshness &amp;&amp; deploy.sh</code>) 으로 wrong-profile 복원으로 인한 OAuth <code>refresh_token</code> revoke 사고 사전 차단.</p>
+<pre><code class="language-bash"># 긴 Claude 세션 시작 전 빠른 점검
+mat freshness claude
+
+# 특정 프로필 검사 (JSON 출력, CI 친화)
+mat freshness codex --profile work --json
+</code></pre>
+<p>각 source 는 4-state 로 분류 — <code>fresh</code> (byte 동일), <code>rotated</code> (토큰 회전됐지만 identity 유지, swap 안전), <code>stale</code> (identity 변경 — 다른 계정, <strong>swap 시 revoke 위험</strong>), <code>inflight</code> (multi-source CLI 의 부분 갱신 race — 잠시 후 재시도).</p>
+<p>종료 코드:</p>
+<table>
+<thead>
+<tr>
+<th>코드</th>
+<th>의미</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>0</code></td>
+<td>모든 source 가 <code>fresh</code> 또는 high-confidence <code>rotated</code> — swap 안전</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>하나 이상의 source 가 <code>stale</code>, low-confidence <code>rotated</code>, <code>inflight</code> — <strong>swap 전 조치 필요</strong></td>
+</tr>
+<tr>
+<td><code>2</code></td>
+<td>사용 오류</td>
+</tr>
+<tr>
+<td><code>74</code></td>
+<td>내부 검사 실패 (source 읽기 에러 등)</td>
+</tr>
+</tbody></table>
+<p>CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 참고.</p>
+<hr>
+<h2 id="데이터-저장-위치">데이터 저장 위치</h2>
+<pre><code>~/.multi-account-tool/
+├── config.json                   # 활성 프로필 포인터 + 플래그
+├── cli-defs/                     # 사용자 플러그인 (선택) — &quot;새 CLI 추가하기&quot; 참고
+│   └── &lt;id&gt;.json
+├── locks/                        # CLI 별 `mat exec` lock (stale 자동 회수)
+│   └── &lt;cli&gt;.lock/
+└── profiles/
+    ├── claude/                   # credentials.json (macOS Keychain 백업, 평문 JSON)
+    │   ├── personal/
+    │   │   ├── credentials.json
+    │   │   └── meta.json
+    │   └── work/...
+    ├── codex/                    # auth.json
+    ├── gemini/                   # oauth_creds.json + google_accounts.json
+    ├── aider/                    # aider.yml
+    ├── kimi/                     # config.toml
+    ├── qwen/                     # qwen-settings.json + qwen.env (prefix 적용된 saveAs)
+    ├── crush/                    # crush-config.json + crush-data.json (config + data 레이어)
+    ├── opencode/                 # auth.json (OS 공통 XDG 경로)
+    └── goose/                    # goose-keyring.json (macOS Keychain / Linux Secret Service) + goose-secrets.yaml + goose-config.yaml
+</code></pre>
+<p>파일은 <code>0600</code>, 디렉토리는 <code>0700</code> 권한으로 생성된다.</p>
+<hr>
+<h2 id="보안">보안</h2>
+<h3 id="수용한-trade-off-의도된-한계">수용한 trade-off (의도된 한계)</h3>
+<ul>
+<li><p><strong>Keychain ACL 완화</strong> — Keychain 기반 source (Claude Code credentials / Goose <code>goose</code>/<code>secrets</code> entry 등) 는 보통 특정 바이너리만 접근하도록 Keychain ACL 이 걸려 있다. <code>mat</code> 은 swap 시 <code>security add-generic-password -A</code> 로 항목을 다시 만들어 같은 사용자의 모든 프로세스가 접근할 수 있게 한다 — 안 그러면 swap 후 upstream CLI 가 자기 토큰을 읽지 못한다. 같은 UID 의 프로세스 (악의적 <code>npm postinstall</code> 등) 도 토큰을 읽을 수 있게 되는 점은 알고 있어야 한다. 추후 릴리스에서 opt-in restrictive 모드 (<code>-T</code> 화이트리스트) 도입 예정.</p>
+</li>
+<li><p><strong>OAuth 토큰 평문 백업</strong> — <code>~/.multi-account-tool/profiles/</code> 아래 OAuth 토큰이 평문 JSON 으로 저장된다. 파일 <code>0600</code>, 디렉토리 <code>0700</code> 권한이지만 디스크 백업/스냅샷에는 포함될 수 있다. <strong>Time Machine / iCloud / 클라우드 동기화 폴더에서 제외하길 권장</strong>:</p>
+<pre><code class="language-bash">xattr -w com.apple.metadata:com_apple_backup_excludeItem true ~/.multi-account-tool
+</code></pre>
+</li>
+<li><p><strong>명령행 인자 노출</strong> — <code>security add-generic-password -w &lt;value&gt;</code> 가 평문 토큰을 <code>argv</code> 로 받는다 (<code>security</code> CLI 자체 한계). <code>ps -ef</code> / BSM audit / EDR 로그에 일시적으로 노출된다. <strong>audit / EDR 가 활성화된 기업 환경에서는 사용을 권하지 않는다.</strong></p>
+</li>
+</ul>
+<h3 id="기본-보호-장치">기본 보호 장치</h3>
+<ul>
+<li>모든 외부 명령은 <code>spawn(argv)</code> 만 사용 — 셸 미경유, injection 차단</li>
+<li><code>security</code> 는 절대경로 <code>/usr/bin/security</code> 만 호출 (PATH shim 공격 방지)</li>
+<li>모든 파일 쓰기는 단일 atomic 헬퍼 (<code>.tmp → rename</code>, <code>O_EXCL + O_NOFOLLOW</code>, <code>0600</code>)</li>
+<li>config 변경은 <code>mutateConfig</code> 헬퍼로 직렬화 (in-process race 차단)</li>
+<li>프로필 이름: <code>[a-zA-Z0-9가-힣_.-]{1,40}</code> + NFC 정규화 + <code>.</code> / <code>..</code> / <code>/</code> / <code>\</code> / NUL 명시 차단</li>
+<li>Keychain swap: 백업 → 정확 acct 매칭 delete → add. add 실패 시 자동 롤백, 롤백도 실패하면 에러 메시지에 함께 노출.</li>
+<li>multi-source CLI 복원은 부분 실패에 안전 (한 source 실패 시 이미 복원된 source 를 라이브 백업으로 되돌림)</li>
+<li>에러 메시지의 JWT 및 50자+ base64-like 시퀀스는 redact 처리</li>
+<li>의존성: <code>npm audit</code> clean</li>
+</ul>
+<h3 id="사용을-권하지-않는-환경">사용을 권하지 않는 환경</h3>
+<ul>
+<li>공용 / 공유 워크스테이션</li>
+<li>다중 사용자 호스트</li>
+<li>관리형 / audit·EDR 활성 기업 기기</li>
+<li>클라우드 동기화 폴더 안의 home 디렉토리</li>
+</ul>
+<hr>
+<h2 id="새-cli-추가하기">새 CLI 추가하기</h2>
+<p>두 가지 방법.</p>
+<h3 id="1-사용자-플러그인-코드-변경-불필요-개인-사용-권장">1. 사용자 플러그인 — 코드 변경 불필요 (개인 사용 권장)</h3>
+<p><code>~/.multi-account-tool/cli-defs/&lt;id&gt;.json</code> 파일을 만든다. 임의 CLI 추가용 템플릿 예:</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;my-cli&quot;,
+  &quot;name&quot;: &quot;My CLI&quot;,
+  &quot;sources&quot;: [
+    { &quot;type&quot;: &quot;file&quot;, &quot;path&quot;: &quot;~/.config/my-cli/credentials.json&quot;, &quot;saveAs&quot;: &quot;credentials.json&quot; }
+  ]
+}
+</code></pre>
+<p>mat 은 시작 시 해당 디렉토리의 모든 <code>*.json</code> 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (<code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>aider</code>, <code>kimi</code>, <code>qwen</code>, <code>crush</code>, <code>opencode</code>, <code>goose</code>) id 와 충돌하면 plugin 이 무시된다 (보안).</p>
+<p>필드 규칙:</p>
+<ul>
+<li><code>id</code>: 영문 시작 + 영숫자/<code>_</code>/<code>-</code>, 1~32자 (빌트인 id 와 중복 불가).</li>
+<li><code>name</code>: 비어있지 않은 임의 문자열 (표시용).</li>
+<li><code>sources[].type</code>: <code>&#39;file&#39;</code> 또는 <code>&#39;keychain&#39;</code> (keychain 은 macOS 전용).</li>
+<li><code>sources[].saveAs</code>: ASCII 파일명, 1~64자 (<code>[a-zA-Z0-9._-]</code>).</li>
+<li><code>sources[].path</code> (file): 비어있지 않은 문자열 (<code>~/</code> 자동 확장).</li>
+<li><code>sources[].service</code> (keychain): 비어있지 않은 Keychain service 이름.</li>
+<li><code>sources[].account</code> (keychain, <strong>선택</strong>): <code>-s &lt;service&gt; -a &lt;account&gt;</code> 항목 하나로 <code>mat</code> 의 keychain 조작 scope 를 제한. <strong>generic / multi-account service</strong> 에 필수 (예: Goose 의 <code>goose</code>/<code>secrets</code>, 동일 service 의 여러 entry 가진 CLI) — 미지정 시 <code>mat</code> 이 잘못된 account 잡을 위험. 검증: 비어있지 않은 문자열, NUL 차단. 단일-account service 는 생략 가능 (기존 동작 유지).</li>
+</ul>
+<h3 id="2-빌트인-추가-mat-repo-pr-필요">2. 빌트인 추가 — mat repo PR 필요</h3>
+<p><code>src/core/cli-defs.ts</code> 에 항목 추가:</p>
+<pre><code class="language-ts">{
+  id: &#39;foo&#39;,
+  name: &#39;Foo CLI&#39;,
+  sources: [
+    { type: &#39;file&#39;, path: &#39;~/.foo/credentials.json&#39;, saveAs: &#39;credentials.json&#39; }
+  ]
+}
+</code></pre>
+<p>mat 과 함께 배포되어야 할 커뮤니티 CLI 용. PR 환영.</p>
+<hr>
+<h2 id="변경-이력">변경 이력</h2>
+<p>릴리스 이력과 주요 변경 사항은 <a href="https://github.com/ictechgy/multi-account-tool/blob/main/CHANGELOG.md">CHANGELOG.md</a> 참고 (Keep a Changelog 형식, Semantic Versioning).</p>
+<h2 id="로드맵">로드맵</h2>
+<p>v0.4+ 계획은 <a href="https://github.com/ictechgy/multi-account-tool/blob/main/ROADMAP.md">ROADMAP.md</a> 참고:</p>
+<ul>
+<li><del>커뮤니티 CLI 정의를 위한 플러그인 메커니즘</del> ✅ (v0.3)</li>
+<li><del>Aider 빌트인 지원</del> ✅ (v0.3) + <del>Kimi / Qwen / Crush / OpenCode</del> ✅ (v0.3.x)</li>
+<li><del>세션별 자격증명 격리</del> ✅ (v0.4.x — <code>mat session start/list/stop</code>: env 주입 + copy-isolate, 동시 다계정; 아래 <code>lterm</code> shim 통합은 아직 미구현)</li>
+<li>빌트인 CLI 추가 확장 — <del>Goose</del> ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service 는 <code>os-keyring</code> source type 으로 추가됨). Copilot / Amp 는 보류 — Copilot 은 multi-account <code>/user switch</code> application-state swap 이 필요하고, Windows Credential Manager 지원도 아직 미해결 (별도 후속). Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).</li>
+<li><strong>Goose Linux</strong>: Linux 에서 mat 는 Goose 의 기본 <code>secret-service</code> 백엔드 (libsecret, GNOME Keyring/KWallet) 를 <code>os-keyring</code> source (<code>secret-tool</code> CLI, <code>goose</code>/<code>secrets</code>) 로 swap 하고 <code>~/.config/goose/*.yaml</code> 도 함께 swap 한다. 설정별 동작:<ul>
+<li><strong>기본 (keyring)</strong>: os-keyring source 가 포함되며 <code>secret-tool</code> (libsecret-tools) + keyring daemon 이 필요하다. 미설치이거나 daemon 이 down/접근거부면 <strong>명시 에러</strong> — yaml 로 조용히 fallback 하지 <em>않는다</em>. Goose 는 keyring 에 libsecret <em>라이브러리</em> (<code>secret-tool</code> CLI 와 별도 패키지) 로 접근하므로, CLI 부재가 keyring 미사용을 증명하지 못한다. 활성 keyring 사용자에게 <code>secrets.yaml</code> 을 조용히 swap 하면 wrong-account 가 된다. (도구 부재가 아니라) keyring 항목 자체의 부재는 정상 &quot;not found&quot; 로 yaml 로 넘어간다.</li>
+<li><strong>file backend</strong>: <code>GOOSE_DISABLE_KEYRING</code> 설정. mat 은 이 env 가 <strong>존재하면</strong>(값 무관 — <code>0</code>/<code>false</code>/빈 문자열 포함) file backend 로 본다 — Goose 자신의 <code>env::var(...).is_ok()</code> 판정과 동일. 그러면 keyring source(Linux=os-keyring, macOS=Keychain)를 <strong>생략</strong> 하고 <code>secrets.yaml</code> + <code>config.yaml</code> 만 swap 한다. <code>config.yaml</code> 만의 <code>keyring: false</code> 설정은 자동 감지하지 않으니 env 도 함께 지정하라.</li>
+</ul>
+</li>
+<li><code>lterm claude --profile &lt;name&gt;</code> 같은 shim wrapper</li>
+</ul>
+<hr>
+<h2 id="라이센스">라이센스</h2>
+<p>MIT — <a href="https://github.com/ictechgy/multi-account-tool/blob/main/LICENSE">LICENSE</a></p>
+
+</main>
+<footer class="site-footer">
+  <a href="https://github.com/ictechgy/multi-account-tool">GitHub</a> ·
+  <span>Generated from <code>README.ko.md</code> by <code>scripts/build-docs.mjs</code> — do not edit by hand.</span>
+</footer>
+</body>
+</html>

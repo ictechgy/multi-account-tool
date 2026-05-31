@@ -233,9 +233,10 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 **한계 (사용 전 필독):**
 
 - **자격증명만 격리, 비-secret config 는 공유 안 됨 (1차).** 자격증명 파일 외(모델 설정·history·sessions·캐시)는 세션에 materialize 하지 않는다 — CLI 는 기본값을 쓰고, 세션 안에서 생성한 것은 **종료 시 폐기**(자격증명만 재캡처). 의도된 fail-closed 기본값. `mat exec` 는 실제 config 디렉토리를 써서 history 가 보존되는 것과 대비: **장기 단일 계정 작업은 `mat exec`, 동시 다계정은 `mat session`** 을 쓰라. (Codex `config.toml` 같은 read-mostly config 공유 allow-list 메커니즘은 구현돼 있으나 내용 검증 전까지 비활성 — follow-up.)
-- **`SIGKILL`** 은 세션 디렉토리를 orphan 으로 남긴다 (trap 불가, `mat exec` 와 동일) — 다음 `mat session` 호출이 회수 (pid 죽음 + 1h 초과).
+- **`SIGKILL`** 은 세션 디렉토리를 orphan 으로 남긴다 (trap 불가, `mat exec` 와 동일) — 다음 `mat session` 호출이 회수 (소유 프로세스 사망 — 프로세스 시작서명으로 **PID 재사용까지 식별** — **그리고** 세션 시작시각·디렉토리 mtime 둘 다 1h 초과 시).
 - **부모 신뢰 전제:** 격리는 `~/.multi-account-tool` 과 그 부모가 신뢰됨을 전제 — `~/.multi-account-tool` 자체가 symlink 로 바꿔치기된 경우는 범위 밖.
-- **같은 프로필 동시 2세션:** 거의 동시에 종료하면 재캡처가 last-writer-wins (비결정적이나 자격증명 손상은 아님).
+- **같은 프로필 동시 2세션:** 재캡처가 직렬화되지 않는다 — 단일 자격증명 CLI 는 last-writer-wins, 멀티 자격증명 CLI(Qwen/Crush)는 파일별로 서로 다른 세션의 것이 섞일 수 있다. 둘 다 항상 **같은 계정**의 유효한 자격증명이며(wrong-account 아님·손상 아님) 다음 사용 시 자가 치유된다. 터미널마다 다른 프로필 사용 권장 — 프로필 단위 lock 은 follow-up.
+- **`mat session stop`** 은 소유 프로세스의 신원(PID + 시작서명)을 확인할 수 있을 때만 `SIGTERM` 을 보낸다. 확인 불가 시(드묾 — 예: `ps` 미사용 가능) PID 를 재사용한 무관 프로세스를 죽일 위험을 피해 세션을 건드리지 않고 재시도를 안내한다.
 
 ### `mat freshness` — swap 전 안전성 점검
 
@@ -389,7 +390,7 @@ v0.4+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 
 - ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3)
 - ~~Aider 빌트인 지원~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
-- 세션별 자격증명 격리 (`lterm` 세션마다 다른 계정)
+- ~~세션별 자격증명 격리~~ ✅ (v0.4.x — `mat session start/list/stop`: env 주입 + copy-isolate, 동시 다계정; 아래 `lterm` shim 통합은 아직 미구현)
 - 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service 는 `os-keyring` source type 으로 추가됨). Copilot / Amp 는 보류 — Copilot 은 multi-account `/user switch` application-state swap 이 필요하고, Windows Credential Manager 지원도 아직 미해결 (별도 후속). Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
 - **Goose Linux**: Linux 에서 mat 는 Goose 의 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) 로 swap 하고 `~/.config/goose/*.yaml` 도 함께 swap 한다. 설정별 동작:
   - **기본 (keyring)**: os-keyring source 가 포함되며 `secret-tool` (libsecret-tools) + keyring daemon 이 필요하다. 미설치이거나 daemon 이 down/접근거부면 **명시 에러** — yaml 로 조용히 fallback 하지 *않는다*. Goose 는 keyring 에 libsecret *라이브러리* (`secret-tool` CLI 와 별도 패키지) 로 접근하므로, CLI 부재가 keyring 미사용을 증명하지 못한다. 활성 keyring 사용자에게 `secrets.yaml` 을 조용히 swap 하면 wrong-account 가 된다. (도구 부재가 아니라) keyring 항목 자체의 부재는 정상 "not found" 로 yaml 로 넘어간다.
