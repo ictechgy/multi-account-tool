@@ -197,6 +197,46 @@ lterm send-keys "mat exec claude work -- claude" Enter
 
 참고: `2` / `74` / `75` 는 `mat` 자체의 에러 모델로 예약 (spawn 전 검증 / lock 경합 / spawn 후 원복 실패). 그 외의 `128` 미만 non-zero 코드는 모두 자식의 종료 코드를 투명하게 그대로 전달. `74` 가 `mat` 의 원복 실패인지 자식의 exit 74 인지 헷갈리면 stderr 의 `restoreError` 로그를 확인.
 
+### `mat session` — 세션별 격리 (터미널마다 다른 계정, 동시에)
+
+```bash
+mat session start <cli> <profile>   # <profile> 로 격리된 subshell 실행
+mat session list                    # 실행 중 / orphan 세션 목록
+mat session stop <id>               # 세션 종료 또는 orphan 정리
+```
+
+`mat exec` (lock 으로 직렬화되는 시간 격리)와 달리 `mat session` 은 **진짜 동시 격리** — 두 터미널이 같은 CLI 의 *다른* 계정을 동시에 쓸 수 있다:
+
+```bash
+# 터미널 A
+mat session start codex work        # CODEX_HOME 이 격리 디렉토리 → "work" 계정
+
+# 터미널 B (동시)
+mat session start codex personal    # 독립 격리 디렉토리 → "personal" 계정
+```
+
+**메커니즘 — env 주입 + copy-isolate.** `mat session start` 는 `$SHELL` 을 spawn 하되 CLI 의 config-dir env (예: `CODEX_HOME`) 를 `~/.multi-account-tool/sessions/<id>/` 아래 세션 전용 디렉토리로 가리킨다. 프로필 자격증명을 그 디렉토리에 **복사**(0600)하므로 subshell 안의 CLI 는 격리된 계정을 읽는다. 종료 시 (OAuth rotation 됐을 수 있는) 자격증명을 프로필로 **재캡처**하고 세션 디렉토리를 삭제한다. OS 전역 자격증명과 `mat exec` lock 은 건드리지 않아 세션이 서로 간섭 없이 동시 실행된다.
+
+**지원 CLI** (자격증명 디렉토리를 env 로 재배치할 수 있는 것):
+
+| CLI | env var |
+| --- | --- |
+| Codex | `CODEX_HOME` |
+| Qwen Code | `QWEN_HOME` |
+| Kimi | `KIMI_SHARE_DIR` |
+| Crush | `CRUSH_GLOBAL_CONFIG` + `CRUSH_GLOBAL_DATA` |
+
+**미지원** (자격증명 재배치 env 없음; `mat session start` 가 명시 에러): `gemini` (env override 없음 — [gemini-cli#2815](https://github.com/google-gemini/gemini-cli/issues/2815)), `claude` (macOS Keychain service name env override 불가), `aider` (자격증명이 파일 아닌 provider env), `opencode`, `goose`, 그리고 사용자 **플러그인** CLI (1차는 빌트인 전용).
+
+종료 코드는 `mat exec` 와 동형: `0` 성공, `2` 사용법 에러, `74` 재캡처 실패, `128+N` 자식 시그널 `N` (self-raise), 그 외 자식 종료 코드 전달.
+
+**한계 (사용 전 필독):**
+
+- **자격증명만 격리, 비-secret config 는 공유 안 됨 (1차).** 자격증명 파일 외(모델 설정·history·sessions·캐시)는 세션에 materialize 하지 않는다 — CLI 는 기본값을 쓰고, 세션 안에서 생성한 것은 **종료 시 폐기**(자격증명만 재캡처). 의도된 fail-closed 기본값. `mat exec` 는 실제 config 디렉토리를 써서 history 가 보존되는 것과 대비: **장기 단일 계정 작업은 `mat exec`, 동시 다계정은 `mat session`** 을 쓰라. (Codex `config.toml` 같은 read-mostly config 공유 allow-list 메커니즘은 구현돼 있으나 내용 검증 전까지 비활성 — follow-up.)
+- **`SIGKILL`** 은 세션 디렉토리를 orphan 으로 남긴다 (trap 불가, `mat exec` 와 동일) — 다음 `mat session` 호출이 회수 (pid 죽음 + 1h 초과).
+- **부모 신뢰 전제:** 격리는 `~/.multi-account-tool` 과 그 부모가 신뢰됨을 전제 — `~/.multi-account-tool` 자체가 symlink 로 바꿔치기된 경우는 범위 밖.
+- **같은 프로필 동시 2세션:** 거의 동시에 종료하면 재캡처가 last-writer-wins (비결정적이나 자격증명 손상은 아님).
+
 ### `mat freshness` — swap 전 안전성 점검
 
 ```bash
