@@ -49,6 +49,12 @@ jobs:
       - name: Build docs site
         run: npm run build:docs
 
+      # Pages 소스를 GitHub Actions(workflow)로 보장/활성화 — 기존 legacy(/docs) 설정도 전환한다.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
