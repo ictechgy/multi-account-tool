@@ -63,9 +63,11 @@ export interface SessionRoot {
 }
 // CliDef 에 `session?: SessionSpec` 추가 (optional — backward compat).
 ```
-빌트인 매핑 (allow-list 는 자격증명과 **분리된** read-mostly config 만):
+빌트인 매핑 — **1차 구현은 전 CLI `share` 생략(=∅)** (M-A, fail-closed). codex `config.toml`
+은 OAuth state 포함 여부 미검증이라 follow-up 으로 켠다 (켜기 전에 `validateShareRel` +
+materialize 양측 경로 봉쇄 검증을 이미 구현해 둠 — PR #61):
 ```ts
-codex:  { roots: [{ env: 'CODEX_HOME', base: '~/.codex', share: ['config.toml'] }] }
+codex:  { roots: [{ env: 'CODEX_HOME', base: '~/.codex' }] }     // share 후보 config.toml — follow-up
 qwen:   { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] }       // 혼재 → 공유 없음
 kimi:   { roots: [{ env: 'KIMI_SHARE_DIR', base: '~/.kimi' }] }  // 혼재 → 공유 없음
 crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
@@ -113,7 +115,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 6. subshell spawn: `process.env.SHELL || '/bin/sh'`, stdio inherit, env=`{...process.env, ...rootEnvs, MAT_SESSION=id}` (argv 배열, 셸 미경유).
 7. 자식 종료 대기(settled-guard).
 8. `finally`:
-   a. **재캡처(원자적)**: 각 root 자격증명 격리본 → 프로필 copy. **multi-cred(Qwen/Crush) 는 switcher.applyRestorePlan 패턴으로 원자화** — 재캡처 전 프로필 현재값 백업, 부분 실패 시 롤백(split 상태 방지, M1). timeout 가드(`MAT_EXEC_RECAPTURE_TIMEOUT_MS` **재사용**, 신규 env 도입 안 함).
+   a. **재캡처(2-phase commit)**: 각 root 자격증명 격리본 → 프로필. **multi-cred(Qwen/Crush) 는 ① 전 cred 새 값을 프로필 옆 staging 파일에 먼저 쓰고(라이브 무변경) ② 전부 stage 성공 후 일괄 commit(rename)** 한다. preflight 에서 프로필 현재값 백업, 부분 commit 실패는 backup 으로 역순 롤백(없던 cred 는 삭제). 단순 per-cred `Promise.race` timeout 은 hung write 를 취소하지 못해 timeout 후 late-landing 시 split 이 재발생하므로(PR #61 Codex H1), staging 으로 split 윈도우를 byte-write 전체에서 rename 으로 축소(catastrophic fs 한정). timeout 가드(`MAT_EXEC_RECAPTURE_TIMEOUT_MS` **재사용**, 신규 env 도입 안 함)는 liveness 보호용으로 각 단계에 유지.
    b. 세션 디렉토리 삭제(symlink 는 `fs.rm` 이 링크 자체만 제거 — 대상 base 무손상).
    c. forwarder 해제.
 9. 자식 종료 코드/시그널 전파.
@@ -122,8 +124,8 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 `sessionsDir()` 스캔 → 각 `session.json` → pid liveness(`isProcessAlive`, lockfile.ts **재사용**) → active/orphan 표기 테이블.
 
 ### 5.3 `mat session stop <id>` + orphan 정리
-- `stop <id>`: 살아있으면 pid SIGTERM(정상 종료 → finally 정리). 죽었으면 orphan 정리.
-- orphan: **pid 죽음 AND startedAt TTL 초과** 세션을 회수 — 재캡처 없이 삭제(라이브 불신뢰, lockfile "warn+drop" 미러). **TTL 1h**(M2; `isProcessAlive` 의 EPERM-보수 처리가 pid 재사용 1차 방어 → 긴 TTL 불필요), 회수 직전 pid 재확인 + 디렉토리 mtime 교차검증. `sessionsDir()` 하위 + id 검증 한정(광역삭제 차단).
+- `stop <id>`: **소유 mat 생존 시에만** SIGTERM(정상 종료 → finally 정리). 살아있어도 시작 서명(`pidStart`=`ps -o lstart`) 불일치 = pid 재사용 → SIGTERM 생략 + 디렉토리 정리(무관 프로세스 오kill 방지, PR #61 Codex H2). 죽었으면 orphan 정리.
+- orphan: **소유 프로세스 사망 AND startedAt TTL 초과 AND 디렉토리 mtime TTL 초과** 세션을 회수 — 재캡처 없이 삭제(라이브 불신뢰, lockfile "warn+drop" 미러). **TTL 1h**(M2). "소유 프로세스 사망" 은 pid liveness + 시작 서명까지 보아, pid 재사용으로 살아있어 보이는 stale 세션도 회수(서명 불일치 시). 서명 미기록(옛 메타)/ps 미지원이면 liveness-only 보수 폴백. `sessionsDir()` 하위 + id 검증 한정(광역삭제 차단).
 - 트리거: `list/stop/start` 진입 시 best-effort.
 
 ---

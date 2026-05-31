@@ -13,9 +13,14 @@
  *    공유(대상이 symlink 면 거부 — fail-closed). **1차 빌트인 메타는 share=∅**(M-A).
  *  - 그 외 base 엔트리: materialize 안 함(세션 내 ephemeral) — fail-closed.
  *
- * 종료 재캡처는 `switcher.applyRestorePlan` 패턴으로 **원자화**하되, timeout 을 재캡처
- * 전체-race 가 아니라 **각 write(cred 단위)** 에 걸어 hang 시에도 롤백이 우회되지 않게 한다
- * (C1 — exec.ts:276-297 구조 미러). split 상태(절반 새/절반 옛 토큰)를 방지.
+ * 종료 재캡처는 **2-phase commit(stage → commit)** 으로 split(절반 새/절반 옛 토큰)을
+ * 방지한다 (PR #61 quad-review Codex H1 정정 — 단순 per-cred `Promise.race` timeout 은
+ * hung write 를 취소하지 못해, timeout 후 그 write 가 late-landing 하면 롤백된 cred 와
+ * 섞여 split 이 재발생했다). 새 설계: ① 모든 cred 의 새 값을 프로필 경로 옆 staging 파일에
+ * 먼저 쓴다(라이브 무변경 — hang/late-landing 해도 staging 만 오염). ② 전부 stage 성공 후
+ * 일괄 commit(rename). rename 은 동일 fs 내 빠른 atomic 이라 잔여 split 윈도우가 byte-write
+ * 전체에서 rename 으로 축소된다(catastrophic fs 한정). 부분 commit 실패는 backup 으로 역순
+ * 원복(없던 cred 는 삭제). 각 단계엔 liveness 보호용 cred 단위 timeout 을 유지한다.
  *
  * 이 모듈은 부작용 코어(planSession/materializeSession/recaptureSession/removeSessionDir)
  * 를 export 한다. spawn/시그널/라이프사이클(runSession 등)은 PR-S3 에서 추가된다.
@@ -24,16 +29,26 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 import { findCliDef } from './cli-defs.js';
 import { UsageError } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
 import { isProcessAlive, sanitizeForStderr } from './lockfile.js';
-import { expandTilde, sessionDir, sessionsDir, validateSessionId } from './paths.js';
 import {
+  expandTilde,
+  sessionDir,
+  sessionsDir,
+  validateSessionId,
+  validateShareRel
+} from './paths.js';
+import {
+  commitStagedFile,
+  discardStagedFile,
   profileExists,
   readProfileFile,
+  removeProfileFile,
+  stageProfileFile,
   validateProfileName,
   writeProfileFile
 } from './profile-store.js';
@@ -113,7 +128,8 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
 
   const rootData = spec.roots.map((r) => ({
     root: r,
-    baseAbs: expandTilde(r.base).replace(/\/+$/, ''),
+    // 후행 구분자 제거 — `/` 와 `\`(Windows) 모두 처리 (Antigravity LOW).
+    baseAbs: expandTilde(r.base).replace(/[/\\]+$/, ''),
     creds: [] as SessionCred[]
   }));
 
@@ -124,20 +140,24 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
       );
     }
     const fileAbs = expandTilde(src.path);
-    const matches = rootData.filter((rd) => directChildRel(rd.baseAbs, fileAbs) !== null);
+    // rel 을 한 번만 계산 — base 직속이면 string, 아니면 null (이중 호출 제거, Antigravity LOW).
+    const matches = rootData
+      .map((rd) => ({ rd, rel: directChildRel(rd.baseAbs, fileAbs) }))
+      .filter((m): m is { rd: (typeof rootData)[number]; rel: string } => m.rel !== null);
     if (matches.length !== 1) {
       throw new UsageError(
         `source '${src.path}' 가 정확히 1개 root 의 base 직속이 아닙니다 ` +
           `(매칭 ${matches.length}개). 비직속 자격증명은 1차 미지원.`
       );
     }
-    const rd = matches[0];
-    rd.creds.push({ saveAs: src.saveAs, rel: directChildRel(rd.baseAbs, fileAbs)!, absInSession: '' });
+    const { rd, rel } = matches[0];
+    rd.creds.push({ saveAs: src.saveAs, rel, absInSession: '' });
   }
 
   const roots: MaterializedRoot[] = rootData.map((rd) => {
     const dir = join(sessionDir(id), rd.root.env);
-    const share = rd.root.share ?? [];
+    // share 항목 traversal-safe 검증 (절대/`..`/구분자 거부) — 정규화된 rel 로 통일 (Codex/Claude MED).
+    const share = (rd.root.share ?? []).map((s) => validateShareRel(s));
     const credRels = new Set(rd.creds.map((c) => c.rel));
     for (const s of share) {
       if (credRels.has(s)) {
@@ -162,11 +182,23 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
  */
 export async function materializeSession(plan: SessionPlan): Promise<void> {
   const sdir = sessionDir(plan.id);
-  if (await pathExists(sdir)) {
-    throw new Error(`세션 디렉토리가 이미 존재합니다: ${plan.id}`);
+  // 부모(sessionsDir) 보장 후, 세션 디렉토리는 **비재귀 mkdir** 로 생성 — 이미 존재하면 EEXIST
+  // 로 즉시 실패해 pathExists→mkdir 의 TOCTOU 윈도우를 제거한다 (Codex MEDIUM, lockfile
+  // tryAcquire 패턴 동형).
+  await fs.mkdir(sessionsDir(), { recursive: true, mode: 0o700 });
+  try {
+    await fs.mkdir(sdir, { mode: 0o700 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error(`세션 디렉토리가 이미 존재합니다: ${plan.id}`);
+    }
+    throw err;
   }
   try {
-    await fs.mkdir(sdir, { recursive: true, mode: 0o700 });
+    // 방금 만든 세션 디렉토리가 symlink 가 아닌지 재확인 (defense-in-depth).
+    if ((await fs.lstat(sdir)).isSymbolicLink()) {
+      throw new Error(`세션 디렉토리가 symlink 입니다: ${sdir}`);
+    }
     for (const root of plan.roots) {
       await fs.mkdir(root.dir, { recursive: true, mode: 0o700 });
       if ((await fs.lstat(root.dir)).isSymbolicLink()) {
@@ -183,21 +215,9 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
         }
         await writeFileAtomic(cred.absInSession, value);
       }
-      // (나중) allow-list symlink — 대상이 symlink/부재면 거부 (fail-closed).
+      // (나중) allow-list symlink — 양측 경로 봉쇄 검증 (스펙 §4.2).
       for (const shareRel of root.share) {
-        const target = join(root.baseAbs, shareRel);
-        let tst;
-        try {
-          tst = await fs.lstat(target);
-        } catch {
-          throw new Error(`allow-list 대상이 base 에 없습니다: ${target}`);
-        }
-        if (tst.isSymbolicLink()) {
-          throw new Error(`allow-list 대상이 symlink 입니다 (공유 거부): ${target}`);
-        }
-        const linkPath = join(root.dir, shareRel);
-        await fs.mkdir(dirname(linkPath), { recursive: true });
-        await fs.symlink(target, linkPath);
+        await materializeShareLink(root, shareRel);
       }
     }
   } catch (err) {
@@ -205,6 +225,46 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
       /* best-effort 롤백 — 원본 에러 전파 */
     });
     throw err;
+  }
+}
+
+/**
+ * allow-list 항목 1개를 base 원본으로 symlink 공유. 스펙 §4.2 양측 검증:
+ *  (b) base 측: 대상이 symlink 면 거부(fail-closed) + 대상 부모가 base realpath 하위로 봉쇄
+ *      (nested shareRel 의 symlink 컴포넌트 escape 차단).
+ *  (a) 세션 측: 링크 부모가 실제 디렉토리(symlink 아님)인지 검증 후 링크 생성.
+ * shareRel 은 planSession 의 validateShareRel 로 이미 traversal-safe.
+ */
+async function materializeShareLink(root: MaterializedRoot, shareRel: string): Promise<void> {
+  const target = join(root.baseAbs, shareRel);
+  let tst;
+  try {
+    tst = await fs.lstat(target);
+  } catch {
+    throw new Error(`allow-list 대상이 base 에 없습니다: ${target}`);
+  }
+  if (tst.isSymbolicLink()) {
+    throw new Error(`allow-list 대상이 symlink 입니다 (공유 거부): ${target}`);
+  }
+  await assertContainedRealpath(root.baseAbs, dirname(target));
+
+  const linkPath = join(root.dir, shareRel);
+  const linkParent = dirname(linkPath);
+  await fs.mkdir(linkParent, { recursive: true, mode: 0o700 });
+  const pst = await fs.lstat(linkParent);
+  if (!pst.isDirectory() || pst.isSymbolicLink()) {
+    throw new Error(`allow-list 세션측 부모가 정상 디렉토리가 아닙니다: ${linkParent}`);
+  }
+  await fs.symlink(target, linkPath);
+}
+
+/** child 의 realpath 가 base realpath 하위(또는 동일)인지 — symlink 컴포넌트 escape 차단. */
+async function assertContainedRealpath(baseAbs: string, childAbs: string): Promise<void> {
+  const baseReal = await fs.realpath(baseAbs);
+  const childReal = await fs.realpath(childAbs);
+  const rel = relative(baseReal, childReal);
+  if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
+    throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${childAbs}`);
   }
 }
 
@@ -218,11 +278,15 @@ interface RecaptureItem {
 }
 
 /**
- * 종료 재캡처 (원자적, switcher.applyRestorePlan + exec.ts:276-297 미러 — C1).
+ * 종료 재캡처 (2-phase commit — split 방지, PR #61 Codex H1 정정).
  *  - preflight: 각 cred 의 (프로필 현재값=롤백 백업) + (격리본 새 값) 수집. 격리본 부재는 skip.
- *  - 순차 적용: 각 writeProfileFile 을 **cred 단위 withTimeout** 으로 감싼다 (전체-race 금지).
- *  - 한 cred 실패/timeout → applied 역순 백업 원복(롤백 write 도 cred 단위 timeout + best-effort)
- *    후 원본 에러 throw. split(절반 새/절반 옛) 방지.
+ *  - phase 1 (stage): 각 cred 의 새 값을 프로필 경로 옆 staging 파일에 쓴다(라이브 무변경).
+ *    cred 단위 withTimeout(liveness 보호). 한 건이라도 hang/실패 → commit 이 전무하므로 라이브
+ *    프로필은 손상 0(split 0) — staging 만 best-effort 정리 후 throw. hung stage 가 late-landing
+ *    해도 staging 임시파일만 오염되고 라이브에 닿지 않는다.
+ *  - phase 2 (commit): staging → 라이브 일괄 rename(동일 fs 내 빠른 atomic). 부분 실패/timeout →
+ *    미커밋 staging 정리 + 커밋된 cred 를 backup 으로 역순 원복(없던 cred 는 삭제) 후 throw.
+ *    잔여 split 윈도우는 rename 단계로 축소(catastrophic fs 한정).
  */
 export async function recaptureSession(plan: SessionPlan): Promise<void> {
   const items: RecaptureItem[] = [];
@@ -241,31 +305,70 @@ export async function recaptureSession(plan: SessionPlan): Promise<void> {
       items.push({ saveAs: cred.saveAs, backup, newValue });
     }
   }
+  if (items.length === 0) return;
 
   const ms = getRecaptureTimeoutMs();
-  const applied: RecaptureItem[] = [];
+
+  // phase 1 — stage (라이브 무변경). hang/실패 → commit 0 → split 0.
+  const staged: { it: RecaptureItem; path: string }[] = [];
   try {
     for (const it of items) {
-      await withTimeout(
-        writeProfileFile(plan.cli, plan.profile, it.saveAs, it.newValue),
+      const path = await withTimeout(
+        stageProfileFile(plan.cli, plan.profile, it.saveAs, it.newValue),
         ms,
-        `recapture(${it.saveAs})`
+        `stage(${it.saveAs})`
       );
-      applied.push(it);
+      staged.push({ it, path });
     }
   } catch (err) {
-    // 이미 적용한 cred 들을 백업값으로 역순 원복 (split 방지). 롤백 write 도 timeout+best-effort.
-    for (const it of applied.reverse()) {
-      if (it.backup == null) continue;
+    // 완료된 staging 만 정리 가능 — hang 한 stage 는 path 를 못 받았다. 그 underlying write 가
+    // 나중에 landing 하면 프로필 디렉토리에 고아 `.recap-*`(0600) 가 남을 수 있다(catastrophic
+    // fs 한정, 라이브 무손상). 명시 saveAs 로만 읽으므로 자격증명으로 오인되지 않는 무해 litter.
+    // sweep 정리는 동시 같은-프로필 세션의 in-flight staging 을 지울 race 가 있어 도입하지 않음.
+    for (const s of staged) await discardStagedFile(s.path);
+    throw err;
+  }
+
+  // phase 2 — commit (staging → 라이브 rename). 부분 실패 → 미커밋 정리 + 커밋분 역순 원복.
+  const committed: RecaptureItem[] = [];
+  try {
+    for (const s of staged) {
+      await withTimeout(
+        commitStagedFile(s.path, plan.cli, plan.profile, s.it.saveAs),
+        ms,
+        `commit(${s.it.saveAs})`
+      );
+      committed.push(s.it);
+    }
+  } catch (err) {
+    for (const s of staged) {
+      if (!committed.includes(s.it)) await discardStagedFile(s.path);
+    }
+    for (const it of committed.reverse()) {
+      await rollbackCred(plan, it, ms);
+    }
+    throw err;
+  }
+}
+
+/** 커밋된 cred 1건 원복 — backup 이 있으면 그 값으로, 없으면(종료 전 부재) 삭제. best-effort. */
+async function rollbackCred(plan: SessionPlan, it: RecaptureItem, ms: number): Promise<void> {
+  try {
+    if (it.backup == null) {
+      await withTimeout(
+        removeProfileFile(plan.cli, plan.profile, it.saveAs),
+        ms,
+        `rollback-rm(${it.saveAs})`
+      );
+    } else {
       await withTimeout(
         writeProfileFile(plan.cli, plan.profile, it.saveAs, it.backup),
         ms,
         `rollback(${it.saveAs})`
-      ).catch(() => {
-        /* best-effort — 원본 에러를 전파 */
-      });
+      );
     }
-    throw err;
+  } catch {
+    /* best-effort — 원본 에러를 전파 */
   }
 }
 
@@ -281,16 +384,6 @@ export async function removeSessionDir(id: string): Promise<void> {
   await fs.rm(sdir, { recursive: true, force: true });
 }
 
-/** 경로 존재 여부 (디렉토리 재사용 가드용). */
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // PR-S3: runSession (spawn + 시그널 + finally) + 라이프사이클(list/stop/orphan)
 // exec.ts 의 forwarder/settled-guard/finally 패턴 미러, 단 전역 swap/lock 미사용.
@@ -301,6 +394,54 @@ const SESSION_FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'
 
 /** orphan 회수 TTL (ms). pid 죽음 AND startedAt 이 이보다 오래됐을 때만 회수 (M2). */
 const ORPHAN_TTL_MS = 60 * 60 * 1000; // 1h
+
+/** processStartSignature ps 호출 timeout (ms) — 행 방지. */
+const PS_SIGNATURE_TIMEOUT_MS = 2_000;
+
+/**
+ * 프로세스의 시작 서명(`ps -o lstart= -p <pid>`) — 부팅 후 고정값이라 pid 재사용 검출에 쓴다.
+ *
+ * pid 만으로는 죽은 mat 의 pid 가 재할당된 무관 프로세스와 구분할 수 없어, `stopSession` 이
+ * 그 프로세스를 잘못 kill 하거나(파괴적) `reapOrphans` 가 stale 세션을 영구 보존할 수 있다
+ * (PR #61 Codex H2). 시작 서명을 session.json 에 기록해두고 비교한다.
+ *
+ * macOS / Linux 의 `ps` 만 사용(프로젝트 타깃 OS). 미지원/조회 실패/타임아웃 시 null →
+ * 호출부가 liveness-only 로 보수적 폴백(기존 동작). child_process 가 mock 된 단위 테스트
+ * 에서는 execFile 부재 → null.
+ */
+export async function processStartSignature(pid: number): Promise<string | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const cp = await import('node:child_process');
+    if (typeof cp.execFile !== 'function') return null; // 일부 단위 테스트에서 mock-out
+    const stdout = await new Promise<string>((resolve, reject) => {
+      cp.execFile(
+        'ps',
+        ['-o', 'lstart=', '-p', String(pid)],
+        { timeout: PS_SIGNATURE_TIMEOUT_MS },
+        (err, out) => (err ? reject(err) : resolve(out))
+      );
+    });
+    const sig = stdout.trim();
+    return sig || null;
+  } catch {
+    return null; // ps 부재/조회 실패/timeout → null (호출부가 liveness-only 로 보수적 폴백)
+  }
+}
+
+/**
+ * 세션을 소유한 mat 프로세스가 "여전히 살아있는 그 프로세스" 인지 (pid 재사용 방어).
+ *  - pid 가 죽었으면 false.
+ *  - 시작 서명이 기록돼 있고 현재 서명도 조회됐는데 다르면 false (pid 재사용 — 소유 mat 은 사망).
+ *  - 서명 미기록(옛 메타)/조회 실패면 true (보수적 폴백 — 기존 liveness-only 동작).
+ */
+async function isOwningProcessAlive(meta: SessionMeta): Promise<boolean> {
+  if (!isProcessAlive(meta.pid)) return false;
+  if (!meta.pidStart) return true;
+  const liveSig = await processStartSignature(meta.pid);
+  if (!liveSig) return true;
+  return liveSig === meta.pidStart;
+}
 
 export interface SessionStartOptions {
   cliId: string;
@@ -323,6 +464,12 @@ interface SessionMeta {
   profile: string;
   /** 세션을 소유한 mat 프로세스 pid (subshell 아님). */
   pid: number;
+  /**
+   * 소유 mat 프로세스의 시작 서명(`ps -o lstart`). pid 재사용 검출용 — pid 가 죽고 재할당된
+   * 뒤 다른 프로세스가 같은 pid 를 점유해도 시작 시각이 달라 구분된다. ps 미지원/조회 실패 시
+   * undefined (옛 메타도 동일) → liveness-only 폴백 (PR #61 Codex H2).
+   */
+  pidStart?: string;
   /** ISO-8601 시작 시각. */
   startedAt: string;
   roots: { env: string; dir: string }[];
@@ -359,11 +506,14 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
   const id = makeSessionId(opts.cliId, profileName);
   const plan = planSession(def, profileName, id);
   await materializeSession(plan); // 세션 디렉토리 생성 + 자격증명 복사
+  // pid 재사용 검출용 시작 서명 (조회 실패해도 세션 생성을 막지 않음 — liveness-only 폴백).
+  const pidStart = (await processStartSignature(process.pid)) ?? undefined;
   await writeSessionMeta(id, {
     id,
     cli: opts.cliId,
     profile: profileName,
     pid: process.pid,
+    pidStart,
     startedAt: new Date().toISOString(),
     roots: plan.roots.map((r) => ({ env: r.env, dir: r.dir }))
   });
@@ -483,6 +633,7 @@ async function readSessionMeta(id: string): Promise<SessionMeta | null> {
       cli: typeof parsed.cli === 'string' ? parsed.cli : '',
       profile: typeof parsed.profile === 'string' ? parsed.profile : '',
       pid: parsed.pid,
+      pidStart: typeof parsed.pidStart === 'string' ? parsed.pidStart : undefined,
       startedAt: typeof parsed.startedAt === 'string' ? parsed.startedAt : '',
       roots: Array.isArray(parsed.roots) ? (parsed.roots as SessionMeta['roots']) : []
     };
@@ -520,7 +671,13 @@ export async function listSessions(): Promise<SessionInfo[]> {
   return out;
 }
 
-/** 세션 종료. 살아있으면 SIGTERM(소유 mat 의 finally 가 정리), 죽었으면 orphan 정리. */
+/**
+ * 세션 종료. 소유 mat 이 살아있으면 SIGTERM(그 finally 가 재캡처+정리), 아니면 디렉토리 정리.
+ *
+ * SIGTERM 전 시작 서명을 검증한다 (PR #61 Codex H2): pid 가 살아있어도 서명이 다르면 소유 mat
+ * 은 이미 죽고 pid 가 무관 프로세스에 재할당된 것 → kill 하지 않고(파괴적 오작동 방지) orphan
+ * 으로 정리한다.
+ */
 export async function stopSession(id: string): Promise<void> {
   validateSessionId(id);
   const meta = await readSessionMeta(id);
@@ -530,20 +687,31 @@ export async function stopSession(id: string): Promise<void> {
     });
     return;
   }
-  if (isProcessAlive(meta.pid)) {
+  if (await isOwningProcessAlive(meta)) {
     try {
       process.kill(meta.pid, 'SIGTERM');
     } catch {
-      /* 이미 죽었으면 아래 orphan 정리로 */
+      /* 이미 죽었으면 다음 호출의 orphan 정리로 */
     }
     return;
   }
-  await removeSessionDir(id); // 죽은 세션 — 재캡처 없이 정리
+  if (isProcessAlive(meta.pid)) {
+    // pid 는 살아있으나 시작 서명 불일치 = pid 재사용. 무관 프로세스 보호 — 신호 생략 후 정리.
+    process.stderr.write(
+      `[mat] 세션 ${sanitizeForStderr(id)} 의 pid(${meta.pid}) 가 재사용된 것으로 보입니다 ` +
+        `— SIGTERM 생략, 세션 정리만 수행.\n`
+    );
+  }
+  await removeSessionDir(id); // 죽은/재사용 pid 세션 — 재캡처 없이 정리
 }
 
 /**
- * orphan 세션 회수 — pid 죽음 AND startedAt TTL 초과 AND 세션 디렉토리 mtime TTL 초과
- * (셋 다 충족만, 보수적). 재캡처 없이 삭제 + 경고. 회수한 id 목록 반환.
+ * orphan 세션 회수 — 소유 프로세스 사망 AND startedAt TTL 초과 AND 세션 디렉토리 mtime TTL
+ * 초과 (셋 다 충족만, 보수적). 재캡처 없이 삭제 + 경고. 회수한 id 목록 반환.
+ *
+ * "소유 프로세스 사망" 판정은 시작 서명까지 본다 (PR #61 Codex H2): pid 가 재사용돼 살아있는
+ * 것처럼 보여도 서명이 다르면 소유 mat 은 죽은 것으로 보아 회수 대상에 포함 — pid 재사용이
+ * stale 세션을 영구 보존하던 문제 해소.
  */
 export async function reapOrphans(): Promise<string[]> {
   const now = Date.now();
@@ -551,7 +719,7 @@ export async function reapOrphans(): Promise<string[]> {
   for (const id of await listSessionIds()) {
     const meta = await readSessionMeta(id);
     if (!meta) continue;
-    if (isProcessAlive(meta.pid)) continue; // 살아있으면 보존
+    if (await isOwningProcessAlive(meta)) continue; // 소유 프로세스 생존 → 보존
     const startedMs = Date.parse(meta.startedAt);
     if (Number.isFinite(startedMs) && now - startedMs <= ORPHAN_TTL_MS) continue; // TTL 내 보존
     // 세션 디렉토리 자체 mtime 교차검증 (격리본 mtime 아님 — 죽은 세션 식별 안정성, M-B).

@@ -18,10 +18,17 @@ import {
   validateCliId,
   validateProfileFileName,
   validateProfileName,
-  validateSessionId
+  validateSessionId,
+  validateShareRel
 } from './validators.js';
 
-export { validateCliId, validateProfileFileName, validateProfileName, validateSessionId };
+export {
+  validateCliId,
+  validateProfileFileName,
+  validateProfileName,
+  validateSessionId,
+  validateShareRel
+};
 
 const DATA_DIR_NAME = '.multi-account-tool';
 

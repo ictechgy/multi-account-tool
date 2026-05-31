@@ -23,7 +23,12 @@ vi.mock('../../src/core/profile-store.js', () => ({
   validateProfileName: vi.fn((n: string) => n),
   profileExists: vi.fn(),
   readProfileFile: vi.fn(),
-  writeProfileFile: vi.fn()
+  writeProfileFile: vi.fn(),
+  // 종료 재캡처 2-phase commit (H1) — stage→commit. stage 는 staging 경로를 반환.
+  stageProfileFile: vi.fn(),
+  commitStagedFile: vi.fn(),
+  discardStagedFile: vi.fn(),
+  removeProfileFile: vi.fn()
 }));
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 vi.mock('../../src/core/switcher.js', () => ({ switchProfile: vi.fn(), snapshotLiveToProfile: vi.fn() }));
@@ -41,7 +46,13 @@ import { findCliDef } from '../../src/core/cli-defs.js';
 import { UsageError } from '../../src/core/errors.js';
 import { acquireCliLock } from '../../src/core/lockfile.js';
 import { sessionDir, sessionsDir } from '../../src/core/paths.js';
-import { profileExists, readProfileFile, writeProfileFile } from '../../src/core/profile-store.js';
+import {
+  commitStagedFile,
+  profileExists,
+  readProfileFile,
+  stageProfileFile,
+  writeProfileFile
+} from '../../src/core/profile-store.js';
 import { listSessions, reapOrphans, runSession, stopSession } from '../../src/core/session.js';
 import { switchProfile } from '../../src/core/switcher.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
@@ -50,6 +61,8 @@ const mockFindCliDef = vi.mocked(findCliDef);
 const mockProfileExists = vi.mocked(profileExists);
 const mockReadProfile = vi.mocked(readProfileFile);
 const mockWriteProfile = vi.mocked(writeProfileFile);
+const mockStage = vi.mocked(stageProfileFile);
+const mockCommit = vi.mocked(commitStagedFile);
 const mockSpawn = vi.mocked(spawn);
 const mockSwitch = vi.mocked(switchProfile);
 const mockAcquire = vi.mocked(acquireCliLock);
@@ -96,6 +109,8 @@ beforeEach(async () => {
   mockProfileExists.mockResolvedValue(true);
   mockReadProfile.mockResolvedValue('TOK');
   mockWriteProfile.mockResolvedValue(undefined);
+  mockStage.mockResolvedValue('/stub/staged'); // staging 경로 stub (commit 도 mock)
+  mockCommit.mockResolvedValue(undefined);
   mockAcquire.mockResolvedValue(vi.fn() as never);
 });
 afterEach(async () => {
@@ -116,8 +131,9 @@ describe('runSession', () => {
     const env = (options as { env: Record<string, string> }).env;
     expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
     expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
-    // 재캡처 호출됨 + 세션 디렉토리 정리됨
-    expect(mockWriteProfile).toHaveBeenCalledWith('codex', 'work', 'auth.json', 'TOK');
+    // 재캡처(2-phase stage→commit) 호출됨 + 세션 디렉토리 정리됨
+    expect(mockStage).toHaveBeenCalledWith('codex', 'work', 'auth.json', 'TOK');
+    expect(mockCommit).toHaveBeenCalled();
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
   });
 
@@ -149,14 +165,14 @@ describe('runSession', () => {
       mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: null, signal: sig } })));
       const result = await runSession({ cliId: 'codex', profileName: 'work' });
       expect(result.signal).toBe(sig);
-      expect(mockWriteProfile).toHaveBeenCalled();
+      expect(mockStage).toHaveBeenCalled();
       await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
     }
   );
 
   it('재캡처 실패 → recaptureError 설정 + 세션 디렉토리 삭제 + spawn 결과 보존', async () => {
     mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
-    mockWriteProfile.mockRejectedValue(new Error('disk full'));
+    mockCommit.mockRejectedValue(new Error('disk full')); // commit 단계 실패 주입
     const result = await runSession({ cliId: 'codex', profileName: 'work' });
     expect(result.code).toBe(0);
     expect(result.recaptureError).toBeInstanceOf(Error);

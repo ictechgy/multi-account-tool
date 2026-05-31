@@ -14,7 +14,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/core/profile-store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/core/profile-store.js')>();
-  return { ...actual, writeProfileFile: vi.fn(actual.writeProfileFile) };
+  // writeProfileFile(롤백) + stageProfileFile/commitStagedFile(2-phase) 을 spy 로 감싸
+  // 실패/hang 을 주입한다 (H1 검증). 기본은 실제 동작.
+  return {
+    ...actual,
+    writeProfileFile: vi.fn(actual.writeProfileFile),
+    stageProfileFile: vi.fn(actual.stageProfileFile),
+    commitStagedFile: vi.fn(actual.commitStagedFile)
+  };
 });
 
 import {
@@ -23,25 +30,40 @@ import {
   recaptureSession,
   removeSessionDir
 } from '../../src/core/session.js';
-import { writeProfileFile, readProfileFile } from '../../src/core/profile-store.js';
+import {
+  writeProfileFile,
+  readProfileFile,
+  stageProfileFile,
+  commitStagedFile
+} from '../../src/core/profile-store.js';
 import { findCliDef } from '../../src/core/cli-defs.js';
-import { sessionDir } from '../../src/core/paths.js';
+import { profileFilePath, sessionDir } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 import type { CliDef } from '../../src/core/types.js';
 
 const mockedWrite = vi.mocked(writeProfileFile);
+const mockedStage = vi.mocked(stageProfileFile);
+const mockedCommit = vi.mocked(commitStagedFile);
 
 let tmp: TmpHome;
 let realWrite: typeof writeProfileFile;
+let realStage: typeof stageProfileFile;
+let realCommit: typeof commitStagedFile;
 beforeEach(async () => {
   tmp = await setupTmpHome();
   const actual = await vi.importActual<typeof import('../../src/core/profile-store.js')>(
     '../../src/core/profile-store.js'
   );
   realWrite = actual.writeProfileFile;
-  // 각 테스트는 실제 write 동작으로 시작 — 실패 주입 테스트가 mockImplementation 으로 override.
+  realStage = actual.stageProfileFile;
+  realCommit = actual.commitStagedFile;
+  // 각 테스트는 실제 동작으로 시작 — 실패/hang 주입 테스트가 mockImplementation 으로 override.
   mockedWrite.mockReset();
   mockedWrite.mockImplementation(realWrite);
+  mockedStage.mockReset();
+  mockedStage.mockImplementation(realStage);
+  mockedCommit.mockReset();
+  mockedCommit.mockImplementation(realCommit);
 });
 afterEach(async () => {
   await tmp.cleanup();
@@ -128,6 +150,28 @@ describe('planSession', () => {
     const plan = planSession(def, 'work', SID);
     expect(plan.roots[0].share).toEqual(['config.toml']);
   });
+
+  it.each(['../escape', '/etc/passwd', 'a/../b', 'sub/../../x', '..'])(
+    'share traversal 항목 (%s) 면 throw (allow-list fail-open 차단)',
+    (bad) => {
+      const def: CliDef = {
+        id: 'fakecli', name: 'Fake',
+        sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+        session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: [bad] }] }
+      };
+      expect(() => planSession(def, 'work', SID)).toThrow();
+    }
+  );
+
+  it('share 정상 nested 항목은 정규화돼 plan 에 반영', () => {
+    const def: CliDef = {
+      id: 'fakecli', name: 'Fake',
+      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['sub/config.toml'] }] }
+    };
+    const plan = planSession(def, 'work', SID);
+    expect(plan.roots[0].share).toEqual(['sub/config.toml']);
+  });
 });
 
 describe('materializeSession — 빌트인 경로 (copy-isolate, share ∅)', () => {
@@ -212,10 +256,41 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     const plan = planSession(fakeDef, 'work', SID);
     await expect(materializeSession(plan)).rejects.toThrow();
   });
+
+  it('정상 nested share → 세션 하위 디렉토리에 symlink 생성', async () => {
+    const nestedDef: CliDef = {
+      id: 'fakecli', name: 'Fake',
+      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['sub/config.toml'] }] }
+    };
+    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    await writeBaseFile('.fake/sub/config.toml', 'nested-shared');
+    const plan = planSession(nestedDef, 'work', SID);
+    await materializeSession(plan);
+    const linkPath = join(plan.roots[0].dir, 'sub', 'config.toml');
+    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(linkPath, 'utf8')).toBe('nested-shared');
+  });
+
+  it('base 측 부모가 symlink 로 base 밖을 가리키면 거부 (realpath 봉쇄, §4.2)', async () => {
+    const nestedDef: CliDef = {
+      id: 'fakecli', name: 'Fake',
+      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['sub/config.toml'] }] }
+    };
+    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    // base 밖(~/.outside)에 실제 파일 + base 안 'sub' 를 그 디렉토리로 향하는 symlink 로 escape.
+    await writeBaseFile('.outside/config.toml', 'escaped');
+    await fs.mkdir(join(tmp.home, '.fake'), { recursive: true });
+    await fs.symlink(join(tmp.home, '.outside'), join(tmp.home, '.fake', 'sub'));
+    const plan = planSession(nestedDef, 'work', SID);
+    await expect(materializeSession(plan)).rejects.toThrow();
+    await expect(fs.access(sessionDir(SID))).rejects.toThrow(); // 세션 디렉토리 미잔류
+  });
 });
 
-describe('recaptureSession — 원자성 + cred 단위 timeout 롤백 (C1)', () => {
-  /** 격리본을 수정해 "CLI 가 rewrite" 상황 모사. */
+describe('recaptureSession — 2-phase stage/commit 원자성 (H1)', () => {
+  /** 격리본을 수정해 "CLI 가 rewrite" 상황 모사 (qwen = 2 cred). */
   async function setupQwenSession(): Promise<ReturnType<typeof planSession>> {
     await writeProfileFile('qwen', 'work', 'qwen-settings.json', 'OLD-SET');
     await writeProfileFile('qwen', 'work', 'qwen.env', 'OLD-ENV');
@@ -228,53 +303,99 @@ describe('recaptureSession — 원자성 + cred 단위 timeout 롤백 (C1)', () 
     return plan;
   }
 
-  it('정상: 격리본 둘 다 프로필로 재캡처', async () => {
+  it('정상: 격리본 둘 다 프로필로 재캡처(stage→commit)', async () => {
     const plan = await setupQwenSession();
     await recaptureSession(plan);
     expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('NEW-SET');
     expect(await readProfileFile('qwen', 'work', 'qwen.env')).toBe('NEW-ENV');
+    // staging 잔여 없음 (전부 commit rename).
+    const dir = join(profileFilePath('qwen', 'work', 'qwen.env'), '..');
+    const leftover = (await fs.readdir(dir)).filter((f) => f.includes('.recap-'));
+    expect(leftover).toEqual([]);
   });
 
-  it('일반 실패: 2번째 write 실패 → 1번째 백업 원복(split 0) + 에러', async () => {
+  it('commit 실패: 2번째 commit reject → 1번째 backup 원복(split 0) + 에러', async () => {
     const plan = await setupQwenSession();
     let call = 0;
-    mockedWrite.mockImplementation((cli, prof, file, val) => {
+    mockedCommit.mockImplementation((sp, cli, prof, file) => {
       call++;
       if (call === 2) return Promise.reject(new Error('disk full'));
-      return realWrite(cli, prof, file, val); // 적용(call1) + 롤백(call3) 은 실제 write
+      return realCommit(sp, cli, prof, file); // commit1 + 롤백 write 는 실제
     });
     await expect(recaptureSession(plan)).rejects.toThrow(/disk full/);
-    // 두 cred 모두 종료 전(OLD) 값 — split 0
+    // 두 cred 모두 종료 전(OLD) — commit1 은 롤백, commit2 는 미수행. split 0.
     expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('OLD-SET');
     expect(await readProfileFile('qwen', 'work', 'qwen.env')).toBe('OLD-ENV');
   });
 
-  it('timeout: 2번째 write hang → cred 단위 timeout → 1번째 백업 원복(split 0) + 에러', async () => {
+  it('stage hang: 2번째 stage hang → timeout → 라이브 무손상(commit 0, split 0)', async () => {
     process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = '50'; // 짧은 timeout (fake timer 없이)
     try {
       const plan = await setupQwenSession();
       let call = 0;
-      mockedWrite.mockImplementation((cli, prof, file, val) => {
+      mockedStage.mockImplementation((cli, prof, file, val) => {
         call++;
-        if (call === 2) return new Promise<void>(() => { /* never resolves → hang */ });
-        return realWrite(cli, prof, file, val);
+        if (call === 2) return new Promise<string>(() => { /* never resolves → hang */ });
+        return realStage(cli, prof, file, val);
       });
       await expect(recaptureSession(plan)).rejects.toThrow(/timeout/i);
-      // 1번째 cred 가 백업(OLD)으로 원복됨 — 전체-race 였다면 롤백 안 돼 NEW 로 남음 (C1)
+      // commit 이 한 번도 일어나지 않음 → 둘 다 종료 전(OLD). hung stage 가 나중에 landing 해도
+      // staging 임시파일만 오염되고 라이브 프로필엔 닿지 않는다 (H1 핵심 보장).
+      expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('OLD-SET');
+      expect(await readProfileFile('qwen', 'work', 'qwen.env')).toBe('OLD-ENV');
+    } finally {
+      delete process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
+    }
+  });
+
+  it('commit hang: 2번째 commit hang → timeout → 1번째 backup 원복(split 0)', async () => {
+    process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = '50';
+    try {
+      const plan = await setupQwenSession();
+      let call = 0;
+      mockedCommit.mockImplementation((sp, cli, prof, file) => {
+        call++;
+        if (call === 2) return new Promise<void>(() => { /* hang */ });
+        return realCommit(sp, cli, prof, file);
+      });
+      await expect(recaptureSession(plan)).rejects.toThrow(/timeout/i);
+      // commit1 은 롤백(OLD). 전체-race 였다면 commit1 이 NEW 로 남아 split.
       expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('OLD-SET');
     } finally {
       delete process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
     }
   });
 
-  it('격리본 부재 cred 는 skip (재캡처 안 함)', async () => {
+  it('null-backup 롤백: 종료 전 없던 cred 가 commit 후 후속 실패 → 삭제로 원복(split 0)', async () => {
+    await writeProfileFile('qwen', 'work', 'qwen-settings.json', 'OLD-SET');
+    await writeProfileFile('qwen', 'work', 'qwen.env', 'OLD-ENV');
+    const plan = planSession(findCliDef('qwen')!, 'work', SID);
+    await materializeSession(plan);
+    await fs.writeFile(join(plan.roots[0].dir, 'settings.json'), 'NEW-SET');
+    await fs.writeFile(join(plan.roots[0].dir, '.env'), 'NEW-ENV');
+    // 종료 전 외부 삭제 모사 → settings 프로필 파일 부재 = preflight backup null.
+    await fs.rm(profileFilePath('qwen', 'work', 'qwen-settings.json'));
+    // settings(idx0) commit 성공 → .env(idx1) commit 실패 → 롤백: settings 는 backup null → 삭제.
+    mockedCommit.mockImplementation((sp, cli, prof, file) =>
+      file === 'qwen.env'
+        ? Promise.reject(new Error('disk full'))
+        : realCommit(sp, cli, prof, file)
+    );
+    await expect(recaptureSession(plan)).rejects.toThrow(/disk full/);
+    expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBeNull(); // 삭제로 원복
+    expect(await readProfileFile('qwen', 'work', 'qwen.env')).toBe('OLD-ENV'); // 미커밋 → 무변경
+  });
+
+  it('격리본 부재 cred 는 skip (stage/commit 안 함)', async () => {
     await writeProfileFile('codex', 'work', 'auth.json', 'OLD');
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
     await fs.rm(join(plan.roots[0].dir, 'auth.json')); // CLI 가 격리본 삭제 모사
-    mockedWrite.mockClear();
+    mockedStage.mockClear();
+    mockedCommit.mockClear();
     await recaptureSession(plan);
-    expect(mockedWrite).not.toHaveBeenCalled();
+    expect(mockedStage).not.toHaveBeenCalled();
+    expect(mockedCommit).not.toHaveBeenCalled();
     expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('OLD'); // 변경 없음
   });
 });
