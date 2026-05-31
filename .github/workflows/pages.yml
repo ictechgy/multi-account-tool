@@ -1,0 +1,67 @@
+name: Deploy Pages
+
+# README(.md/.ko.md) → site/ 를 빌드해 GitHub Pages 로 배포한다.
+# 배포 소스는 빌드 산출물(site/)이라 docs/ 의 내부 설계문서는 사이트에 노출되지 않는다.
+# 활성화: 저장소 Settings → Pages → Source = "GitHub Actions" 로 한 번 설정하면 된다.
+#
+# 보안: untrusted github.event.* 입력을 run: 에서 사용하지 않는다 (ci.yml 정책과 동일).
+# environment.url 의 steps.deployment.outputs.page_url 은 deploy-pages 액션의 신뢰 출력이다.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'README.ko.md'
+      - 'scripts/build-docs.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Pages 배포에 필요한 최소 권한.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 동시 배포 직렬화 (진행 중 배포는 취소하지 않음 — 배포 일관성).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build docs site
+        run: npm run build:docs
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

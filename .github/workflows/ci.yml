@@ -56,3 +56,38 @@ jobs:
       - name: Smoke test (core module load)
         run: node scripts/smoke-test.mjs
         continue-on-error: true
+
+  # 커밋된 docs 사이트(site/)가 README 와 동기화돼 있는지 가드.
+  # build-docs 는 결정적이므로, 재빌드 결과가 커밋본과 다르면 README 만 고치고 site/ 를
+  # 재생성하지 않은 것 → CI 실패로 알린다. (Pages 배포본은 pages.yml 이 재빌드하지만,
+  # 커밋된 스냅샷도 최신으로 유지해 리뷰/프리뷰 신뢰성을 보장한다.)
+  docs-sync:
+    name: docs site up-to-date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild docs site
+        run: npm run build:docs
+
+      - name: Verify committed site/ is up to date
+        run: |
+          # 추적 안 된 신규 산출물(예: 언어 페이지 추가)도 잡는다 — git diff 단독은 tracked 만 본다.
+          if [ -n "$(git ls-files --others --exclude-standard site/)" ]; then
+            echo "::error::site/ has untracked generated files — run 'npm run build:docs' and commit the result."
+            git ls-files --others --exclude-standard site/
+            exit 1
+          fi
+          if ! git diff --exit-code site/; then
+            echo "::error::site/ is stale — run 'npm run build:docs' and commit the result."
+            exit 1
+          fi

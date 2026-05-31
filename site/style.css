@@ -1,0 +1,77 @@
+/* 생성물 — scripts/build-docs.mjs 의 STYLE_CSS 를 편집하세요. */
+:root {
+  --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0;
+  --link: #0969da; --code-bg: #eff1f3; --pre-bg: #f6f8fa; --header-bg: #f6f8fa;
+  --table-stripe: #f6f8fa; --accent: #0969da;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d;
+    --link: #4493f8; --code-bg: #6e76811f; --pre-bg: #161b22; --header-bg: #161b22;
+    --table-stripe: #161b22; --accent: #4493f8;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+/* 키보드 포커스 가시화 (모든 인터랙티브 요소 공통) */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  /* 한글: OS 네이티브 폰트 우선(외부 CDN 미사용) — macOS/iOS·Windows·Linux 순. */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", "Noto Sans KR", Helvetica, Arial, sans-serif;
+  font-size: 16px; line-height: 1.6;
+}
+.site-header {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: 0.75rem 1.25rem; background: var(--header-bg);
+  border-bottom: 1px solid var(--border); backdrop-filter: saturate(1.2) blur(4px);
+}
+.site-title { font-weight: 600; color: var(--fg); text-decoration: none; font-size: 1.05rem; }
+.site-title code, .site-footer code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 5px; font-size: 0.9em; }
+.lang-switcher { font-size: 0.95rem; }
+.lang-link { color: var(--link); text-decoration: none; }
+/* active 표시는 색+굵기에 더해 밑줄로 — color-only 신호 회피(검증 LOW). */
+.lang-link.active { color: var(--muted); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.inline-lang { /* 헤더 nav 와 중복되는 본문 내 언어 전환 줄 (aria-hidden) */ }
+.lang-switcher .sep { color: var(--muted); margin: 0 0.4rem; }
+.markdown-body { max-width: 860px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+.markdown-body h1, .markdown-body h2 { border-bottom: 1px solid var(--border); padding-bottom: 0.3em; margin-top: 1.6em; }
+.markdown-body h1 { font-size: 2rem; margin-top: 0.2em; }
+.markdown-body h2 { font-size: 1.5rem; }
+.markdown-body h3 { font-size: 1.25rem; margin-top: 1.4em; }
+.markdown-body a { color: var(--link); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body code {
+  background: var(--code-bg); padding: 0.2em 0.4em; border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 0.88em;
+}
+.markdown-body pre {
+  background: var(--pre-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1rem; overflow-x: auto; line-height: 1.45;
+}
+.markdown-body pre code { background: none; padding: 0; font-size: 0.85em; }
+.markdown-body table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow-x: auto; margin: 1rem 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 0.5rem 0.9rem; text-align: left; min-width: 5rem; white-space: nowrap; }
+/* 마지막 열(보통 긴 설명/주의)은 줄바꿈 허용 — 좁은 화면에서 셀 붕괴 방지 + 가독성(검증 MED). */
+.markdown-body th:last-child, .markdown-body td:last-child { white-space: normal; min-width: 12rem; }
+.markdown-body tr:nth-child(2n) { background: var(--table-stripe); }
+.markdown-body blockquote { margin: 1rem 0; padding: 0 1rem; color: var(--muted); border-left: 0.25em solid var(--border); }
+.markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 2rem 0; }
+.markdown-body img { max-width: 100%; }
+.markdown-body del { color: var(--muted); }
+.site-footer {
+  max-width: 860px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem;
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;
+}
+.site-footer a { color: var(--link); text-decoration: none; }
+@media (max-width: 600px) {
+  .markdown-body { padding: 1.25rem 1rem 2rem; }
+  body { font-size: 15px; }
+  .site-header { padding: 0.6rem 1rem; }
+  /* 가로 스크롤 가능한 wide 코드블록에 우측 페이드 힌트 — 모바일에서 스크롤 가능함을 시사(검증 MED). */
+  .markdown-body pre {
+    background-image: linear-gradient(to right, transparent calc(100% - 1.5rem), var(--pre-bg));
+    background-attachment: local;
+  }
+}

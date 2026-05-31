@@ -233,9 +233,10 @@ Exit codes mirror `mat exec`: `0` success, `2` usage error, `74` re-capture fail
 **Limitations (read before relying on it):**
 
 - **Credentials are isolated; non-secret config is *not* shared (1st iteration).** Anything other than the credential file (model config, history, sessions, caches) is **not** materialized into the session — the CLI falls back to its defaults and anything it creates inside the session is **discarded on exit** (only the credential file is re-captured). This is a deliberate, fail-closed default. Contrast with `mat exec`, where the CLI uses the real config dir so history is preserved: prefer `mat exec` for long single-account work, `mat session` for concurrent multi-account. (An allow-list to share read-mostly config like Codex `config.toml` is implemented but disabled until its contents are verified — a follow-up.)
-- **`SIGKILL` orphans** the session directory (trap-impossible, same as `mat exec`); the next `mat session` call reaps it (dead pid + >1h old).
+- **`SIGKILL` orphans** the session directory (trap-impossible, same as `mat exec`); the next `mat session` call reaps it (owning process gone — PID-reuse-aware via the process start-time signature — **and** both the session's start time and its directory mtime older than 1h).
 - **Parent-trust assumption:** isolation assumes `~/.multi-account-tool` and its parent are trusted; a symlinked `~/.multi-account-tool` is out of scope.
-- **Same profile, two concurrent sessions:** on simultaneous exit the re-capture is last-writer-wins (non-deterministic, but never a corrupted credential).
+- **Same profile, two concurrent sessions:** re-capture is unsynchronized — single-credential CLIs are last-writer-wins; multi-credential CLIs (Qwen/Crush) may end up with files from different sessions. Both are always valid credentials of the **same account** (never wrong-account, never corrupted) and self-heal on next use. Prefer a distinct profile per terminal; per-profile locking is a follow-up.
+- **`mat session stop`** sends `SIGTERM` only when it can confirm the owning process's identity (PID + start-time signature). If that can't be verified (rare — e.g. `ps` unavailable), it leaves the session untouched and asks you to retry, rather than risk killing an unrelated process that reused the PID.
 
 ### `mat freshness` — pre-swap safety check
 
@@ -389,7 +390,7 @@ See [ROADMAP.md](./ROADMAP.md) for v0.4+ plans:
 
 - ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3)
 - ~~Aider built-in support~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
-- Session-scoped credential isolation (different account per `lterm` session)
+- ~~Session-scoped credential isolation~~ ✅ (v0.4.x — `mat session start/list/stop`: env-injection + copy-isolate, concurrent multi-account; the `lterm` shim integration below is still pending)
 - More built-in CLIs — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service added via the `os-keyring` source type). Copilot / Amp remain deferred — Copilot needs multi-account `/user switch` application-state swap, and Windows Credential Manager support is still pending (a separate follow-up). Cursor Agent: plugin recommended (keychain service name not publicly documented).
 - **Goose Linux**: on Linux, mat swaps Goose's default `secret-service` backend (libsecret, GNOME Keyring/KWallet) through the `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) plus the `~/.config/goose/*.yaml` files. Behavior by configuration:
   - **Default (keyring)**: the os-keyring source is included and requires `secret-tool` (libsecret-tools) + a running keyring daemon. A missing tool or a down/denied daemon produces an **explicit error** — mat does *not* silently fall back to YAML, because Goose accesses the keyring through the libsecret *library* (a separate package from the `secret-tool` CLI), so a missing CLI does not prove the keyring is unused. Silently swapping `secrets.yaml` for an active keyring user would be a wrong-account write. An absent keyring entry (vs. a missing tool) is a normal "not found" and skips to the YAML files.
