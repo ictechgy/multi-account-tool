@@ -5,18 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="여러 AI CLI 계정을 단일 TUI 에서 전환 — 안전 기본값 자격증명 스위처.">
 <meta name="color-scheme" content="light dark">
+<meta property="og:title" content="multi-account-tool (mat)">
+<meta property="og:description" content="여러 AI CLI 계정을 단일 TUI 에서 전환 — 안전 기본값 자격증명 스위처.">
+<meta property="og:type" content="website">
 <title>multi-account-tool (mat)</title>
+<script>(function(){try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="site-header">
-  <a class="site-title" href="ko.html">multi-account-tool <code>mat</code></a>
-  <nav class="lang-switcher" aria-label="language"><a class="lang-link" href="index.html">English</a><span class="sep">·</span><span class="lang-link active" aria-current="page">한국어</span></nav>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="ko.html"><span class="brand-mark">mat</span> <span class="brand-sub">multi-account-tool</span></a>
+  <nav class="topnav" aria-label="site">
+    <span class="langswitch" aria-label="language"><a class="lang " href="index.html">EN</a><span class="lang-sep">/</span><a class="lang active" aria-current="page">KO</a></span>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle dark mode" title="Toggle theme">
+      <span class="i-moon" aria-hidden="true">☾</span><span class="i-sun" aria-hidden="true">☀</span>
+    </button>
+    <a class="icon-btn gh" href="https://github.com/ictechgy/multi-account-tool" aria-label="GitHub repository" title="GitHub">
+      <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    </a>
+  </nav>
 </header>
-<main class="markdown-body">
+<section class="hero">
+  <div class="hero-inner">
+<p class="eyebrow">AI CLI 계정 스위처</p>
 <h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
 <p class="inline-lang" aria-hidden="true"><a href="index.html">English</a> | 한국어</p>
 <p>여러 AI CLI 계정(Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 <strong>하나의 TUI 에서 빠르게 전환</strong>해 사용하는 도구. 매번 <code>logout</code> → <code>login</code> 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시, OAuth refresh 토큰 회전 인지 + TUI 재캡처/폐기/취소 dialog 등 안전장치를 기본 적용.</p>
+<div class="hero-cta"><a class="btn btn-primary" href="#install">설치</a><a class="btn" href="https://github.com/ictechgy/multi-account-tool">GitHub <span aria-hidden="true">↗</span></a></div>
 <pre><code>╭ Multi-Account Tool ────────────────────────────────╮
 │  AI CLI 계정 스위처                                 │
 ╰─────────────────────────────────────────────────────╯
@@ -25,7 +44,20 @@
     Codex CLI              [활성: work]     ✓
     Gemini / Antigravity   [활성: personal] ✓
 </code></pre>
-<hr>
+
+  </div>
+</section>
+<div class="layout">
+  <aside class="sidebar">
+    <details class="toc-collapse">
+      <summary class="toc-title">이 페이지에서</summary>
+      <nav class="toc" aria-label="이 페이지에서">
+<ul class="toc-list"><li><a href="#왜-만들었나" data-toc="왜-만들었나">왜 만들었나</a></li><li><a href="#어떻게-동작하나" data-toc="어떻게-동작하나">어떻게 동작하나</a><ul class="toc-sub"><li><a href="#oauth-rotation-안전성-매트릭스" data-toc="oauth-rotation-안전성-매트릭스">OAuth Rotation 안전성 매트릭스</a></li><li><a href="#플랫폼-지원" data-toc="플랫폼-지원">플랫폼 지원</a></li><li><a href="#전환-흐름-데이터-손실-없음" data-toc="전환-흐름-데이터-손실-없음">전환 흐름 (데이터 손실 없음)</a></li></ul></li><li><a href="#설치" data-toc="설치">설치</a><ul class="toc-sub"><li><a href="#homebrew-macos-권장" data-toc="homebrew-macos-권장">Homebrew (macOS 권장)</a></li><li><a href="#npm" data-toc="npm">npm</a></li><li><a href="#소스에서-빌드" data-toc="소스에서-빌드">소스에서 빌드</a></li><li><a href="#설치-확인" data-toc="설치-확인">설치 확인</a></li></ul></li><li><a href="#사용" data-toc="사용">사용</a><ul class="toc-sub"><li><a href="#첫-실행" data-toc="첫-실행">첫 실행</a></li><li><a href="#새-계정-추가하기" data-toc="새-계정-추가하기">새 계정 추가하기</a></li><li><a href="#키바인딩" data-toc="키바인딩">키바인딩</a></li><li><a href="#mat-exec-한-명령에-한해-프로필-swap" data-toc="mat-exec-한-명령에-한해-프로필-swap">mat exec — 한 명령에 한해 프로필 swap</a></li><li><a href="#mat-session-세션별-격리-터미널마다-다른-계정-동시에" data-toc="mat-session-세션별-격리-터미널마다-다른-계정-동시에">mat session — 세션별 격리 (터미널마다 다른 계정, 동시에)</a></li><li><a href="#mat-freshness-swap-전-안전성-점검" data-toc="mat-freshness-swap-전-안전성-점검">mat freshness — swap 전 안전성 점검</a></li></ul></li><li><a href="#데이터-저장-위치" data-toc="데이터-저장-위치">데이터 저장 위치</a></li><li><a href="#보안" data-toc="보안">보안</a><ul class="toc-sub"><li><a href="#수용한-trade-off-의도된-한계" data-toc="수용한-trade-off-의도된-한계">수용한 trade-off (의도된 한계)</a></li><li><a href="#기본-보호-장치" data-toc="기본-보호-장치">기본 보호 장치</a></li><li><a href="#사용을-권하지-않는-환경" data-toc="사용을-권하지-않는-환경">사용을 권하지 않는 환경</a></li></ul></li><li><a href="#새-cli-추가하기" data-toc="새-cli-추가하기">새 CLI 추가하기</a><ul class="toc-sub"><li><a href="#1-사용자-플러그인-코드-변경-불필요-개인-사용-권장" data-toc="1-사용자-플러그인-코드-변경-불필요-개인-사용-권장">1. 사용자 플러그인 — 코드 변경 불필요 (개인 사용 권장)</a></li><li><a href="#2-빌트인-추가-mat-repo-pr-필요" data-toc="2-빌트인-추가-mat-repo-pr-필요">2. 빌트인 추가 — mat repo PR 필요</a></li></ul></li><li><a href="#변경-이력" data-toc="변경-이력">변경 이력</a></li><li><a href="#로드맵" data-toc="로드맵">로드맵</a></li><li><a href="#라이센스" data-toc="라이센스">라이센스</a></li></ul>
+      </nav>
+    </details>
+  </aside>
+  <main id="main" class="content markdown-body">
+
 <h2 id="왜-만들었나">왜 만들었나</h2>
 <ul>
 <li>Claude Code, Codex, Gemini 등 여러 AI CLI 를 동시에 쓰면서 각 CLI 마다 계정이 여러 개일 때</li>
@@ -34,7 +66,7 @@
 </ul>
 <h2 id="어떻게-동작하나">어떻게 동작하나</h2>
 <p><code>mat</code> 은 각 CLI 의 <strong>자격증명만 정밀하게 swap</strong> 한다. hooks, agents, <code>CLAUDE.md</code>, 대화 이력, 설정 같은 나머지는 그대로 둔다.</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -87,10 +119,10 @@
 <td>macOS Keychain / Linux Secret Service (service <code>goose</code>, account <code>secrets</code>) + <code>~/.config/goose/secrets.yaml</code> + <code>config.yaml</code></td>
 <td>Multi-source (account scoped Keychain/os-keyring; Linux 는 <code>secret-tool</code> 로 swap — 아래 참고)</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <h3 id="oauth-rotation-안전성-매트릭스">OAuth Rotation 안전성 매트릭스</h3>
 <p>일부 CLI 는 <strong>OAuth refresh token rotation</strong> (RFC 6749 권장 보안 정책) 을 사용한다 — refresh token 은 한 번 사용되면 invalidate 되어 같은 token 을 다시 쓸 수 없다. <code>mat</code> 이 옛 token 스냅샷을 복원하면 provider 가 &quot;이미 사용된 token&quot; 으로 거부 (<code>refresh_token_reused</code> 401) → 사용자가 강제 재로그인해야 한다. 본 매트릭스는 mat 지원 CLI 중 영향 받는 도구와 mat 의 안전 모드를 정리한다.</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -135,13 +167,13 @@
 <td>🟢 없음</td>
 <td>일반 swap 으로 충분 — 단 환경변수 / project-local 설정이 mat 의 swap 을 우회할 수 있음 (아래 &quot;플랫폼 지원&quot; 참고)</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p><code>mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]</code> 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = <code>stale</code> 감지 (identity 변경 또는 프로필 부재). 장기 실행 세션은 <code>mat exec</code> 사용을 권장 — 명령 종료 후 자동으로 이전 프로필 복원. 단 mat 자체가 <code>SIGKILL</code> 을 받으면 복원이 일어나지 않는다 (보안 섹션 참조).</p>
 <blockquote>
 <p><strong>OAuth rotation 대응 (PR-G/PR-I*/PR-H 모두 머지):</strong> TUI 의 swap 흐름이 swap 직전 라이브 freshness 를 점검하고 차이 감지 시 <strong>재캡처 / 폐기 / 취소</strong> 3-옵션 dialog 를 표시한다 (PR-G). 재캡처는 라이브를 <code>snapshotLiveToProfile</code> 로 활성 프로필에 저장 후 swap, 폐기는 자동 snapshot 을 건너뛰고 swap (데이터 손실), 취소는 swap 미실행. <code>mat exec</code> 는 종료 시 라이브를 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원 (PR-I*) — <code>SIGINT</code>/<code>SIGTERM</code>/<code>SIGHUP</code> 까지 보호 (<code>SIGKILL</code> 은 OS 보장상 trap 불가 → 다음 <code>mat</code> 호출의 stale-recovery 가 사용자에게 안내). Claude/Goose identity-aware adapter (PR-H) 가 <code>high</code>/<code>medium</code> confidence 로 rotation vs 다른 계정을 분류 — 안전한 swap 에서 <code>[low conf]</code> dialog noise 제거.</p>
 </blockquote>
 <h3 id="플랫폼-지원">플랫폼 지원</h3>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -214,7 +246,7 @@
 <td>❌</td>
 <td>macOS Keychain / Linux Secret Service (<code>goose</code>/<code>secrets</code>, <code>secret-tool</code> 경유) + <code>~/.config/goose/*.yaml</code>. Linux 는 기본적으로 os-keyring 을 포함하며 <code>secret-tool</code> (libsecret-tools) + keyring daemon 이 필요 — 미설치/daemon-down 시 stale YAML 로 조용히 swap 하지 않고 <strong>명시 에러</strong> (Goose 는 libsecret <em>라이브러리</em> 로 keyring 에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않음). file backend 면 <code>GOOSE_DISABLE_KEYRING=1</code> 설정 시 mat 가 os-keyring 을 생략하고 <code>secrets.yaml</code> 을 swap. Windows Credential Manager 미지원</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p>&quot;⚠️ 미검증&quot; = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.</p>
 <h3 id="전환-흐름-데이터-손실-없음">전환 흐름 (데이터 손실 없음)</h3>
 <ol start="0">
@@ -264,7 +296,7 @@ mat --help       # 짧은 사용법 (subcommand: exec / freshness)
 <li>이후로는 <code>Enter</code> 만으로 프로필 사이를 자유롭게 전환</li>
 </ol>
 <h3 id="키바인딩">키바인딩</h3>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>화면</th>
@@ -327,7 +359,7 @@ mat --help       # 짧은 사용법 (subcommand: exec / freshness)
 <td><code>c</code> / <code>Esc</code></td>
 <td>swap 취소</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <h3 id="mat-exec-한-명령에-한해-프로필-swap"><code>mat exec</code> — 한 명령에 한해 프로필 swap</h3>
 <pre><code class="language-bash">mat exec &lt;cli&gt; &lt;profile&gt; -- &lt;cmd...&gt;
 </code></pre>
@@ -348,7 +380,7 @@ lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
 </ul>
 <p>이는 <strong>시간 격리</strong>이지 세션 격리가 아니다. 자식이 실행되는 동안 OS 전역 자격증명은 <code>&lt;profile&gt;</code> 의 것. 두 터미널에서 서로 다른 <code>mat exec</code> 를 동시에 띄우면 lock 으로 직렬화되며, 진짜 세션별 격리는 로드맵.</p>
 <p>종료 코드:</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>코드</th>
@@ -383,7 +415,7 @@ lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
 <td><em>그 외 (예: <code>3</code>, <code>42</code>)</em></td>
 <td>자식의 non-zero 종료 코드를 그대로 propagate</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p>참고: <code>2</code> / <code>74</code> / <code>75</code> 는 <code>mat</code> 자체의 에러 모델로 예약 (spawn 전 검증 / lock 경합 / spawn 후 원복 실패). 그 외의 <code>128</code> 미만 non-zero 코드는 모두 자식의 종료 코드를 투명하게 그대로 전달. <code>74</code> 가 <code>mat</code> 의 원복 실패인지 자식의 exit 74 인지 헷갈리면 stderr 의 <code>restoreError</code> 로그를 확인.</p>
 <h3 id="mat-session-세션별-격리-터미널마다-다른-계정-동시에"><code>mat session</code> — 세션별 격리 (터미널마다 다른 계정, 동시에)</h3>
 <pre><code class="language-bash">mat session start &lt;cli&gt; &lt;profile&gt;   # &lt;profile&gt; 로 격리된 subshell 실행
@@ -399,7 +431,7 @@ mat session start codex personal    # 독립 격리 디렉토리 → &quot;perso
 </code></pre>
 <p><strong>메커니즘 — env 주입 + copy-isolate.</strong> <code>mat session start</code> 는 <code>$SHELL</code> 을 spawn 하되 CLI 의 config-dir env (예: <code>CODEX_HOME</code>) 를 <code>~/.multi-account-tool/sessions/&lt;id&gt;/</code> 아래 세션 전용 디렉토리로 가리킨다. 프로필 자격증명을 그 디렉토리에 <strong>복사</strong>(0600)하므로 subshell 안의 CLI 는 격리된 계정을 읽는다. 종료 시 (OAuth rotation 됐을 수 있는) 자격증명을 프로필로 <strong>재캡처</strong>하고 세션 디렉토리를 삭제한다. OS 전역 자격증명과 <code>mat exec</code> lock 은 건드리지 않아 세션이 서로 간섭 없이 동시 실행된다.</p>
 <p><strong>지원 CLI</strong> (자격증명 디렉토리를 env 로 재배치할 수 있는 것):</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -422,7 +454,7 @@ mat session start codex personal    # 독립 격리 디렉토리 → &quot;perso
 <td>Crush</td>
 <td><code>CRUSH_GLOBAL_CONFIG</code> + <code>CRUSH_GLOBAL_DATA</code></td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p><strong>미지원</strong> (자격증명 재배치 env 없음; <code>mat session start</code> 가 명시 에러): <code>gemini</code> (env override 없음 — <a href="https://github.com/google-gemini/gemini-cli/issues/2815">gemini-cli#2815</a>), <code>claude</code> (macOS Keychain service name env override 불가), <code>aider</code> (자격증명이 파일 아닌 provider env), <code>opencode</code>, <code>goose</code>, 그리고 사용자 <strong>플러그인</strong> CLI (1차는 빌트인 전용).</p>
 <p>종료 코드는 <code>mat exec</code> 와 동형: <code>0</code> 성공, <code>2</code> 사용법 에러, <code>74</code> 재캡처 실패, <code>128+N</code> 자식 시그널 <code>N</code> (self-raise), 그 외 자식 종료 코드 전달.</p>
 <p><strong>한계 (사용 전 필독):</strong></p>
@@ -445,7 +477,7 @@ mat freshness codex --profile work --json
 </code></pre>
 <p>각 source 는 4-state 로 분류 — <code>fresh</code> (byte 동일), <code>rotated</code> (토큰 회전됐지만 identity 유지, swap 안전), <code>stale</code> (identity 변경 — 다른 계정, <strong>swap 시 revoke 위험</strong>), <code>inflight</code> (multi-source CLI 의 부분 갱신 race — 잠시 후 재시도).</p>
 <p>종료 코드:</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>코드</th>
@@ -468,7 +500,7 @@ mat freshness codex --profile work --json
 <td><code>74</code></td>
 <td>내부 검사 실패 (source 읽기 에러 등)</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p>CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 참고.</p>
 <hr>
 <h2 id="데이터-저장-위치">데이터 저장 위치</h2>
@@ -582,10 +614,36 @@ mat freshness codex --profile work --json
 <h2 id="라이센스">라이센스</h2>
 <p>MIT — <a href="https://github.com/ictechgy/multi-account-tool/blob/main/LICENSE">LICENSE</a></p>
 
-</main>
+  </main>
+</div>
 <footer class="site-footer">
-  <a href="https://github.com/ictechgy/multi-account-tool">GitHub</a> ·
-  <span>Generated from <code>README.ko.md</code> by <code>scripts/build-docs.mjs</code> — do not edit by hand.</span>
+  <div class="footer-inner">
+    <span><a href="https://github.com/ictechgy/multi-account-tool">ictechgy/multi-account-tool</a> · MIT</span>
+    <span class="gen">Generated from <code>README.ko.md</code> · <code>scripts/build-docs.mjs</code></span>
+  </div>
 </footer>
+<script>
+(function(){
+  var btn=document.getElementById('theme-toggle');
+  if(btn)btn.addEventListener('click',function(){
+    var cur=document.documentElement.getAttribute('data-theme');
+    var sysDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var isDark=cur?cur==='dark':sysDark;
+    var next=isDark?'light':'dark';
+    document.documentElement.setAttribute('data-theme',next);
+    try{localStorage.setItem('theme',next);}catch(e){}
+  });
+  var links=Array.prototype.slice.call(document.querySelectorAll('[data-toc]'));
+  if(links.length&&'IntersectionObserver'in window){
+    var map={};links.forEach(function(l){map[l.getAttribute('data-toc')]=l;});
+    var obs=new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){links.forEach(function(l){l.classList.remove('active');});var l=map[e.target.id];if(l)l.classList.add('active');}
+      });
+    },{rootMargin:'0px 0px -75% 0px',threshold:0});
+    links.forEach(function(l){var h=document.getElementById(l.getAttribute('data-toc'));if(h)obs.observe(h);});
+  }
+})();
+</script>
 </body>
 </html>

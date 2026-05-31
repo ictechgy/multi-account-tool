@@ -3,20 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI — safe-by-default credential switching.">
+<meta name="description" content="Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from one TUI — safe-by-default credential switching.">
 <meta name="color-scheme" content="light dark">
+<meta property="og:title" content="multi-account-tool (mat)">
+<meta property="og:description" content="Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from one TUI — safe-by-default credential switching.">
+<meta property="og:type" content="website">
 <title>multi-account-tool (mat)</title>
+<script>(function(){try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="site-header">
-  <a class="site-title" href="index.html">multi-account-tool <code>mat</code></a>
-  <nav class="lang-switcher" aria-label="language"><span class="lang-link active" aria-current="page">English</span><span class="sep">·</span><a class="lang-link" href="ko.html">한국어</a></nav>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="index.html"><span class="brand-mark">mat</span> <span class="brand-sub">multi-account-tool</span></a>
+  <nav class="topnav" aria-label="site">
+    <span class="langswitch" aria-label="language"><a class="lang active" aria-current="page">EN</a><span class="lang-sep">/</span><a class="lang " href="ko.html">KO</a></span>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle dark mode" title="Toggle theme">
+      <span class="i-moon" aria-hidden="true">☾</span><span class="i-sun" aria-hidden="true">☀</span>
+    </button>
+    <a class="icon-btn gh" href="https://github.com/ictechgy/multi-account-tool" aria-label="GitHub repository" title="GitHub">
+      <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+    </a>
+  </nav>
 </header>
-<main class="markdown-body">
+<section class="hero">
+  <div class="hero-inner">
+<p class="eyebrow">AI CLI account switcher</p>
 <h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
 <p class="inline-lang" aria-hidden="true"><a href="ko.html">한국어</a> | English</p>
 <p>Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. No more <code>logout</code> / <code>login</code> shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths, OAuth refresh-token rotation awareness with TUI dialog (recapture / discard / cancel).</p>
+<div class="hero-cta"><a class="btn btn-primary" href="#install">Install</a><a class="btn" href="https://github.com/ictechgy/multi-account-tool">GitHub <span aria-hidden="true">↗</span></a></div>
 <pre><code>╭ Multi-Account Tool ────────────────────────────────╮
 │  AI CLI account switcher                           │
 ╰─────────────────────────────────────────────────────╯
@@ -25,7 +44,20 @@
     Codex CLI              [active: work]     ✓
     Gemini / Antigravity   [active: personal] ✓
 </code></pre>
-<hr>
+
+  </div>
+</section>
+<div class="layout">
+  <aside class="sidebar">
+    <details class="toc-collapse">
+      <summary class="toc-title">On this page</summary>
+      <nav class="toc" aria-label="On this page">
+<ul class="toc-list"><li><a href="#why" data-toc="why">Why</a></li><li><a href="#how-it-works" data-toc="how-it-works">How it works</a><ul class="toc-sub"><li><a href="#oauth-rotation-safety-matrix" data-toc="oauth-rotation-safety-matrix">OAuth Rotation Safety Matrix</a></li><li><a href="#platform-support" data-toc="platform-support">Platform support</a></li><li><a href="#switch-flow-lossless" data-toc="switch-flow-lossless">Switch flow (lossless)</a></li></ul></li><li><a href="#install" data-toc="install">Install</a><ul class="toc-sub"><li><a href="#homebrew-recommended-on-macos" data-toc="homebrew-recommended-on-macos">Homebrew (recommended on macOS)</a></li><li><a href="#npm" data-toc="npm">npm</a></li><li><a href="#from-source" data-toc="from-source">From source</a></li><li><a href="#verify-the-install" data-toc="verify-the-install">Verify the install</a></li></ul></li><li><a href="#usage" data-toc="usage">Usage</a><ul class="toc-sub"><li><a href="#first-run" data-toc="first-run">First run</a></li><li><a href="#adding-a-new-account" data-toc="adding-a-new-account">Adding a new account</a></li><li><a href="#key-bindings" data-toc="key-bindings">Key bindings</a></li><li><a href="#mat-exec-one-shot-swap-around-a-command" data-toc="mat-exec-one-shot-swap-around-a-command">mat exec — one-shot swap around a command</a></li><li><a href="#mat-session-per-session-isolation-different-account-per-terminal-concurrently" data-toc="mat-session-per-session-isolation-different-account-per-terminal-concurrently">mat session — per-session isolation (different account per terminal, concurrently)</a></li><li><a href="#mat-freshness-pre-swap-safety-check" data-toc="mat-freshness-pre-swap-safety-check">mat freshness — pre-swap safety check</a></li></ul></li><li><a href="#data-layout" data-toc="data-layout">Data layout</a></li><li><a href="#security" data-toc="security">Security</a><ul class="toc-sub"><li><a href="#accepted-trade-offs-by-design" data-toc="accepted-trade-offs-by-design">Accepted trade-offs (by design)</a></li><li><a href="#built-in-safeguards" data-toc="built-in-safeguards">Built-in safeguards</a></li><li><a href="#not-recommended-on" data-toc="not-recommended-on">Not recommended on</a></li></ul></li><li><a href="#adding-a-new-cli" data-toc="adding-a-new-cli">Adding a new CLI</a><ul class="toc-sub"><li><a href="#1-user-plugin-no-code-change-required-recommended-for-personal-use" data-toc="1-user-plugin-no-code-change-required-recommended-for-personal-use">1. User plugin — no code change required (recommended for personal use)</a></li><li><a href="#2-built-in-addition-requires-mat-repo-pr" data-toc="2-built-in-addition-requires-mat-repo-pr">2. Built-in addition — requires mat repo PR</a></li></ul></li><li><a href="#changelog" data-toc="changelog">Changelog</a></li><li><a href="#roadmap" data-toc="roadmap">Roadmap</a></li><li><a href="#license" data-toc="license">License</a></li></ul>
+      </nav>
+    </details>
+  </aside>
+  <main id="main" class="content markdown-body">
+
 <h2 id="why">Why</h2>
 <ul>
 <li>You use Claude Code, Codex, Gemini, and friends, each with multiple accounts (personal / work / team)</li>
@@ -34,7 +66,7 @@
 </ul>
 <h2 id="how-it-works">How it works</h2>
 <p><code>mat</code> swaps <strong>only the credentials</strong>. Everything else — hooks, agents, <code>CLAUDE.md</code>, conversation history, settings — stays untouched.</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -87,10 +119,10 @@
 <td>macOS Keychain / Linux Secret Service (service <code>goose</code>, account <code>secrets</code>) + <code>~/.config/goose/secrets.yaml</code> + <code>config.yaml</code></td>
 <td>Multi-source (account-scoped Keychain/os-keyring; Linux swaps via <code>secret-tool</code> — see below)</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <h3 id="oauth-rotation-safety-matrix">OAuth Rotation Safety Matrix</h3>
 <p>Some CLIs use <strong>OAuth refresh-token rotation</strong> (RFC 6749 best practice): a refresh token may only be used once, after which the provider invalidates it. If <code>mat</code> restores an older snapshot of such a token, the provider rejects it as &quot;already used&quot; and the user is forced to re-login. The table below summarises which <code>mat</code>-supported CLIs are affected.</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -135,13 +167,13 @@
 <td>🟢 None</td>
 <td>Standard swap suffices — but environment variables or project-local config can bypass <code>mat</code> (see &quot;Platform support&quot; below)</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p>Use <code>mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]</code> to inspect the live credentials versus the active profile before you swap. Exit code 0 means safe, exit code 1 means <code>mat</code> detected <code>stale</code> (identity changed or profile missing). For long-running sessions prefer <code>mat exec</code>, which automatically restores the previous profile after the command finishes — note that a <code>SIGKILL</code> to <code>mat</code> itself bypasses restore (see Security section).</p>
 <blockquote>
 <p><strong>OAuth rotation handling (PR-G/PR-I*/PR-H all landed):</strong> the TUI swap path detects freshness drift before swapping and shows an interactive <strong>Recapture / Discard / Cancel</strong> dialog (PR-G). Recapture saves the live credentials into the active profile via <code>snapshotLiveToProfile</code> then swaps; Discard skips the auto-snapshot (data loss); Cancel aborts. <code>mat exec</code> re-captures the live credentials on exit (PR-I*) so rotation triggered during the command is preserved in the swap-target profile before restore — protected against <code>SIGINT</code>/<code>SIGTERM</code>/<code>SIGHUP</code> (<code>SIGKILL</code> is OS-level untrappable and falls back to stale-recovery on the next <code>mat</code> call). Claude/Goose identity-aware adapters (PR-H) classify rotation vs identity change with <code>high</code>/<code>medium</code> confidence — no more <code>[low conf]</code> dialog noise on safe swaps.</p>
 </blockquote>
 <h3 id="platform-support">Platform support</h3>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -214,7 +246,7 @@
 <td>❌</td>
 <td>macOS Keychain / Linux Secret Service (<code>goose</code>/<code>secrets</code> via <code>secret-tool</code>) + <code>~/.config/goose/*.yaml</code>. On Linux mat includes the os-keyring source by default and requires <code>secret-tool</code> (libsecret-tools) + a keyring daemon — a missing tool or down daemon <strong>errors out</strong> rather than silently swapping stale YAML (Goose reaches the keyring via the libsecret <em>library</em>, so a missing <code>secret-tool</code> CLI does not prove the keyring is unused). Set <code>GOOSE_DISABLE_KEYRING=1</code> if you use the file backend; mat then omits os-keyring and swaps <code>secrets.yaml</code>. Windows Credential Manager not yet supported</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p>&quot;⚠️ untested&quot; = swap logic is platform-agnostic file I/O, but the project&#39;s CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI&#39;s documentation, not exercised. Patches and bug reports welcome.</p>
 <h3 id="switch-flow-lossless">Switch flow (lossless)</h3>
 <ol start="0">
@@ -264,7 +296,7 @@ mat --help       # short usage summary (subcommands: exec, freshness)
 <li>From now on, switch freely between profiles with <code>Enter</code></li>
 </ol>
 <h3 id="key-bindings">Key bindings</h3>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>Screen</th>
@@ -327,7 +359,7 @@ mat --help       # short usage summary (subcommands: exec, freshness)
 <td><code>c</code> / <code>Esc</code></td>
 <td>Cancel swap</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <h3 id="mat-exec-one-shot-swap-around-a-command"><code>mat exec</code> — one-shot swap around a command</h3>
 <pre><code class="language-bash">mat exec &lt;cli&gt; &lt;profile&gt; -- &lt;cmd...&gt;
 </code></pre>
@@ -348,7 +380,7 @@ lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
 </ul>
 <p>This is <strong>temporal isolation</strong>, not session isolation: while the child runs, the OS-global credentials are the <code>&lt;profile&gt;</code> ones. Two terminals running different <code>mat exec</code> commands serialise via the lock; true per-session isolation is on the roadmap.</p>
 <p>Exit codes:</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>Code</th>
@@ -383,7 +415,7 @@ lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
 <td><em>other (e.g., <code>3</code>, <code>42</code>)</em></td>
 <td>Child&#39;s own non-zero exit code is propagated as-is</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p>Note: <code>2</code> / <code>74</code> / <code>75</code> are reserved by <code>mat</code>&#39;s own error model (pre-spawn validation, lock contention, post-spawn restore failure). Any other non-zero code below <code>128</code> is the child&#39;s own exit code propagated transparently. Use <code>restoreError</code> log lines on stderr to distinguish <code>74</code> from a child exit <code>74</code> (unlikely but possible).</p>
 <h3 id="mat-session-per-session-isolation-different-account-per-terminal-concurrently"><code>mat session</code> — per-session isolation (different account per terminal, concurrently)</h3>
 <pre><code class="language-bash">mat session start &lt;cli&gt; &lt;profile&gt;   # launch an isolated subshell on &lt;profile&gt;
@@ -399,7 +431,7 @@ mat session start codex personal    # independent isolated dir → &quot;persona
 </code></pre>
 <p><strong>Mechanism — env injection + copy-isolate.</strong> <code>mat session start</code> spawns your <code>$SHELL</code> with the CLI&#39;s config-dir env var (e.g. <code>CODEX_HOME</code>) pointed at a fresh per-session directory under <code>~/.multi-account-tool/sessions/&lt;id&gt;/</code>. The profile&#39;s credentials are <strong>copied</strong> (0600) into that directory, so the CLI inside the subshell reads the isolated account. On exit, mat <strong>re-captures</strong> the (possibly OAuth-rotated) credentials back into the profile and removes the session directory. The OS-global credentials and <code>mat exec</code>&#39;s lock are never touched — so sessions run concurrently without interference.</p>
 <p><strong>Supported CLIs</strong> (those that relocate their <em>credential</em> directory via an env var):</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>CLI</th>
@@ -422,7 +454,7 @@ mat session start codex personal    # independent isolated dir → &quot;persona
 <td>Crush</td>
 <td><code>CRUSH_GLOBAL_CONFIG</code> + <code>CRUSH_GLOBAL_DATA</code></td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p><strong>Not supported</strong> (no credential-relocating env var; <code>mat session start</code> errors out): <code>gemini</code> (no env override — <a href="https://github.com/google-gemini/gemini-cli/issues/2815">gemini-cli#2815</a>), <code>claude</code> (macOS Keychain service name is not env-overridable), <code>aider</code> (credentials are provider env vars, not a file), <code>opencode</code>, <code>goose</code>, and any user <strong>plugin</strong> CLI (1st iteration is built-in only).</p>
 <p>Exit codes mirror <code>mat exec</code>: <code>0</code> success, <code>2</code> usage error, <code>74</code> re-capture failed, <code>128+N</code> child signal <code>N</code> (self-raised), child&#39;s own non-zero code propagated otherwise.</p>
 <p><strong>Limitations (read before relying on it):</strong></p>
@@ -445,7 +477,7 @@ mat freshness codex --profile work --json
 </code></pre>
 <p>Each source is classified into one of four states — <code>fresh</code> (byte-identical), <code>rotated</code> (token rotated but identity preserved; safe to swap), <code>stale</code> (identity changed — a different account; <strong>swap will revoke</strong>), <code>inflight</code> (multi-source CLI partially updated — retry shortly).</p>
 <p>Exit codes:</p>
-<table>
+<div class="table-wrap"><table>
 <thead>
 <tr>
 <th>Code</th>
@@ -468,7 +500,7 @@ mat freshness codex --profile work --json
 <td><code>74</code></td>
 <td>Internal check failed (e.g., source read error)</td>
 </tr>
-</tbody></table>
+</tbody></table></div>
 <p>See the OAuth Rotation Safety Matrix at the top of this README for per-CLI classification confidence.</p>
 <hr>
 <h2 id="data-layout">Data layout</h2>
@@ -582,10 +614,36 @@ mat freshness codex --profile work --json
 <h2 id="license">License</h2>
 <p>MIT — <a href="https://github.com/ictechgy/multi-account-tool/blob/main/LICENSE">LICENSE</a></p>
 
-</main>
+  </main>
+</div>
 <footer class="site-footer">
-  <a href="https://github.com/ictechgy/multi-account-tool">GitHub</a> ·
-  <span>Generated from <code>README.md</code> by <code>scripts/build-docs.mjs</code> — do not edit by hand.</span>
+  <div class="footer-inner">
+    <span><a href="https://github.com/ictechgy/multi-account-tool">ictechgy/multi-account-tool</a> · MIT</span>
+    <span class="gen">Generated from <code>README.md</code> · <code>scripts/build-docs.mjs</code></span>
+  </div>
 </footer>
+<script>
+(function(){
+  var btn=document.getElementById('theme-toggle');
+  if(btn)btn.addEventListener('click',function(){
+    var cur=document.documentElement.getAttribute('data-theme');
+    var sysDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var isDark=cur?cur==='dark':sysDark;
+    var next=isDark?'light':'dark';
+    document.documentElement.setAttribute('data-theme',next);
+    try{localStorage.setItem('theme',next);}catch(e){}
+  });
+  var links=Array.prototype.slice.call(document.querySelectorAll('[data-toc]'));
+  if(links.length&&'IntersectionObserver'in window){
+    var map={};links.forEach(function(l){map[l.getAttribute('data-toc')]=l;});
+    var obs=new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){links.forEach(function(l){l.classList.remove('active');});var l=map[e.target.id];if(l)l.classList.add('active');}
+      });
+    },{rootMargin:'0px 0px -75% 0px',threshold:0});
+    links.forEach(function(l){var h=document.getElementById(l.getAttribute('data-toc'));if(h)obs.observe(h);});
+  }
+})();
+</script>
 </body>
 </html>
