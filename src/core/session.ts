@@ -21,13 +21,22 @@
  * 를 export 한다. spawn/시그널/라이프사이클(runSession 등)은 PR-S3 에서 추가된다.
  */
 
+import { ChildProcess, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 
+import { findCliDef } from './cli-defs.js';
 import { UsageError } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
+import { isProcessAlive, sanitizeForStderr } from './lockfile.js';
 import { expandTilde, sessionDir, sessionsDir, validateSessionId } from './paths.js';
-import { readProfileFile, writeProfileFile } from './profile-store.js';
+import {
+  profileExists,
+  readProfileFile,
+  validateProfileName,
+  writeProfileFile
+} from './profile-store.js';
 import type { CliDef } from './types.js';
 
 /** 재캡처 write 의 타임아웃 (ms, default 10s). `mat exec` 와 동일 env 재사용 (신규 env 금지). */
@@ -280,4 +289,287 @@ async function pathExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR-S3: runSession (spawn + 시그널 + finally) + 라이프사이클(list/stop/orphan)
+// exec.ts 의 forwarder/settled-guard/finally 패턴 미러, 단 전역 swap/lock 미사용.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 외부에서 잡고 자식에게 전달할 시그널 (exec.ts FORWARD_SIGNALS 동형). */
+const SESSION_FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+/** orphan 회수 TTL (ms). pid 죽음 AND startedAt 이 이보다 오래됐을 때만 회수 (M2). */
+const ORPHAN_TTL_MS = 60 * 60 * 1000; // 1h
+
+export interface SessionStartOptions {
+  cliId: string;
+  profileName: string;
+}
+
+export interface SessionResult {
+  /** 자식(subshell) 종료 코드. signal 종료 시 null. */
+  code: number | null;
+  /** 자식이 받은 시그널 (있으면). */
+  signal: NodeJS.Signals | null;
+  /** 종료 재캡처 실패/timeout 시 설정. cli.tsx 가 별도 exit code 로 매핑. */
+  recaptureError?: Error;
+}
+
+/** session.json 스키마 (세션 디렉토리에 기록 — list/orphan 이 읽음). */
+interface SessionMeta {
+  id: string;
+  cli: string;
+  profile: string;
+  /** 세션을 소유한 mat 프로세스 pid (subshell 아님). */
+  pid: number;
+  /** ISO-8601 시작 시각. */
+  startedAt: string;
+  roots: { env: string; dir: string }[];
+}
+
+export interface SessionInfo {
+  id: string;
+  cli: string;
+  profile: string;
+  pid: number;
+  startedAt: string;
+  alive: boolean;
+}
+
+/**
+ * 세션 격리 실행 — 격리 디렉토리 materialize → env 주입 subshell spawn → 종료 시
+ * 원자 재캡처 + 정리. 전역 swap/lock 을 건드리지 않아 동시 다계정 안전.
+ */
+export async function runSession(opts: SessionStartOptions): Promise<SessionResult> {
+  const def = findCliDef(opts.cliId);
+  if (!def) throw new UsageError(`알 수 없는 CLI: ${opts.cliId}`);
+  if (!def.session || def.session.roots.length === 0) {
+    throw new UsageError(`'${opts.cliId}' 는 세션 격리를 지원하지 않습니다 (env override 미지원).`);
+  }
+  const profileName = validateProfileName(opts.profileName);
+  if (!(await profileExists(opts.cliId, profileName))) {
+    throw new UsageError(`프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
+  }
+
+  await reapOrphans().catch(() => {
+    /* best-effort — start 를 막지 않는다 */
+  });
+
+  const id = makeSessionId(opts.cliId, profileName);
+  const plan = planSession(def, profileName, id);
+  await materializeSession(plan); // 세션 디렉토리 생성 + 자격증명 복사
+  await writeSessionMeta(id, {
+    id,
+    cli: opts.cliId,
+    profile: profileName,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    roots: plan.roots.map((r) => ({ env: r.env, dir: r.dir }))
+  });
+
+  const childRef: { current: ChildProcess | null } = { current: null };
+  const forwarders = registerSessionForwarders(childRef);
+  try {
+    let spawnResult: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let spawnError: unknown;
+    try {
+      spawnResult = await spawnSessionShell(plan, childRef);
+    } catch (err) {
+      spawnError = err;
+    }
+
+    // spawn 성공/실패와 무관하게 재캡처 + 정리 (exec.ts runUnderLock 패턴 미러).
+    const recaptureError = await recaptureBestEffort(plan);
+    await removeSessionDir(id).catch(() => {
+      /* best-effort */
+    });
+
+    if (spawnError) throw spawnError;
+    return { code: spawnResult!.code, signal: spawnResult!.signal, recaptureError };
+  } finally {
+    forwarders.dispose();
+  }
+}
+
+/** 세션 id 생성 — `<cli>-<profile>-<rand8>`. profile 은 sessionId 화이트리스트로 sanitize + 길이 cap. */
+function makeSessionId(cliId: string, profileName: string): string {
+  const rand8 = randomBytes(4).toString('hex');
+  const safeCli = cliId.slice(0, 24);
+  const safeProfile = profileName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 24);
+  const id = `${safeCli}-${safeProfile}-${rand8}`;
+  return validateSessionId(id); // 방어 — 위 sanitize 로 항상 통과
+}
+
+/** subshell spawn (stdio inherit, env 에 root env + MAT_SESSION 주입, 셸 미경유 argv). */
+function spawnSessionShell(
+  plan: SessionPlan,
+  childRef: { current: ChildProcess | null }
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const shell = process.env.SHELL || '/bin/sh';
+    const env: NodeJS.ProcessEnv = { ...process.env, MAT_SESSION: plan.id };
+    for (const root of plan.roots) env[root.env] = root.dir; // 격리 디렉토리 주입 (토큰 미포함, 경로만)
+    const child = spawn(shell, [], { stdio: 'inherit', env });
+    childRef.current = child;
+
+    let settled = false;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      childRef.current = null;
+      child.removeAllListeners('error');
+      child.removeAllListeners('exit');
+      action();
+    };
+    child.on('error', (err) => settle(() => reject(err)));
+    child.on('exit', (code, signal) => settle(() => resolve({ code, signal })));
+  });
+}
+
+/** SIGINT/SIGTERM/SIGHUP 을 subshell 에 forward (exec.ts registerForwarders 동형). */
+function registerSessionForwarders(childRef: {
+  current: ChildProcess | null;
+}): { dispose(): void } {
+  const handlers = SESSION_FORWARD_SIGNALS.map((sig) => {
+    const handler = () => {
+      const child = childRef.current;
+      if (!child) return;
+      if (child.exitCode != null || child.signalCode != null) return;
+      try {
+        child.kill(sig);
+      } catch {
+        /* best-effort */
+      }
+    };
+    process.on(sig, handler);
+    return { sig, handler };
+  });
+  return {
+    dispose() {
+      for (const { sig, handler } of handlers) process.removeListener(sig, handler);
+    }
+  };
+}
+
+/** 재캡처를 best-effort 로 — 실패/timeout 은 stderr 안내 후 error 반환(정리는 계속 진행). */
+async function recaptureBestEffort(plan: SessionPlan): Promise<Error | undefined> {
+  try {
+    await recaptureSession(plan);
+    return undefined;
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    process.stderr.write(
+      `[mat] 세션 종료 재캡처 실패 (${plan.cli}/${plan.profile}): ${sanitizeForStderr(e.message)}. ` +
+        `'mat freshness ${plan.cli}' 로 확인하세요.\n`
+    );
+    return e;
+  }
+}
+
+/** session.json 기록 (writeFileAtomic, 0600). */
+async function writeSessionMeta(id: string, meta: SessionMeta): Promise<void> {
+  await writeFileAtomic(join(sessionDir(id), 'session.json'), JSON.stringify(meta, null, 2));
+}
+
+/** session.json 읽기. 없거나 손상되면 null. */
+async function readSessionMeta(id: string): Promise<SessionMeta | null> {
+  try {
+    const raw = await fs.readFile(join(sessionsDir(), id, 'session.json'), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<SessionMeta>;
+    if (typeof parsed.id !== 'string' || typeof parsed.pid !== 'number') return null;
+    return {
+      id: parsed.id,
+      cli: typeof parsed.cli === 'string' ? parsed.cli : '',
+      profile: typeof parsed.profile === 'string' ? parsed.profile : '',
+      pid: parsed.pid,
+      startedAt: typeof parsed.startedAt === 'string' ? parsed.startedAt : '',
+      roots: Array.isArray(parsed.roots) ? (parsed.roots as SessionMeta['roots']) : []
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** sessionsDir 내 세션 디렉토리 id 목록 (없으면 빈 배열). */
+async function listSessionIds(): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(sessionsDir(), { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+/** 실행 중/orphan 세션 목록 (pid liveness 포함). */
+export async function listSessions(): Promise<SessionInfo[]> {
+  const out: SessionInfo[] = [];
+  for (const id of await listSessionIds()) {
+    const meta = await readSessionMeta(id);
+    if (!meta) continue;
+    out.push({
+      id: meta.id,
+      cli: meta.cli,
+      profile: meta.profile,
+      pid: meta.pid,
+      startedAt: meta.startedAt,
+      alive: isProcessAlive(meta.pid)
+    });
+  }
+  return out;
+}
+
+/** 세션 종료. 살아있으면 SIGTERM(소유 mat 의 finally 가 정리), 죽었으면 orphan 정리. */
+export async function stopSession(id: string): Promise<void> {
+  validateSessionId(id);
+  const meta = await readSessionMeta(id);
+  if (!meta) {
+    await removeSessionDir(id).catch(() => {
+      /* best-effort */
+    });
+    return;
+  }
+  if (isProcessAlive(meta.pid)) {
+    try {
+      process.kill(meta.pid, 'SIGTERM');
+    } catch {
+      /* 이미 죽었으면 아래 orphan 정리로 */
+    }
+    return;
+  }
+  await removeSessionDir(id); // 죽은 세션 — 재캡처 없이 정리
+}
+
+/**
+ * orphan 세션 회수 — pid 죽음 AND startedAt TTL 초과 AND 세션 디렉토리 mtime TTL 초과
+ * (셋 다 충족만, 보수적). 재캡처 없이 삭제 + 경고. 회수한 id 목록 반환.
+ */
+export async function reapOrphans(): Promise<string[]> {
+  const now = Date.now();
+  const reaped: string[] = [];
+  for (const id of await listSessionIds()) {
+    const meta = await readSessionMeta(id);
+    if (!meta) continue;
+    if (isProcessAlive(meta.pid)) continue; // 살아있으면 보존
+    const startedMs = Date.parse(meta.startedAt);
+    if (Number.isFinite(startedMs) && now - startedMs <= ORPHAN_TTL_MS) continue; // TTL 내 보존
+    // 세션 디렉토리 자체 mtime 교차검증 (격리본 mtime 아님 — 죽은 세션 식별 안정성, M-B).
+    let dirMtime = 0;
+    try {
+      dirMtime = (await fs.stat(sessionDir(id))).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (now - dirMtime <= ORPHAN_TTL_MS) continue; // 최근 디렉토리 → 보존
+    await removeSessionDir(id).catch(() => {
+      /* best-effort */
+    });
+    process.stderr.write(
+      `[mat] orphan 세션 회수: ${sanitizeForStderr(id)} ` +
+        `(비정상 종료 — 프로필은 마지막 정상 재캡처 상태).\n`
+    );
+    reaped.push(id);
+  }
+  return reaped;
 }
