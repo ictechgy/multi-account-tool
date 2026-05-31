@@ -271,9 +271,14 @@ interface RecaptureItem {
  *    cred 단위 withTimeout(liveness 보호). 한 건이라도 hang/실패 → commit 이 전무하므로 라이브
  *    프로필은 손상 0(split 0) — staging 만 best-effort 정리 후 throw. hung stage 가 late-landing
  *    해도 staging 임시파일만 오염되고 라이브에 닿지 않는다.
- *  - phase 2 (commit): staging → 라이브 일괄 rename(동일 fs 내 빠른 atomic). 부분 실패/timeout →
- *    미커밋 staging 정리 + 커밋된 cred 를 backup 으로 역순 원복(없던 cred 는 삭제) 후 throw.
- *    잔여 split 윈도우는 rename 단계로 축소(catastrophic fs 한정).
+ *  - phase 2 (commit): staging → 라이브 일괄 rename(동일 fs 내 빠른 atomic). rename 은 취소 불가라
+ *    withTimeout 으로 감싸지 않는다(timeout 후 late-land 시 롤백 누락 split 방지) — 완료/예외까지
+ *    대기. 부분 실패 → 미커밋 staging 정리 + 커밋된 cred 를 compare-and-restore 역순 원복(없던
+ *    cred 는 삭제) 후 throw.
+ *
+ * 한계 (스펙 §6.1): 같은 cli·**같은 프로필**을 동시에 두 세션이 띄우면 재캡처가 lock 없이 같은
+ * 프로필에 써서 토큰 세대가 섞일 수 있다(같은 계정 한정 — wrong-account 아님, 다음 사용 시 자가
+ * 치유). 본 기능은 터미널마다 다른 프로필 전제. 프로필 단위 lock 은 follow-up 아키텍처 결정.
  */
 export async function recaptureSession(plan: SessionPlan): Promise<void> {
   const items: RecaptureItem[] = [];
@@ -298,21 +303,31 @@ export async function recaptureSession(plan: SessionPlan): Promise<void> {
 
   // phase 1 — stage (라이브 무변경). hang/실패 → commit 0 → split 0.
   const staged: { it: RecaptureItem; path: string }[] = [];
+  const pending: Promise<string>[] = []; // 각 stage 의 underlying(취소 불가) — late-land 정리용
   try {
     for (const it of items) {
-      const path = await withTimeout(
-        stageProfileFile(plan.cli, plan.profile, it.saveAs, it.newValue),
-        ms,
-        `stage(${it.saveAs})`
-      );
+      const underlying = stageProfileFile(plan.cli, plan.profile, it.saveAs, it.newValue);
+      pending.push(underlying);
+      const path = await withTimeout(underlying, ms, `stage(${it.saveAs})`);
       staged.push({ it, path });
     }
   } catch (err) {
-    // 완료된 staging 만 정리 가능 — hang 한 stage 는 path 를 못 받았다. 그 underlying write 가
-    // 나중에 landing 하면 프로필 디렉토리에 고아 `.recap-*`(0600) 가 남을 수 있다(catastrophic
-    // fs 한정, 라이브 무손상). 명시 saveAs 로만 읽으므로 자격증명으로 오인되지 않는 무해 litter.
-    // sweep 정리는 동시 같은-프로필 세션의 in-flight staging 을 지울 race 가 있어 도입하지 않음.
     for (const s of staged) await discardStagedFile(s.path);
+    // withTimeout 은 underlying 을 취소하지 못한다. timeout 으로 빠져나온 stage 가 늦게 완료
+    // (late-land)되면 자격증명이 든 고아 `.recap-*` 가 남는다 → staged 에 없는(=미커밋) underlying
+    // 의 결과 path 에 한해 정리를 연결한다 (PR #61 3회차 Codex). staged 가 완성된 catch 시점에
+    // 연결하므로 flag 경쟁이 없고, 자기 path 만 건드려 동시 세션 staging sweep race 도 없다.
+    const stagedPaths = new Set(staged.map((s) => s.path));
+    for (const u of pending) {
+      void u.then(
+        (p) => {
+          if (!stagedPaths.has(p)) void discardStagedFile(p);
+        },
+        () => {
+          /* stage 자체 실패면 writeFileAtomic 가 자기 tmp 를 이미 정리 */
+        }
+      );
+    }
     throw err;
   }
 
@@ -391,6 +406,13 @@ const ORPHAN_TTL_MS = 60 * 60 * 1000; // 1h
 const PS_SIGNATURE_TIMEOUT_MS = 2_000;
 
 /**
+ * pidStart 서명 형식 버전. 서명 산출 방식(ps 포맷/필드)이 바뀌면 bump 한다. 기록된 서명이 현재
+ * 버전과 다르면 비교 불가로 보아 `unknown`(보존)으로 처리 — 형식 차이를 pid 재사용으로 오인해
+ * 살아있는 세션을 삭제하지 않게 한다 (PR #61 3회차 Codex). 미접두(옛 메타)도 `unknown`.
+ */
+const PID_SIG_VERSION = 'v1';
+
+/**
  * 프로세스의 시작 서명(`ps -o lstart= -p <pid>`) — 부팅 후 고정값이라 pid 재사용 검출에 쓴다.
  *
  * pid 만으로는 죽은 mat 의 pid 가 재할당된 무관 프로세스와 구분할 수 없어, `stopSession` 이
@@ -419,7 +441,7 @@ export async function processStartSignature(pid: number): Promise<string | null>
       );
     });
     const sig = stdout.trim();
-    return sig || null;
+    return sig ? `${PID_SIG_VERSION}:${sig}` : null; // 버전 접두 — 형식 변경 감지용
   } catch {
     return null; // ps 부재/조회 실패/timeout → null (호출부가 보수적으로 폴백)
   }
@@ -441,9 +463,12 @@ type OwnerStatus = 'owner' | 'dead-or-reused' | 'unknown';
 
 async function classifyOwner(meta: SessionMeta): Promise<OwnerStatus> {
   if (!isProcessAlive(meta.pid)) return 'dead-or-reused';
-  if (!meta.pidStart) return 'owner'; // 옛 메타 — 검증할 서명 없음 → liveness-only
+  if (!meta.pidStart) return 'owner'; // 옛 메타(서명 미기록) — liveness-only
+  // 기록된 서명이 현재 버전 형식이 아니면 비교 불가 → unknown(보존). 형식 차이를 재사용으로 오인해
+  // 살아있는 세션을 dead-or-reused 로 삭제하는 것을 막는다 (PR #61 3회차 Codex).
+  if (!meta.pidStart.startsWith(`${PID_SIG_VERSION}:`)) return 'unknown';
   const liveSig = await processStartSignature(meta.pid);
-  if (!liveSig) return 'unknown'; // 서명 있으나 현재값 조회 실패 → 확정 불가
+  if (!liveSig) return 'unknown'; // 현재값 조회 실패 → 확정 불가
   return liveSig === meta.pidStart ? 'owner' : 'dead-or-reused';
 }
 

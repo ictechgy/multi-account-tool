@@ -243,8 +243,9 @@ export async function commitStagedFile(
   if (dirname(stagingPath) !== dirname(finalPath) || suffix === null || !STAGING_SUFFIX_RE.test(suffix)) {
     throw new Error('staging 경로가 예상 패턴(<file>.recap-<hex>)이 아닙니다 (commit 거부).');
   }
-  if ((await fs.lstat(stagingPath)).isSymbolicLink()) {
-    throw new Error('staging 이 symlink 입니다 (commit 거부).');
+  const lst = await fs.lstat(stagingPath);
+  if (lst.isSymbolicLink() || !lst.isFile()) {
+    throw new Error('staging 이 일반 파일이 아닙니다 (symlink/디렉토리 등 — commit 거부).');
   }
   await fs.rename(stagingPath, finalPath);
 }

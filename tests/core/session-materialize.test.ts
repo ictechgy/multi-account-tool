@@ -413,6 +413,28 @@ describe('recaptureSession — 2-phase stage/commit 원자성 (H1)', () => {
       await delay(220);
       expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('OLD-SET');
       expect(await readProfileFile('qwen', 'work', 'qwen.env')).toBe('OLD-ENV');
+      // late-land staging 은 자기 cleanup 으로 정리됨 — 자격증명 든 고아 `.recap-*` 잔류 0 (#3).
+      const profDir = join(profileFilePath('qwen', 'work', 'qwen.env'), '..');
+      const litter = (await fs.readdir(profDir)).filter((f) => f.includes('.recap-'));
+      expect(litter).toEqual([]);
+    } finally {
+      delete process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
+    }
+  });
+
+  it('commit 은 timeout 으로 감싸지 않음 — 느리지만 성공하는 commit 을 끝까지 기다려 반영 (#1)', async () => {
+    process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = '50';
+    try {
+      const plan = await setupQwenSession();
+      // commit 을 timeout(50ms)보다 느리게(150ms) — 그러나 성공. commit 이 withTimeout 으로
+      // 감싸였다면 50ms 에 timeout throw 했겠지만, 감싸지 않으므로 끝까지 기다려 정상 반영한다.
+      mockedCommit.mockImplementation(async (sp, cli, prof, file) => {
+        await delay(150);
+        return realCommit(sp, cli, prof, file);
+      });
+      await recaptureSession(plan); // timeout 던지지 않고 완료
+      expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('NEW-SET');
+      expect(await readProfileFile('qwen', 'work', 'qwen.env')).toBe('NEW-ENV');
     } finally {
       delete process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
     }

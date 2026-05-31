@@ -279,7 +279,8 @@ describe('listSessions / stopSession / reapOrphans', () => {
       s === 0 ? realKill(p, 0) : true) as typeof process.kill);
     try {
       await stopSession('codex-work-unknwn01');
-      expect(killSpy.mock.calls.filter(([, s]) => s === 'SIGTERM')).toEqual([]); // wrong-kill 방지
+      // liveness probe(signal 0) 외 어떤 종료 신호(SIGTERM/SIGKILL/숫자 등)도 보내지 않음.
+      expect(killSpy.mock.calls.filter(([, s]) => s !== 0)).toEqual([]);
       await expect(fs.access(dir)).resolves.toBeUndefined(); // 라이브 가능성 → 디렉토리 보존
     } finally {
       killSpy.mockRestore();

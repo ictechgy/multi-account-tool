@@ -135,6 +135,14 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 - 자격증명은 **세션 격리본에만** 존재 → 실제 base 자격증명, `config.json` active map, `mat exec` cli lock 과 **무간섭**(자격증명 충돌 0).
 - 단, **allow-list 로 symlink 공유한 read-mostly config(Codex `config.toml`)는 실제 base 와 공유** → 그 파일에 한해 세션/전역 동시 쓰기 race 가 이론상 가능(자격증명 아님, read-mostly 라 위험 낮음). 명시 한계. 그 외 비-secret 은 세션 내 ephemeral 이라 공유 race 없음.
 
+### 6.1 동시 **같은-프로필** 세션 재캡처의 한계 (명시 — PR #61 3회차)
+본 기능은 **터미널마다 서로 다른 프로필**을 쓰는 것이 설계 전제다(§1). 같은 cli·**같은 프로필**을 두 터미널에서 동시에 띄우면(= 같은 계정), 두 세션의 종료 재캡처가 **lock 없이** 같은 프로필 파일에 쓴다. 결과:
+- 재캡처는 프로필 단위로 직렬화되지 않으므로 multi-cred(Qwen/Crush) 의 경우 두 세션의 commit 이 cred 단위로 interleave 돼 **같은 계정의 서로 다른 토큰 세대가 섞일** 수 있다(last-writer-wins / split-by-generation).
+- `rollbackCred` 의 compare-and-restore 는 **값으로만** 소유를 구분하므로, 동시 세션이 동일 값을 쓰면(ABA) 구분 못 한다.
+- **위험 범위**: 모두 **같은 계정** 내 토큰 세대 불일치이지 **wrong-account 노출이 아니다**. 최악도 한쪽 cred 가 stale → 다음 CLI 사용 시 refresh/re-auth 로 자가 치유. 단일-cred CLI(codex/kimi)는 last-writer-wins 로 양쪽 모두 유효.
+- **완전 차단**하려면 프로필 단위 advisory lock 을 재캡처 commit/rollback 구간에 도입해야 한다(`mat exec` cli-lock 과 별도 namespace — exec 충돌 회피). 이는 lock-free 설계와의 트레이드오프라 **follow-up 아키텍처 결정**으로 분리. 1차는 "터미널마다 다른 프로필" 권장 + 본 한계 명시로 운용한다.
+- `classifyOwner='unknown'`(서명 조회 영구 실패) 세션은 stop/reap 이 보존만 한다 → ps 가 항구적으로 불능인 비현실적 환경에선 orphan 이 남을 수 있다. 수동 삭제(`rm` 세션 디렉토리) 또는 pid 종료로 해소. auto-force-delete 는 라이브 세션 오삭제 위험이 커 도입하지 않음.
+
 ## 7. 에러 처리 / 엣지
 - `session` 부재 CLI → "세션 격리 미지원(env override 미지원): <이유>" 에러.
 - profile 자격증명 부재 → "캡처된 자격증명 없음" 에러(세션 생성 전).
