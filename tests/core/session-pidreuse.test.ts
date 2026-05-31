@@ -96,6 +96,9 @@ describe('stopSession — pid 재사용 방어 (H2)', () => {
       startedAt: new Date().toISOString(),
       pidStart: 'Mon Jan  1 00:00:00 2000'
     });
+    // ps 가 정상 동작함을 단언 — 보존이 ps 실패(null)가 아니라 '버전 미접두→unknown' 분기에서
+    // 왔음을 명확히 한다 (PR #61 3회차 Forge).
+    expect(await processStartSignature(process.pid)).toBeTruthy();
     const kill = spyKill();
     await stopSession('codex-work-oldfmt01');
     expect(kill.mock.calls.filter(([, s]) => s !== 0)).toEqual([]); // 종료 신호 0회

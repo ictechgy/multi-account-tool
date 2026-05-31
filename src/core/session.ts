@@ -319,9 +319,11 @@ export async function recaptureSession(plan: SessionPlan): Promise<void> {
     // 연결하므로 flag 경쟁이 없고, 자기 path 만 건드려 동시 세션 staging sweep race 도 없다.
     const stagedPaths = new Set(staged.map((s) => s.path));
     for (const u of pending) {
+      // discardStagedFile 은 내부 catch 로 reject 하지 않으나, detached 연속이라 명시 .catch 로
+      // unhandled rejection 가능성을 봉인한다 (PR #61 3회차 Codex/Forge — defense-in-depth).
       void u.then(
         (p) => {
-          if (!stagedPaths.has(p)) void discardStagedFile(p);
+          if (!stagedPaths.has(p)) void discardStagedFile(p).catch(() => {});
         },
         () => {
           /* stage 자체 실패면 writeFileAtomic 가 자기 tmp 를 이미 정리 */
