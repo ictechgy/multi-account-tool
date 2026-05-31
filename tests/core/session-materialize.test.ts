@@ -79,6 +79,9 @@ async function writeBaseFile(rel: string, content: string): Promise<string> {
 
 const SID = 'codex-work-test0001';
 
+/** 테스트용 지연 — late-landing 모사 등에 사용. */
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 describe('planSession', () => {
   it('codex: 단일 root/cred (auth.json, rel auth.json), share ∅', () => {
     const plan = planSession(findCliDef('codex')!, 'work', SID);
@@ -287,6 +290,48 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     await expect(materializeSession(plan)).rejects.toThrow();
     await expect(fs.access(sessionDir(SID))).rejects.toThrow(); // 세션 디렉토리 미잔류
   });
+
+  it('allow-list 대상이 디렉토리면 거부 (isFile — 통째 노출 차단, #8)', async () => {
+    const dirDef: CliDef = {
+      id: 'fakecli', name: 'Fake',
+      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['sub'] }] }
+    };
+    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    // 'sub' 를 디렉토리로 생성 (그 안에 파일 포함) → 디렉토리 share 는 거부돼야 한다.
+    await fs.mkdir(join(tmp.home, '.fake', 'sub'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.fake', 'sub', 'secret'), 'x');
+    const plan = planSession(dirDef, 'work', SID);
+    await expect(materializeSession(plan)).rejects.toThrow();
+    await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+  });
+});
+
+describe('commitStagedFile 계약 (PR #61 2회차 #4)', () => {
+  it('예상 패턴(<file>.recap-<hex>) 아닌 staging 경로는 거부', async () => {
+    await writeProfileFile('codex', 'work', 'auth.json', 'X');
+    const finalPath = profileFilePath('codex', 'work', 'auth.json');
+    const foreign = `${finalPath}.evil`; // .recap-<hex> 아님
+    await fs.writeFile(foreign, 'Y');
+    await expect(commitStagedFile(foreign, 'codex', 'work', 'auth.json')).rejects.toThrow();
+    // 라이브 프로필 무변경
+    expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('X');
+  });
+
+  it('staging 이 symlink 면 거부', async () => {
+    await writeProfileFile('codex', 'work', 'auth.json', 'X');
+    const finalPath = profileFilePath('codex', 'work', 'auth.json');
+    const link = `${finalPath}.recap-deadbeef`;
+    await fs.symlink(finalPath, link); // basename 패턴은 맞지만 symlink
+    await expect(commitStagedFile(link, 'codex', 'work', 'auth.json')).rejects.toThrow();
+  });
+
+  it('정상 staging(stageProfileFile 산출)은 commit 성공', async () => {
+    await writeProfileFile('codex', 'work', 'auth.json', 'OLD');
+    const sp = await stageProfileFile('codex', 'work', 'auth.json', 'NEW');
+    await commitStagedFile(sp, 'codex', 'work', 'auth.json');
+    expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('NEW');
+  });
 });
 
 describe('recaptureSession — 2-phase stage/commit 원자성 (H1)', () => {
@@ -348,22 +393,48 @@ describe('recaptureSession — 2-phase stage/commit 원자성 (H1)', () => {
     }
   });
 
-  it('commit hang: 2번째 commit hang → timeout → 1번째 backup 원복(split 0)', async () => {
+  it('stage timeout 후 staging 이 늦게 생성돼도 라이브 무변경 (late-land 격리, #3)', async () => {
     process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = '50';
     try {
       const plan = await setupQwenSession();
       let call = 0;
-      mockedCommit.mockImplementation((sp, cli, prof, file) => {
+      mockedStage.mockImplementation(async (cli, prof, file, val) => {
         call++;
-        if (call === 2) return new Promise<void>(() => { /* hang */ });
-        return realCommit(sp, cli, prof, file);
+        // 2번째 stage 는 timeout(50ms) 이후에 실제 staging 파일을 생성 — late-landing 모사.
+        if (call === 2) {
+          await delay(150);
+          return realStage(cli, prof, file, val);
+        }
+        return realStage(cli, prof, file, val);
       });
       await expect(recaptureSession(plan)).rejects.toThrow(/timeout/i);
-      // commit1 은 롤백(OLD). 전체-race 였다면 commit1 이 NEW 로 남아 split.
+      // late staging 완료 시간을 준 뒤에도 라이브 프로필은 OLD — 늦은 write 가 staging 만
+      // 만들고 commit(rename) 은 0회라 라이브에 닿지 않는다 (H1 핵심 보장의 코드 고정).
+      await delay(220);
       expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('OLD-SET');
+      expect(await readProfileFile('qwen', 'work', 'qwen.env')).toBe('OLD-ENV');
     } finally {
       delete process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
     }
+  });
+
+  it('compare-and-restore: 롤백 중 동시 세션이 commit 값을 덮었으면 clobber 안 함 (#2)', async () => {
+    const plan = await setupQwenSession();
+    let call = 0;
+    mockedCommit.mockImplementation(async (sp, cli, prof, file) => {
+      call++;
+      if (call === 1) {
+        await realCommit(sp, cli, prof, file); // settings commit → 라이브=NEW-SET
+        // 동시 다른 세션이 settings 프로필을 자기 값으로 덮은 상황 모사
+        await writeProfileFile('qwen', 'work', 'qwen-settings.json', 'OTHER-SESSION');
+        return;
+      }
+      return Promise.reject(new Error('disk full')); // env commit 실패 → 롤백 트리거
+    });
+    await expect(recaptureSession(plan)).rejects.toThrow(/disk full/);
+    // 롤백이 현재값(OTHER-SESSION)을 stale backup(OLD-SET)으로 clobber 하지 않는다 — 현재값이
+    // 우리가 commit 한 NEW-SET 가 아니므로 건드리지 않음 (last-writer-wins 보존).
+    expect(await readProfileFile('qwen', 'work', 'qwen-settings.json')).toBe('OTHER-SESSION');
   });
 
   it('null-backup 롤백: 종료 전 없던 cred 가 commit 후 후속 실패 → 삭제로 원복(split 0)', async () => {

@@ -52,26 +52,8 @@ import {
   validateProfileName,
   writeProfileFile
 } from './profile-store.js';
+import { getRecaptureTimeoutMs, withTimeout } from './timeout.js';
 import type { CliDef } from './types.js';
-
-/** 재캡처 write 의 타임아웃 (ms, default 10s). `mat exec` 와 동일 env 재사용 (신규 env 금지). */
-function getRecaptureTimeoutMs(): number {
-  const raw = process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
-  if (!raw) return 10_000;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : 10_000;
-}
-
-/** Promise.race timeout — timer cleanup 보장 (exec.ts withTimeout 동형). */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
-  });
-  return Promise.race([p, timeoutPromise]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
 
 /** 시작 시점에 고정되는 자격증명 매핑 (종료 시 재계산 금지 — 시작/종료 불일치 차단). */
 interface SessionCred {
@@ -246,6 +228,11 @@ async function materializeShareLink(root: MaterializedRoot, shareRel: string): P
   if (tst.isSymbolicLink()) {
     throw new Error(`allow-list 대상이 symlink 입니다 (공유 거부): ${target}`);
   }
+  // 일반 파일만 공유 (PR #61 2회차 Forge): 디렉토리를 symlink 하면 그 안의 nested/미래 파일·
+  // symlink 가 개별 allow-list 없이 통째 노출돼 좁은 공유 계약이 깨진다. 디렉토리 공유는 미지원.
+  if (!tst.isFile()) {
+    throw new Error(`allow-list 대상이 일반 파일이 아닙니다 (디렉토리 공유 미지원): ${target}`);
+  }
   await assertContainedRealpath(root.baseAbs, dirname(target));
 
   const linkPath = join(root.dir, shareRel);
@@ -330,14 +317,14 @@ export async function recaptureSession(plan: SessionPlan): Promise<void> {
   }
 
   // phase 2 — commit (staging → 라이브 rename). 부분 실패 → 미커밋 정리 + 커밋분 역순 원복.
+  // commit 은 **withTimeout 으로 감싸지 않는다** (PR #61 2회차 Codex/Forge HIGH): rename 은 동일
+  // fs 내 빠른 atomic 이지만 취소 불가라, timeout 후 늦게 landing 하면 committed 에 없어 롤백에서
+  // 빠져 split 을 남긴다. 따라서 rename 은 완료/예외까지 기다린다 — 완료=committed 기록, 예외=미발생
+  // 으로 확정돼 롤백이 정확해진다. (stall 가능한 byte-write 는 phase 1 staging 에서 이미 끝남)
   const committed: RecaptureItem[] = [];
   try {
     for (const s of staged) {
-      await withTimeout(
-        commitStagedFile(s.path, plan.cli, plan.profile, s.it.saveAs),
-        ms,
-        `commit(${s.it.saveAs})`
-      );
+      await commitStagedFile(s.path, plan.cli, plan.profile, s.it.saveAs);
       committed.push(s.it);
     }
   } catch (err) {
@@ -351,15 +338,20 @@ export async function recaptureSession(plan: SessionPlan): Promise<void> {
   }
 }
 
-/** 커밋된 cred 1건 원복 — backup 이 있으면 그 값으로, 없으면(종료 전 부재) 삭제. best-effort. */
+/**
+ * 커밋된 cred 1건 원복 — backup 있으면 그 값으로, 없으면(종료 전 부재) 삭제. best-effort.
+ *
+ * **compare-and-restore** (PR #61 2회차 Codex/Claude): 동시에 같은 프로필을 재캡처한 다른
+ * 세션이 우리 commit 값을 이미 자기 값으로 덮었다면, blind 원복은 그 값을 stale backup 으로
+ * clobber 한다(두 세션 누구의 것도 아닌 상태). 따라서 **현재 디스크값이 우리가 commit 한 값
+ * (it.newValue)일 때만** 원복한다 — 다른 세션이 바꿨으면 그대로 둬 last-writer-wins 를 보존한다.
+ */
 async function rollbackCred(plan: SessionPlan, it: RecaptureItem, ms: number): Promise<void> {
   try {
+    const current = await readProfileFile(plan.cli, plan.profile, it.saveAs);
+    if (current !== it.newValue) return; // 동시 세션/외부가 이미 변경 → clobber 회피
     if (it.backup == null) {
-      await withTimeout(
-        removeProfileFile(plan.cli, plan.profile, it.saveAs),
-        ms,
-        `rollback-rm(${it.saveAs})`
-      );
+      await removeProfileFile(plan.cli, plan.profile, it.saveAs); // 종료 전 부재 → 삭제로 원복
     } else {
       await withTimeout(
         writeProfileFile(plan.cli, plan.profile, it.saveAs, it.backup),
@@ -406,8 +398,12 @@ const PS_SIGNATURE_TIMEOUT_MS = 2_000;
  * (PR #61 Codex H2). 시작 서명을 session.json 에 기록해두고 비교한다.
  *
  * macOS / Linux 의 `ps` 만 사용(프로젝트 타깃 OS). 미지원/조회 실패/타임아웃 시 null →
- * 호출부가 liveness-only 로 보수적 폴백(기존 동작). child_process 가 mock 된 단위 테스트
- * 에서는 execFile 부재 → null.
+ * 호출부가 보수적 폴백. child_process 가 mock 된 단위 테스트에서는 execFile 부재 → null.
+ *
+ * `LC_ALL=C` + `TZ=UTC` 를 강제한다 (PR #61 2회차 Forge HIGH): `lstart` 출력은 locale/TZ 에
+ * 따라 월/요일 표기·시각이 달라져, 같은 owner 라도 기록 시점과 조회 시점의 환경이 다르면 서명이
+ * 불일치해 살아있는 세션을 stale 로 오판할 수 있다. 환경을 고정해 자기일관성을 보장한다. 단
+ * `lstart` 는 1초 granularity 라 같은 pid·같은 초 재사용은 여전히 미탐(알려진 잔여 한계).
  */
 export async function processStartSignature(pid: number): Promise<string | null> {
   if (!Number.isInteger(pid) || pid <= 0) return null;
@@ -418,29 +414,37 @@ export async function processStartSignature(pid: number): Promise<string | null>
       cp.execFile(
         'ps',
         ['-o', 'lstart=', '-p', String(pid)],
-        { timeout: PS_SIGNATURE_TIMEOUT_MS },
+        { timeout: PS_SIGNATURE_TIMEOUT_MS, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } },
         (err, out) => (err ? reject(err) : resolve(out))
       );
     });
     const sig = stdout.trim();
     return sig || null;
   } catch {
-    return null; // ps 부재/조회 실패/timeout → null (호출부가 liveness-only 로 보수적 폴백)
+    return null; // ps 부재/조회 실패/timeout → null (호출부가 보수적으로 폴백)
   }
 }
 
 /**
- * 세션을 소유한 mat 프로세스가 "여전히 살아있는 그 프로세스" 인지 (pid 재사용 방어).
- *  - pid 가 죽었으면 false.
- *  - 시작 서명이 기록돼 있고 현재 서명도 조회됐는데 다르면 false (pid 재사용 — 소유 mat 은 사망).
- *  - 서명 미기록(옛 메타)/조회 실패면 true (보수적 폴백 — 기존 liveness-only 동작).
+ * 세션 소유 프로세스의 신원 판정 (pid 재사용 방어, tri-state — PR #61 2회차 Forge HIGH).
+ *
+ *  - `dead-or-reused`: pid 가 죽었거나, 서명이 기록돼 있고 현재 서명도 읽혔는데 다름(재사용).
+ *  - `owner`: pid 살아있고 + (서명 미기록 옛 메타 → liveness-only) 또는 (서명 일치).
+ *  - `unknown`: pid 살아있고 서명은 기록돼 있으나 현재 서명을 못 읽음(ps 실패/타임아웃) → 소유
+ *    여부 확정 불가.
+ *
+ * 단일 boolean 을 정반대 안전 바이어스(stop=kill / reap=delete) 두 곳에 쓰면, "불확실"을
+ * `owner`로 접는 순간 stop 이 무관 프로세스를 kill 한다(H2 가 막으려던 바로 그 결함). 호출부가
+ * `unknown` 을 각자 보수적으로(stop=신호·삭제 안 함, reap=보존) 처리하도록 3-state 로 분리한다.
  */
-async function isOwningProcessAlive(meta: SessionMeta): Promise<boolean> {
-  if (!isProcessAlive(meta.pid)) return false;
-  if (!meta.pidStart) return true;
+type OwnerStatus = 'owner' | 'dead-or-reused' | 'unknown';
+
+async function classifyOwner(meta: SessionMeta): Promise<OwnerStatus> {
+  if (!isProcessAlive(meta.pid)) return 'dead-or-reused';
+  if (!meta.pidStart) return 'owner'; // 옛 메타 — 검증할 서명 없음 → liveness-only
   const liveSig = await processStartSignature(meta.pid);
-  if (!liveSig) return true;
-  return liveSig === meta.pidStart;
+  if (!liveSig) return 'unknown'; // 서명 있으나 현재값 조회 실패 → 확정 불가
+  return liveSig === meta.pidStart ? 'owner' : 'dead-or-reused';
 }
 
 export interface SessionStartOptions {
@@ -627,7 +631,16 @@ async function readSessionMeta(id: string): Promise<SessionMeta | null> {
   try {
     const raw = await fs.readFile(join(sessionsDir(), id, 'session.json'), 'utf8');
     const parsed = JSON.parse(raw) as Partial<SessionMeta>;
-    if (typeof parsed.id !== 'string' || typeof parsed.pid !== 'number') return null;
+    // pid 는 양의 정수여야 — 손상/조작된 메타(음수/0/소수/NaN)는 unreadable 로 처리해 신호·
+    // liveness 경로로 흘러들지 않게 한다 (PR #61 2회차 Forge). isProcessAlive 도 가드하나 경계 방어.
+    if (
+      typeof parsed.id !== 'string' ||
+      typeof parsed.pid !== 'number' ||
+      !Number.isInteger(parsed.pid) ||
+      parsed.pid <= 0
+    ) {
+      return null;
+    }
     return {
       id: parsed.id,
       cli: typeof parsed.cli === 'string' ? parsed.cli : '',
@@ -672,11 +685,11 @@ export async function listSessions(): Promise<SessionInfo[]> {
 }
 
 /**
- * 세션 종료. 소유 mat 이 살아있으면 SIGTERM(그 finally 가 재캡처+정리), 아니면 디렉토리 정리.
- *
- * SIGTERM 전 시작 서명을 검증한다 (PR #61 Codex H2): pid 가 살아있어도 서명이 다르면 소유 mat
- * 은 이미 죽고 pid 가 무관 프로세스에 재할당된 것 → kill 하지 않고(파괴적 오작동 방지) orphan
- * 으로 정리한다.
+ * 세션 종료 (tri-state 신원 판정 — PR #61 2회차 Forge HIGH):
+ *  - `owner`(소유 mat 생존 확인): SIGTERM → 그 finally 가 재캡처+정리.
+ *  - `dead-or-reused`(죽음 또는 pid 재사용): 신호 없이 디렉토리만 정리.
+ *  - `unknown`(서명 조회 실패로 확정 불가): **신호도 삭제도 하지 않는다** — 소유 mat 이 살아있을
+ *    수 있어 kill 하면 무관 프로세스 파괴, 삭제하면 라이브 세션 디렉토리 제거 위험. 경고 후 보존.
  */
 export async function stopSession(id: string): Promise<void> {
   validateSessionId(id);
@@ -687,7 +700,8 @@ export async function stopSession(id: string): Promise<void> {
     });
     return;
   }
-  if (await isOwningProcessAlive(meta)) {
+  const status = await classifyOwner(meta);
+  if (status === 'owner') {
     try {
       process.kill(meta.pid, 'SIGTERM');
     } catch {
@@ -695,14 +709,15 @@ export async function stopSession(id: string): Promise<void> {
     }
     return;
   }
-  if (isProcessAlive(meta.pid)) {
-    // pid 는 살아있으나 시작 서명 불일치 = pid 재사용. 무관 프로세스 보호 — 신호 생략 후 정리.
+  if (status === 'unknown') {
+    // pid 살아있으나 소유 여부 확정 불가 — 무관 프로세스 kill / 라이브 디렉토리 삭제 둘 다 회피.
     process.stderr.write(
-      `[mat] 세션 ${sanitizeForStderr(id)} 의 pid(${meta.pid}) 가 재사용된 것으로 보입니다 ` +
-        `— SIGTERM 생략, 세션 정리만 수행.\n`
+      `[mat] 세션 ${sanitizeForStderr(id)} 의 소유 프로세스(pid ${meta.pid})를 확인할 수 없습니다 ` +
+        `(프로세스 시작 정보 조회 실패) — 안전을 위해 신호/정리를 생략합니다. 잠시 후 다시 시도하세요.\n`
     );
+    return;
   }
-  await removeSessionDir(id); // 죽은/재사용 pid 세션 — 재캡처 없이 정리
+  await removeSessionDir(id); // dead-or-reused — 재캡처 없이 정리
 }
 
 /**
@@ -710,8 +725,9 @@ export async function stopSession(id: string): Promise<void> {
  * 초과 (셋 다 충족만, 보수적). 재캡처 없이 삭제 + 경고. 회수한 id 목록 반환.
  *
  * "소유 프로세스 사망" 판정은 시작 서명까지 본다 (PR #61 Codex H2): pid 가 재사용돼 살아있는
- * 것처럼 보여도 서명이 다르면 소유 mat 은 죽은 것으로 보아 회수 대상에 포함 — pid 재사용이
- * stale 세션을 영구 보존하던 문제 해소.
+ * 것처럼 보여도 서명이 다르면(`dead-or-reused`) 회수 대상에 포함 — pid 재사용이 stale 세션을
+ * 영구 보존하던 문제 해소. `owner`/`unknown`(서명 조회 실패로 확정 불가)은 보존(보수적 — 살아있는
+ * 세션을 잘못 삭제하지 않음, PR #61 2회차 Forge).
  */
 export async function reapOrphans(): Promise<string[]> {
   const now = Date.now();
@@ -719,7 +735,7 @@ export async function reapOrphans(): Promise<string[]> {
   for (const id of await listSessionIds()) {
     const meta = await readSessionMeta(id);
     if (!meta) continue;
-    if (await isOwningProcessAlive(meta)) continue; // 소유 프로세스 생존 → 보존
+    if ((await classifyOwner(meta)) !== 'dead-or-reused') continue; // owner/unknown → 보존
     const startedMs = Date.parse(meta.startedAt);
     if (Number.isFinite(startedMs) && now - startedMs <= ORPHAN_TTL_MS) continue; // TTL 내 보존
     // 세션 디렉토리 자체 mtime 교차검증 (격리본 mtime 아님 — 죽은 세션 식별 안정성, M-B).

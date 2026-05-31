@@ -115,7 +115,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 6. subshell spawn: `process.env.SHELL || '/bin/sh'`, stdio inherit, env=`{...process.env, ...rootEnvs, MAT_SESSION=id}` (argv 배열, 셸 미경유).
 7. 자식 종료 대기(settled-guard).
 8. `finally`:
-   a. **재캡처(2-phase commit)**: 각 root 자격증명 격리본 → 프로필. **multi-cred(Qwen/Crush) 는 ① 전 cred 새 값을 프로필 옆 staging 파일에 먼저 쓰고(라이브 무변경) ② 전부 stage 성공 후 일괄 commit(rename)** 한다. preflight 에서 프로필 현재값 백업, 부분 commit 실패는 backup 으로 역순 롤백(없던 cred 는 삭제). 단순 per-cred `Promise.race` timeout 은 hung write 를 취소하지 못해 timeout 후 late-landing 시 split 이 재발생하므로(PR #61 Codex H1), staging 으로 split 윈도우를 byte-write 전체에서 rename 으로 축소(catastrophic fs 한정). timeout 가드(`MAT_EXEC_RECAPTURE_TIMEOUT_MS` **재사용**, 신규 env 도입 안 함)는 liveness 보호용으로 각 단계에 유지.
+   a. **재캡처(2-phase commit)**: 각 root 자격증명 격리본 → 프로필. **multi-cred(Qwen/Crush) 는 ① 전 cred 새 값을 프로필 옆 staging 파일에 먼저 쓰고(라이브 무변경) ② 전부 stage 성공 후 일괄 commit(rename)** 한다. preflight 에서 프로필 현재값 백업, 부분 commit 실패는 **compare-and-restore** 롤백(현재 디스크값이 우리가 commit 한 값일 때만 원복/삭제 — 동시 같은-프로필 세션의 commit 을 clobber 하지 않음, PR #61 2회차). stage(byte-write) 만 `withTimeout`(liveness) 으로 감싸고, **commit(rename) 은 감싸지 않는다** — rename 은 취소 불가라 timeout 후 late-landing 하면 committed 에 없어 롤백에서 빠져 split 을 남긴다(PR #61 2회차 Codex/Forge). 완료/예외까지 기다려 롤백을 정확히 한다. `MAT_EXEC_RECAPTURE_TIMEOUT_MS` 는 `mat exec` 와 공유(`timeout.ts` 단일 출처). split 윈도우는 catastrophic-fs rename 한정.
    b. 세션 디렉토리 삭제(symlink 는 `fs.rm` 이 링크 자체만 제거 — 대상 base 무손상).
    c. forwarder 해제.
 9. 자식 종료 코드/시그널 전파.
@@ -124,8 +124,9 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 `sessionsDir()` 스캔 → 각 `session.json` → pid liveness(`isProcessAlive`, lockfile.ts **재사용**) → active/orphan 표기 테이블.
 
 ### 5.3 `mat session stop <id>` + orphan 정리
-- `stop <id>`: **소유 mat 생존 시에만** SIGTERM(정상 종료 → finally 정리). 살아있어도 시작 서명(`pidStart`=`ps -o lstart`) 불일치 = pid 재사용 → SIGTERM 생략 + 디렉토리 정리(무관 프로세스 오kill 방지, PR #61 Codex H2). 죽었으면 orphan 정리.
-- orphan: **소유 프로세스 사망 AND startedAt TTL 초과 AND 디렉토리 mtime TTL 초과** 세션을 회수 — 재캡처 없이 삭제(라이브 불신뢰, lockfile "warn+drop" 미러). **TTL 1h**(M2). "소유 프로세스 사망" 은 pid liveness + 시작 서명까지 보아, pid 재사용으로 살아있어 보이는 stale 세션도 회수(서명 불일치 시). 서명 미기록(옛 메타)/ps 미지원이면 liveness-only 보수 폴백. `sessionsDir()` 하위 + id 검증 한정(광역삭제 차단).
+- 소유 신원은 **tri-state `classifyOwner`** 로 판정(PR #61 2회차 Forge): `owner`(살아있고 서명 일치 또는 옛 메타 liveness-only) / `dead-or-reused`(죽음 또는 서명 불일치=pid 재사용) / `unknown`(서명 기록돼 있으나 `ps` 조회 실패로 확정 불가). 시작 서명 `pidStart`=`ps -o lstart`(LC_ALL=C·TZ=UTC 고정 — locale/TZ 비결정성 제거).
+- `stop <id>`: `owner` 일 때만 SIGTERM(정상 종료 → finally 정리). `dead-or-reused` 면 디렉토리만 정리. **`unknown` 이면 신호도 삭제도 하지 않는다**(소유 mat 이 살아있으면 wrong-kill·라이브 디렉토리 삭제 위험 → 경고 후 보존). 단일 boolean 을 stop=kill/reap=delete 정반대 바이어스에 쓰지 않기 위해 3-state 분리.
+- orphan: **`dead-or-reused` AND startedAt TTL 초과 AND 디렉토리 mtime TTL 초과** 세션만 회수 — 재캡처 없이 삭제(라이브 불신뢰, lockfile "warn+drop" 미러). **TTL 1h**(M2). `owner`/`unknown` 은 보존(잘못 삭제 방지). `sessionsDir()` 하위 + id 검증 한정(광역삭제 차단).
 - 트리거: `list/stop/start` 진입 시 best-effort.
 
 ---

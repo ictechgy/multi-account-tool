@@ -17,7 +17,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { writeFileAtomic } from './io-atomic.js';
 import {
@@ -217,9 +217,15 @@ export async function stageProfileFile(
   return stagingPath;
 }
 
+/** stageProfileFile 이 만드는 staging basename 패턴: `<finalBase>.recap-<hex>`. */
+const STAGING_SUFFIX_RE = /^\.recap-[0-9a-f]+$/;
+
 /**
  * {@link stageProfileFile} 산출 staging 파일을 최종 프로필 경로로 atomic rename(commit).
- * stagingPath 가 해당 프로필 디렉토리 내부가 아니면 throw (cross-dir rename 방어).
+ *
+ * stagingPath 의 신원을 검증한다 (PR #61 2회차 Forge MEDIUM — 호출자 규율 의존 hidden coupling
+ * 제거): (1) 최종 파일과 같은 디렉토리, (2) basename 이 `<finalBase>.recap-<hex>` 패턴(다른
+ * cred 파일/임의 파일을 target 위로 rename 하는 것 차단), (3) 비-symlink. 어긋나면 throw.
  */
 export async function commitStagedFile(
   stagingPath: string,
@@ -231,8 +237,14 @@ export async function commitStagedFile(
   const safeName = validateProfileName(name);
   const safeFile = validateProfileFileName(fileName);
   const finalPath = profileFilePath(cliId, safeName, safeFile);
-  if (dirname(stagingPath) !== dirname(finalPath)) {
-    throw new Error('staging 경로가 프로필 디렉토리 밖입니다 (commit 거부).');
+  const finalBase = basename(finalPath);
+  const stagingBase = basename(stagingPath);
+  const suffix = stagingBase.startsWith(finalBase) ? stagingBase.slice(finalBase.length) : null;
+  if (dirname(stagingPath) !== dirname(finalPath) || suffix === null || !STAGING_SUFFIX_RE.test(suffix)) {
+    throw new Error('staging 경로가 예상 패턴(<file>.recap-<hex>)이 아닙니다 (commit 거부).');
+  }
+  if ((await fs.lstat(stagingPath)).isSymbolicLink()) {
+    throw new Error('staging 이 symlink 입니다 (commit 거부).');
   }
   await fs.rename(stagingPath, finalPath);
 }

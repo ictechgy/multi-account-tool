@@ -260,4 +260,47 @@ describe('listSessions / stopSession / reapOrphans', () => {
   it('stopSession: traversal id → throw', async () => {
     await expect(stopSession('../escape')).rejects.toThrow();
   });
+
+  // 이 파일은 node:child_process 를 mock(execFile 부재) → processStartSignature 가 항상 null →
+  // pidStart 가 기록돼 있고 pid 가 살아있으면 classifyOwner='unknown' (서명 조회 실패) (#5).
+  async function makeSessionWithMeta(id: string, meta: Record<string, unknown>): Promise<string> {
+    const dir = sessionDir(id);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, 'session.json'), JSON.stringify({ id, cli: 'codex', profile: 'work', roots: [], ...meta }));
+    return dir;
+  }
+
+  it('stopSession: unknown(서명 조회 실패) → SIGTERM·삭제 안 함, 디렉토리 보존 (#5)', async () => {
+    const dir = await makeSessionWithMeta('codex-work-unknwn01', {
+      pid: process.pid, pidStart: 'RECORDED-SIG', startedAt: new Date().toISOString()
+    });
+    const realKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((p: number, s?: string | number) =>
+      s === 0 ? realKill(p, 0) : true) as typeof process.kill);
+    try {
+      await stopSession('codex-work-unknwn01');
+      expect(killSpy.mock.calls.filter(([, s]) => s === 'SIGTERM')).toEqual([]); // wrong-kill 방지
+      await expect(fs.access(dir)).resolves.toBeUndefined(); // 라이브 가능성 → 디렉토리 보존
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('reapOrphans: unknown(서명 조회 실패) + TTL 초과 → 보존 (#5)', async () => {
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const dir = await makeSessionWithMeta('codex-work-unknwn02', {
+      pid: process.pid, pidStart: 'RECORDED-SIG', startedAt: old
+    });
+    const oldTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fs.utimes(dir, oldTime, oldTime);
+    const reaped = await reapOrphans();
+    expect(reaped).not.toContain('codex-work-unknwn02'); // 확정 불가 → 보존(잘못 삭제 안 함)
+    await expect(fs.access(dir)).resolves.toBeUndefined();
+  });
+
+  it('손상된 pid(<=0) 메타는 무시 (#9 — listSessions 제외)', async () => {
+    await makeSessionWithMeta('codex-work-badpid01', { pid: 0, startedAt: new Date().toISOString() });
+    const sessions = await listSessions();
+    expect(sessions.find((s) => s.id === 'codex-work-badpid01')).toBeUndefined();
+  });
 });
