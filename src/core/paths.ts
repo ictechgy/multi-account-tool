@@ -14,9 +14,14 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { validateCliId, validateProfileFileName, validateProfileName } from './validators.js';
+import {
+  validateCliId,
+  validateProfileFileName,
+  validateProfileName,
+  validateSessionId
+} from './validators.js';
 
-export { validateCliId, validateProfileFileName, validateProfileName };
+export { validateCliId, validateProfileFileName, validateProfileName, validateSessionId };
 
 const DATA_DIR_NAME = '.multi-account-tool';
 
@@ -72,6 +77,17 @@ export function profileMetaPath(cliId: string, profileName: string): string {
 /** lockfile 들이 모이는 디렉토리 (`mat exec` 의 cli 별 직렬화용). */
 export function locksDir(): string {
   return join(dataDir(), 'locks');
+}
+
+/** 세션 격리 디렉토리 루트 (`mat session` 의 세션별 자격증명 격리용). */
+export function sessionsDir(): string {
+  return join(dataDir(), 'sessions');
+}
+
+/** 특정 세션의 디렉토리. sessionId 자체 검증 (직접 호출자 traversal 차단). */
+export function sessionDir(id: string): string {
+  const safeId = validateSessionId(id);
+  return join(sessionsDir(), safeId);
 }
 
 /**

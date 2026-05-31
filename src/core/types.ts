@@ -89,6 +89,33 @@ export interface OsKeyringSource {
 export type Source = FileSource | KeychainSource | OsKeyringSource;
 
 /**
+ * 세션 격리(`mat session`)용 env-redirect 매핑.
+ *
+ * CLI 가 자신의 config/credential 디렉토리 위치를 env var 로 override 할 수 있을 때,
+ * mat 이 세션마다 격리 디렉토리를 만들어 그 env 를 주입하면 동시에 다른 계정을 쓸 수 있다.
+ */
+export interface SessionRoot {
+  /** 주입할 env var 이름 (예: 'CODEX_HOME'). 이 값을 격리 디렉토리로 set 한다. */
+  env: string;
+  /** 이 env 가 재배치하는 CLI 의 기본 base 디렉토리 (예: '~/.codex'). 선행 `~/` 는 확장된다. */
+  base: string;
+  /**
+   * 선택. base 상대경로의 read-mostly 비-secret config allow-list — 격리 복사 대신 실제
+   * base 와 symlink 로 **공유**할 항목. **자격증명 파일은 절대 포함하지 않는다**(항상 격리 복사).
+   *
+   * 미지정/미포함 항목은 공유하지 않는다(fail-closed, 세션 내 ephemeral). 메커니즘은 코드에
+   * 존재하나, 1차 빌트인 메타에선 전 CLI 비움 — Codex `config.toml` 의 OAuth state 포함
+   * 여부 미검증 등 (검증 후 follow-up 으로 켠다).
+   */
+  share?: string[];
+}
+
+/** 세션 격리 명세. roots 가 1개 이상일 때 그 CLI 는 세션 격리를 지원한다. */
+export interface SessionSpec {
+  roots: SessionRoot[];
+}
+
+/**
  * 하나의 AI CLI 정의.
  * 새로운 CLI 를 추가하려면 BUILTIN_CLI_DEFS 에 항목을 추가한다.
  */
@@ -99,6 +126,11 @@ export interface CliDef {
   name: string;
   /** 이 CLI 의 자격증명을 구성하는 source 들 */
   sources: Source[];
+  /**
+   * 선택. 세션 격리(`mat session`) 지원 명세. 미지정이면 그 CLI 는 세션 격리 미지원
+   * (`mat session start` 시 명시 에러). plugin 정의 CLI 는 1차에선 미수용(빌트인 전용).
+   */
+  session?: SessionSpec;
 }
 
 /** 프로필 메타데이터. profiles/<cli>/<name>/meta.json 에 저장. */

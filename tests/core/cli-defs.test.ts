@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
+import { expandTilde } from '../../src/core/paths.js';
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
   it('claude/codex/gemini/aider/kimi/qwen/crush/opencode/goose 9개 정의를 정확히 포함', () => {
@@ -295,4 +296,72 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
       expect(goose!.sources).toEqual(YAML_SOURCES);
     }
   );
+});
+
+describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
+  const find = (id: string) => BUILTIN_CLI_DEFS.find((c) => c.id === id)!;
+
+  it('codex: session.roots 1개 (CODEX_HOME / ~/.codex), share 비움(M-A)', () => {
+    expect(find('codex').session).toEqual({
+      roots: [{ env: 'CODEX_HOME', base: '~/.codex' }]
+    });
+  });
+
+  it('qwen: session.roots 1개 (QWEN_HOME / ~/.qwen), share 없음(혼재)', () => {
+    expect(find('qwen').session).toEqual({
+      roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }]
+    });
+  });
+
+  it('kimi: session.roots 1개 (KIMI_SHARE_DIR / ~/.kimi), share 없음(A=B)', () => {
+    expect(find('kimi').session).toEqual({
+      roots: [{ env: 'KIMI_SHARE_DIR', base: '~/.kimi' }]
+    });
+  });
+
+  it('crush: session.roots 2개 (CRUSH_GLOBAL_CONFIG/DATA), share 없음', () => {
+    expect(find('crush').session).toEqual({
+      roots: [
+        { env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
+        { env: 'CRUSH_GLOBAL_DATA', base: '~/.local/share/crush' }
+      ]
+    });
+  });
+
+  it.each(['claude', 'gemini', 'aider', 'opencode', 'goose'])(
+    '%s: session 미지정(세션 격리 미지원)',
+    (id) => {
+      expect(find(id).session).toBeUndefined();
+    }
+  );
+
+  it('M-A: 전 빌트인 CLI 의 모든 root 에서 share 가 비어있음(allow-list=∅ 회귀 가드)', () => {
+    for (const def of BUILTIN_CLI_DEFS) {
+      for (const root of def.session?.roots ?? []) {
+        expect(root.share ?? []).toEqual([]);
+      }
+    }
+  });
+
+  it('정적 invariant: 모든 자격증명 source 는 정확히 1개 root 의 base 직속(rel 에 path 구분자 없음)', () => {
+    // 각 session-capable CLI 의 file source path 가 어느 root base 의 직속 자식인지.
+    // crush 2-root 가 서로 prefix 가 아니라 각 crush.json 이 정확히 1 root 에 귀속됨도 함께 검증.
+    const rel = (base: string, p: string) => {
+      const b = expandTilde(base).replace(/\/+$/, '') + '/';
+      const f = expandTilde(p);
+      return f.startsWith(b) ? f.slice(b.length) : null;
+    };
+    for (const def of BUILTIN_CLI_DEFS) {
+      if (!def.session) continue;
+      for (const src of def.sources) {
+        expect(src.type).toBe('file');
+        const path = (src as { path: string }).path;
+        const matches = def.session.roots.filter((r) => {
+          const r2 = rel(r.base, path);
+          return r2 !== null && !r2.includes('/');
+        });
+        expect(matches).toHaveLength(1); // 정확히 1 root, 직속
+      }
+    }
+  });
 });

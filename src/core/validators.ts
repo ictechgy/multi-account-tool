@@ -24,6 +24,9 @@ const PROFILE_NAME_RESERVED = new Set<string>(['.', '..']);
 /** 프로필 내 임의 파일명 화이트리스트. 영문/숫자/`.`/`_`/`-` 만 1~64자. */
 const PROFILE_FILE_NAME_RE = /^[a-zA-Z0-9._-]{1,64}$/;
 
+/** 세션 id 화이트리스트. 영문/숫자/`_`/`-` 만 1~64자 (`.` 불허 → traversal·예약명 원천 차단). */
+const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
 /** 파일명도 예약된 단독 `.`/`..` 는 별도 차단. */
 const PROFILE_FILE_NAME_RESERVED = new Set<string>(['.', '..']);
 
@@ -105,4 +108,28 @@ export function validateProfileFileName(rawFileName: string): string {
     );
   }
   return fileName;
+}
+
+/**
+ * 세션 id 검증 (validateProfileName 패턴 미러 — typeof guard → traversal 차단 → RE).
+ * 세션 디렉토리 path segment 로 직접 쓰이므로 traversal-safe 해야 한다.
+ *
+ * id 는 `<cliId>-<profileName>-<rand8>` 형태로 mat 내부에서 생성되지만, `mat session
+ * stop <id>` 처럼 사용자 입력으로도 들어오므로 사용 시점에 검증한다.
+ * `.` 을 화이트리스트에서 제외해 `.`/`..` 예약명과 확장자 우회를 한 번에 차단한다.
+ */
+export function validateSessionId(rawId: string): string {
+  if (typeof rawId !== 'string') {
+    throw new ValidationError('세션 id 는 문자열이어야 합니다.', 'sessionId');
+  }
+  if (/[/\\\x00]/.test(rawId)) {
+    throw new ValidationError('세션 id 에 / \\ NUL 은 포함될 수 없습니다.', 'sessionId');
+  }
+  if (!SESSION_ID_RE.test(rawId)) {
+    throw new ValidationError(
+      '세션 id 는 영문/숫자/_- 만 사용 가능하며 1~64자 이내여야 합니다.',
+      'sessionId'
+    );
+  }
+  return rawId;
 }
