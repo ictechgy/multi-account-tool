@@ -265,7 +265,7 @@ function warnStaleLockRecovery(cliId: string, info: LockBody): void {
  * 200자 cap 은 안내 메시지 1행 길이와 일치 — 정상 입력 (cliId ≤ 32 / profileName
  * ≤ 40 / ISO timestamp 등) 은 모두 무손실 통과.
  */
-function sanitizeForStderr(s: string): string {
+export function sanitizeForStderr(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/[\x00-\x1f\x7f-\x9f]/g, '?').slice(0, 200);
 }
@@ -306,7 +306,7 @@ function pickStringArray(value: unknown): string[] | undefined {
 }
 
 /** PID 가 살아있는지 검사. EPERM 은 살아있는 것으로 보수적 처리. */
-function isProcessAlive(pid: number): boolean {
+export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
