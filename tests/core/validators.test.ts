@@ -4,7 +4,9 @@ import { UsageError, ValidationError } from '../../src/core/errors.js';
 import {
   validateCliId,
   validateProfileFileName,
-  validateProfileName
+  validateProfileName,
+  validateSessionId,
+  validateShareRel
 } from '../../src/core/validators.js';
 
 /**
@@ -95,6 +97,71 @@ describe('validators — ValidationError contract', () => {
 
     it('validateProfileFileName 정상 입력은 그대로 반환', () => {
       expect(validateProfileFileName('auth.json')).toBe('auth.json');
+    });
+  });
+
+  describe('validateSessionId (PR-S1)', () => {
+    it('정상 입력(영숫자/-/_, 1~64자)은 그대로 반환', () => {
+      expect(validateSessionId('codex-work-1a2b3c4d')).toBe('codex-work-1a2b3c4d');
+      expect(validateSessionId('a')).toBe('a');
+      expect(validateSessionId('A_b-9')).toBe('A_b-9');
+      expect(validateSessionId('x'.repeat(64))).toHaveLength(64);
+    });
+
+    it('비문자열 throw 는 ValidationError, field === "sessionId"', () => {
+      try {
+        validateSessionId(null as unknown as string);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ValidationError);
+        expect(err).toBeInstanceOf(UsageError);
+        expect((err as ValidationError).field).toBe('sessionId');
+        expect((err as ValidationError).exitCode).toBe(2);
+      }
+    });
+
+    it.each(['', 'x'.repeat(65), '.', '..', 'a/b', 'a\\b', 'a b', 'a.b', '세션', 'a\x00b'])(
+      'traversal/형식 위반 입력 throw: %j',
+      (bad) => {
+        expect(() => validateSessionId(bad)).toThrow(ValidationError);
+      }
+    );
+  });
+
+  describe('validateShareRel (PR #61 H2/MED — allow-list 경로 봉쇄)', () => {
+    it('정상 단일/nested 항목은 정규화돼 반환', () => {
+      expect(validateShareRel('config.toml')).toBe('config.toml');
+      expect(validateShareRel('sub/config.toml')).toBe('sub/config.toml');
+      // 백슬래시는 슬래시로 정규화 (Windows 구분자 통일).
+      expect(validateShareRel('sub\\config.toml')).toBe('sub/config.toml');
+    });
+
+    it('비문자열 throw 는 ValidationError, field === "shareRel"', () => {
+      try {
+        validateShareRel(null as unknown as string);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ValidationError);
+        expect(err).toBeInstanceOf(UsageError);
+        expect((err as ValidationError).field).toBe('shareRel');
+        expect((err as ValidationError).exitCode).toBe(2);
+      }
+    });
+
+    it.each([
+      '',
+      '/etc/passwd',
+      '../escape',
+      'a/../b',
+      'sub/../../x',
+      '..',
+      '.',
+      'a/./b',
+      'a\\..\\b',
+      'a b/c',
+      'a\x00b'
+    ])('traversal/형식 위반 항목 throw: %j', (bad) => {
+      expect(() => validateShareRel(bad)).toThrow(ValidationError);
     });
   });
 });

@@ -4,7 +4,12 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
+import {
+  LockHeldError,
+  acquireCliLock,
+  isProcessAlive,
+  sanitizeForStderr
+} from '../../src/core/lockfile.js';
 import { cliLockPath } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
@@ -670,5 +675,38 @@ describe('lockfile.acquireCliLock — PR-I* LockBody 확장', () => {
     expect(fresh.profile).toBe('recovered');
     expect(fresh.affectsCliIds).toEqual(['codex']);  // default 채워짐
     await release();
+  });
+});
+
+/**
+ * PR-S0: session.ts 가 재사용할 수 있도록 export 된 헬퍼의 동작 회귀.
+ * 동형 재구현 대신 단일 출처(lockfile.ts)를 export 재사용한다 (M3).
+ */
+describe('lockfile — export 된 헬퍼 (isProcessAlive / sanitizeForStderr)', () => {
+  it('isProcessAlive: 현재 프로세스는 true', () => {
+    expect(isProcessAlive(process.pid)).toBe(true);
+  });
+
+  it('isProcessAlive: 죽은 PID 는 false', () => {
+    expect(isProcessAlive(spawnGhostPid())).toBe(false);
+  });
+
+  it('isProcessAlive: 비정상 입력(0/음수/비정수)은 false', () => {
+    expect(isProcessAlive(0)).toBe(false);
+    expect(isProcessAlive(-1)).toBe(false);
+    expect(isProcessAlive(1.5)).toBe(false);
+  });
+
+  it('sanitizeForStderr: control char 를 ? 로 치환', () => {
+    expect(sanitizeForStderr('a\x1b[31mb\x00c')).toBe('a?[31mb?c');
+  });
+
+  it('sanitizeForStderr: 200자 cap', () => {
+    expect(sanitizeForStderr('x'.repeat(300))).toHaveLength(200);
+  });
+
+  it('sanitizeForStderr: 정상 입력(cliId/profileName 길이)은 무손실 통과', () => {
+    const normal = 'codex / work-account / 2026-05-30T00:00:00.000Z';
+    expect(sanitizeForStderr(normal)).toBe(normal);
   });
 });

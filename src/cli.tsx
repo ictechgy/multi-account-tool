@@ -18,6 +18,7 @@ import { getAllCliDefs } from './core/cli-defs.js';
 import { getActiveProfile } from './core/config.js';
 import { describeError, UnknownCliError } from './core/errors.js';
 import { runExec } from './core/exec.js';
+import { handleSession } from './core/session-cli.js';
 import { registerAllBuiltinAdapters } from './core/freshness-adapters/index.js';
 import {
   inspectLiveFreshness,
@@ -30,6 +31,9 @@ const USAGE =
   `사용법:\n` +
   `  mat                                            TUI 실행\n` +
   `  mat exec <cli> <profile> -- <cmd...>          <profile> 로 swap 후 <cmd> 실행, 종료 후 원복\n` +
+  `  mat session start <cli> <profile>             <profile> 로 격리된 subshell 실행 (동시 다계정)\n` +
+  `  mat session list                              실행 중/orphan 세션 목록\n` +
+  `  mat session stop <id>                         세션 종료 또는 orphan 정리\n` +
   `  mat freshness [<cli>] [--profile <name>] [--json] [--check-only]\n` +
   `                                                 라이브 vs 활성 프로필 자격증명 비교 (OAuth\n` +
   `                                                 refresh rotation 안전성 점검). cli 미지정 시\n` +
@@ -89,6 +93,15 @@ async function main(): Promise<void> {
   if (first === 'freshness') {
     await handleFreshness(rest);
     return;
+  }
+  if (first === 'session') {
+    const r = await handleSession(rest);
+    // signal 종료 시 self-raise (exitCode 무시) — 자식 종료 상태를 부모에 정확히 전파.
+    if (r.raiseSignal) {
+      process.kill(process.pid, r.raiseSignal);
+      return;
+    }
+    process.exit(r.exitCode);
   }
 
   process.stderr.write(`mat: 알 수 없는 명령: ${first}\n${USAGE}`);

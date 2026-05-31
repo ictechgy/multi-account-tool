@@ -197,6 +197,46 @@ Exit codes:
 
 Note: `2` / `74` / `75` are reserved by `mat`'s own error model (pre-spawn validation, lock contention, post-spawn restore failure). Any other non-zero code below `128` is the child's own exit code propagated transparently. Use `restoreError` log lines on stderr to distinguish `74` from a child exit `74` (unlikely but possible).
 
+### `mat session` — per-session isolation (different account per terminal, concurrently)
+
+```bash
+mat session start <cli> <profile>   # launch an isolated subshell on <profile>
+mat session list                    # running / orphan sessions
+mat session stop <id>               # terminate a session or reap an orphan
+```
+
+Unlike `mat exec` (temporal isolation, serialized by a lock), `mat session` gives **true concurrent isolation** — two terminals can use *different* accounts of the same CLI at the same time:
+
+```bash
+# terminal A
+mat session start codex work        # CODEX_HOME points at an isolated dir → "work" account
+
+# terminal B (simultaneously)
+mat session start codex personal    # independent isolated dir → "personal" account
+```
+
+**Mechanism — env injection + copy-isolate.** `mat session start` spawns your `$SHELL` with the CLI's config-dir env var (e.g. `CODEX_HOME`) pointed at a fresh per-session directory under `~/.multi-account-tool/sessions/<id>/`. The profile's credentials are **copied** (0600) into that directory, so the CLI inside the subshell reads the isolated account. On exit, mat **re-captures** the (possibly OAuth-rotated) credentials back into the profile and removes the session directory. The OS-global credentials and `mat exec`'s lock are never touched — so sessions run concurrently without interference.
+
+**Supported CLIs** (those that relocate their *credential* directory via an env var):
+
+| CLI | env var |
+| --- | --- |
+| Codex | `CODEX_HOME` |
+| Qwen Code | `QWEN_HOME` |
+| Kimi | `KIMI_SHARE_DIR` |
+| Crush | `CRUSH_GLOBAL_CONFIG` + `CRUSH_GLOBAL_DATA` |
+
+**Not supported** (no credential-relocating env var; `mat session start` errors out): `gemini` (no env override — [gemini-cli#2815](https://github.com/google-gemini/gemini-cli/issues/2815)), `claude` (macOS Keychain service name is not env-overridable), `aider` (credentials are provider env vars, not a file), `opencode`, `goose`, and any user **plugin** CLI (1st iteration is built-in only).
+
+Exit codes mirror `mat exec`: `0` success, `2` usage error, `74` re-capture failed, `128+N` child signal `N` (self-raised), child's own non-zero code propagated otherwise.
+
+**Limitations (read before relying on it):**
+
+- **Credentials are isolated; non-secret config is *not* shared (1st iteration).** Anything other than the credential file (model config, history, sessions, caches) is **not** materialized into the session — the CLI falls back to its defaults and anything it creates inside the session is **discarded on exit** (only the credential file is re-captured). This is a deliberate, fail-closed default. Contrast with `mat exec`, where the CLI uses the real config dir so history is preserved: prefer `mat exec` for long single-account work, `mat session` for concurrent multi-account. (An allow-list to share read-mostly config like Codex `config.toml` is implemented but disabled until its contents are verified — a follow-up.)
+- **`SIGKILL` orphans** the session directory (trap-impossible, same as `mat exec`); the next `mat session` call reaps it (dead pid + >1h old).
+- **Parent-trust assumption:** isolation assumes `~/.multi-account-tool` and its parent are trusted; a symlinked `~/.multi-account-tool` is out of scope.
+- **Same profile, two concurrent sessions:** on simultaneous exit the re-capture is last-writer-wins (non-deterministic, but never a corrupted credential).
+
 ### `mat freshness` — pre-swap safety check
 
 ```bash

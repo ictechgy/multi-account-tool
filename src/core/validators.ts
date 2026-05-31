@@ -10,6 +10,8 @@
  * 잘못됐는지 호출자가 식별 가능 (TUI inline 에러 표시 등).
  */
 
+import { isAbsolute } from 'node:path';
+
 import { ValidationError } from './errors.js';
 
 /** filesystem 의 path segment 로 안전한 cli id 형식. 첫 글자는 영문, 이후 영문/숫자/`_`/`-` 만, 1~32자. */
@@ -24,8 +26,14 @@ const PROFILE_NAME_RESERVED = new Set<string>(['.', '..']);
 /** 프로필 내 임의 파일명 화이트리스트. 영문/숫자/`.`/`_`/`-` 만 1~64자. */
 const PROFILE_FILE_NAME_RE = /^[a-zA-Z0-9._-]{1,64}$/;
 
+/** 세션 id 화이트리스트. 영문/숫자/`_`/`-` 만 1~64자 (`.` 불허 → traversal·예약명 원천 차단). */
+const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
 /** 파일명도 예약된 단독 `.`/`..` 는 별도 차단. */
 const PROFILE_FILE_NAME_RESERVED = new Set<string>(['.', '..']);
+
+/** SessionRoot.share 항목의 각 경로 세그먼트 화이트리스트. 영문/숫자/`.`/`_`/`-` 만. */
+const SHARE_REL_SEGMENT_RE = /^[a-zA-Z0-9._-]+$/;
 
 /**
  * cliId 가 path segment 로 안전한지 검증.
@@ -105,4 +113,73 @@ export function validateProfileFileName(rawFileName: string): string {
     );
   }
   return fileName;
+}
+
+/**
+ * 세션 id 검증 (validateProfileName 패턴 미러 — typeof guard → traversal 차단 → RE).
+ * 세션 디렉토리 path segment 로 직접 쓰이므로 traversal-safe 해야 한다.
+ *
+ * id 는 `<cliId>-<profileName>-<rand8>` 형태로 mat 내부에서 생성되지만, `mat session
+ * stop <id>` 처럼 사용자 입력으로도 들어오므로 사용 시점에 검증한다.
+ * `.` 을 화이트리스트에서 제외해 `.`/`..` 예약명과 확장자 우회를 한 번에 차단한다.
+ */
+export function validateSessionId(rawId: string): string {
+  if (typeof rawId !== 'string') {
+    throw new ValidationError('세션 id 는 문자열이어야 합니다.', 'sessionId');
+  }
+  if (/[/\\\x00]/.test(rawId)) {
+    throw new ValidationError('세션 id 에 / \\ NUL 은 포함될 수 없습니다.', 'sessionId');
+  }
+  if (!SESSION_ID_RE.test(rawId)) {
+    throw new ValidationError(
+      '세션 id 는 영문/숫자/_- 만 사용 가능하며 1~64자 이내여야 합니다.',
+      'sessionId'
+    );
+  }
+  return rawId;
+}
+
+/**
+ * SessionRoot.share 항목 (base 상대경로) 의 traversal-safe 검증.
+ *
+ * share 는 격리 세션 디렉토리와 실제 base 양쪽에 `join(dir, shareRel)` 로 합성되므로,
+ * 검증 없이는 `../x`/절대경로/구분자 우회로 세션 root 밖을 가리킬 수 있다 (allow-list 가
+ * 켜지는 순간 fail-open). 빌트인 메타는 현재 share=∅ 라 dead-path 지만, follow-up 으로
+ * 켜기 전에 plan 단계에서 차단한다 (quad-review PR #61 Codex/Claude MEDIUM 합의).
+ *
+ * 규칙: 비문자열/빈문자열/NUL/절대경로 거부. `\` 를 `/` 와 동일 구분자로 취급(Windows)하고,
+ * 각 세그먼트는 비어있지 않고 `.`/`..` 가 아니며 SHARE_REL_SEGMENT_RE 매치여야 한다.
+ * 정규화된(슬래시 통일) 상대경로를 반환한다.
+ */
+export function validateShareRel(rawRel: string): string {
+  if (typeof rawRel !== 'string') {
+    throw new ValidationError('share 항목은 문자열이어야 합니다.', 'shareRel');
+  }
+  if (rawRel === '') {
+    throw new ValidationError('share 항목은 빈 문자열일 수 없습니다.', 'shareRel');
+  }
+  if (/\x00/.test(rawRel)) {
+    throw new ValidationError('share 항목에 NUL 은 포함될 수 없습니다.', 'shareRel');
+  }
+  if (isAbsolute(rawRel)) {
+    throw new ValidationError(`share 항목은 절대경로일 수 없습니다: ${rawRel}`, 'shareRel');
+  }
+  // 백슬래시도 구분자로 취급 — Windows 경로 우회 차단 (Antigravity LOW).
+  const normalized = rawRel.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  for (const seg of segments) {
+    if (seg === '' || seg === '.' || seg === '..') {
+      throw new ValidationError(
+        `share 항목에 빈/'.'/'..' 세그먼트는 허용되지 않습니다: ${rawRel}`,
+        'shareRel'
+      );
+    }
+    if (!SHARE_REL_SEGMENT_RE.test(seg)) {
+      throw new ValidationError(
+        `share 항목 세그먼트는 영문/숫자/._- 만 사용 가능합니다: ${rawRel}`,
+        'shareRel'
+      );
+    }
+  }
+  return normalized;
 }

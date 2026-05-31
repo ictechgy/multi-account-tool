@@ -15,7 +15,10 @@
  * 동일 검증을 수행하므로 외부 직접 호출자도 우회 불가 (defense-in-depth).
  */
 
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { basename, dirname } from 'node:path';
+
 import { writeFileAtomic } from './io-atomic.js';
 import {
   cliProfilesDir,
@@ -183,4 +186,89 @@ export async function writeProfileFile(
   const safeFile = validateProfileFileName(fileName);
   await fs.mkdir(profileDir(cliId, safeName), { recursive: true, mode: 0o700 });
   await writeFileAtomic(profileFilePath(cliId, safeName, safeFile), value);
+}
+
+/**
+ * 종료 재캡처(`mat session`)의 2-phase commit 용 staged write.
+ *
+ * value 를 최종 프로필 경로 **옆 staging 파일**에 atomic(0600/O_NOFOLLOW)으로 쓰고 그
+ * 경로를 반환한다. 라이브 프로필 파일은 {@link commitStagedFile} 호출 전까지 무변경이므로,
+ * 여러 cred 를 "전부 stage 성공 → 일괄 commit" 하면 split(절반 새/절반 옛 토큰) 윈도우가
+ * byte-write 전체가 아닌 빠른 rename 으로 축소된다. stage 단계에서 hang/실패해도 라이브
+ * 프로필은 손상되지 않는다 (PR #61 quad-review Codex H1 — withTimeout 가 hung write 를
+ * 취소하지 못해 late-landing 시 split 재발생하던 문제의 구조적 해소).
+ *
+ * staging 파일은 최종 파일과 같은 디렉토리에 두어 commit rename 이 동일 fs 내(EXDEV 없음)
+ * atomic 이 되도록 보장한다.
+ */
+export async function stageProfileFile(
+  cliId: string,
+  name: string,
+  fileName: string,
+  value: string
+): Promise<string> {
+  validateCliId(cliId);
+  const safeName = validateProfileName(name);
+  const safeFile = validateProfileFileName(fileName);
+  await fs.mkdir(profileDir(cliId, safeName), { recursive: true, mode: 0o700 });
+  const finalPath = profileFilePath(cliId, safeName, safeFile);
+  const stagingPath = `${finalPath}.recap-${randomBytes(6).toString('hex')}`;
+  await writeFileAtomic(stagingPath, value);
+  return stagingPath;
+}
+
+/** stageProfileFile 이 만드는 staging basename 패턴: `<finalBase>.recap-<hex>`. */
+const STAGING_SUFFIX_RE = /^\.recap-[0-9a-f]+$/;
+
+/**
+ * {@link stageProfileFile} 산출 staging 파일을 최종 프로필 경로로 atomic rename(commit).
+ *
+ * stagingPath 의 신원을 검증한다 (PR #61 2회차 Forge MEDIUM — 호출자 규율 의존 hidden coupling
+ * 제거): (1) 최종 파일과 같은 디렉토리, (2) basename 이 `<finalBase>.recap-<hex>` 패턴(다른
+ * cred 파일/임의 파일을 target 위로 rename 하는 것 차단), (3) 비-symlink. 어긋나면 throw.
+ */
+export async function commitStagedFile(
+  stagingPath: string,
+  cliId: string,
+  name: string,
+  fileName: string
+): Promise<void> {
+  validateCliId(cliId);
+  const safeName = validateProfileName(name);
+  const safeFile = validateProfileFileName(fileName);
+  const finalPath = profileFilePath(cliId, safeName, safeFile);
+  const finalBase = basename(finalPath);
+  const stagingBase = basename(stagingPath);
+  const suffix = stagingBase.startsWith(finalBase) ? stagingBase.slice(finalBase.length) : null;
+  if (dirname(stagingPath) !== dirname(finalPath) || suffix === null || !STAGING_SUFFIX_RE.test(suffix)) {
+    throw new Error('staging 경로가 예상 패턴(<file>.recap-<hex>)이 아닙니다 (commit 거부).');
+  }
+  const lst = await fs.lstat(stagingPath);
+  if (lst.isSymbolicLink() || !lst.isFile()) {
+    throw new Error('staging 이 일반 파일이 아닙니다 (symlink/디렉토리 등 — commit 거부).');
+  }
+  await fs.rename(stagingPath, finalPath);
+}
+
+/** {@link stageProfileFile} staging 파일 best-effort 삭제 (stage 실패/미커밋 롤백). */
+export async function discardStagedFile(stagingPath: string): Promise<void> {
+  await fs.rm(stagingPath, { force: true }).catch(() => {
+    /* best-effort — 롤백 경로의 원본 에러를 가리지 않는다 */
+  });
+}
+
+/**
+ * 프로필 내 단일 파일 삭제 (없어도 에러 없음).
+ * 재캡처 롤백에서 "종료 전 존재하지 않던 cred"(backup=null)를 commit 후 원복할 때,
+ * 원복 대상이 "파일 부재" 이므로 삭제로 되돌린다 (PR #61 Codex MEDIUM — null-backup 잔여).
+ */
+export async function removeProfileFile(
+  cliId: string,
+  name: string,
+  fileName: string
+): Promise<void> {
+  validateCliId(cliId);
+  const safeName = validateProfileName(name);
+  const safeFile = validateProfileFileName(fileName);
+  await fs.rm(profileFilePath(cliId, safeName, safeFile), { force: true });
 }

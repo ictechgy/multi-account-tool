@@ -15,6 +15,8 @@ import {
   profileFilePath,
   profileMetaPath,
   profilesDir,
+  sessionDir,
+  sessionsDir,
   validateCliId,
   validateProfileFileName,
   validateProfileName
@@ -178,6 +180,29 @@ describe('paths', () => {
       const nfd = '가'.normalize('NFD');
       const nfc = '가'.normalize('NFC');
       expect(profileDir('codex', nfd)).toBe(profileDir('codex', nfc));
+    });
+  });
+
+  describe('sessionsDir / sessionDir (PR-S1)', () => {
+    it('sessionsDir 는 dataDir/sessions 이다', () => {
+      expect(sessionsDir()).toBe(join(tmp.home, '.multi-account-tool', 'sessions'));
+    });
+
+    it('sessionDir 는 sessionsDir 하위로 구성 (id 검증)', () => {
+      expect(sessionDir('codex-work-1a2b3c4d')).toBe(
+        join(tmp.home, '.multi-account-tool', 'sessions', 'codex-work-1a2b3c4d')
+      );
+    });
+
+    it.each([
+      ['../escape', 'path traversal'],
+      ['a/b', 'subdir separator'],
+      ['', '빈 문자열'],
+      ['.', '예약명'],
+      ['a b', '공백'],
+      ['a\x00b', 'NUL']
+    ])('sessionDir traversal/형식 위반 입력 throw: %s (%s)', (id, _r) => {
+      expect(() => sessionDir(id)).toThrow();
     });
   });
 

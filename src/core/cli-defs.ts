@@ -143,7 +143,11 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     name: 'Codex CLI',
     sources: [
       { type: 'file', path: '~/.codex/auth.json', saveAs: 'auth.json' }
-    ]
+    ],
+    // CODEX_HOME 으로 ~/.codex 전체 재배치 가능 (auth.json 포함). 세션 격리 지원.
+    // config.toml 은 별도 파일이라 share 후보지만, OAuth state 포함 여부 미검증 →
+    // 1차 share 비움(M-A, fail-closed). 검증 후 follow-up 으로 켠다.
+    session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex' }] }
   },
   {
     id: 'gemini',
@@ -170,7 +174,10 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     name: 'Kimi CLI',
     sources: [
       { type: 'file', path: '~/.kimi/config.toml', saveAs: 'kimi.toml' }
-    ]
+    ],
+    // KIMI_SHARE_DIR 로 ~/.kimi 재배치 가능 (config.toml 포함). 세션 격리 지원.
+    // config.toml 이 자격증명=config 그 자체(A=B)라 share 후보 없음 — 통째 격리 복사.
+    session: { roots: [{ env: 'KIMI_SHARE_DIR', base: '~/.kimi' }] }
   },
   {
     // Alibaba 공식 Qwen Code CLI (https://github.com/QwenLM/qwen-code, npm `@qwen-code/qwen-code`).
@@ -187,7 +194,10 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' },
       { type: 'file', path: '~/.qwen/.env', saveAs: 'qwen.env' }
-    ]
+    ],
+    // QWEN_HOME 으로 ~/.qwen 재배치 가능 (settings.json + .env 포함). 세션 격리 지원.
+    // settings.json 이 자격증명+config 혼재라 share 후보 없음 — 통째 격리 복사.
+    session: { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] }
   },
   {
     // Charm.sh 공식 Crush (https://github.com/charmbracelet/crush). Go 기반 TUI AI 코딩 에이전트.
@@ -210,7 +220,15 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.config/crush/crush.json', saveAs: 'crush-config.json' },
       { type: 'file', path: '~/.local/share/crush/crush.json', saveAs: 'crush-data.json' }
-    ]
+    ],
+    // CRUSH_GLOBAL_CONFIG / CRUSH_GLOBAL_DATA 로 두 base 를 각각 재배치 가능. 세션 격리 지원.
+    // data root(~/.local/share/crush) 의 비-secret 구조 미조사 → 1차 share 0(전부 ephemeral).
+    session: {
+      roots: [
+        { env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
+        { env: 'CRUSH_GLOBAL_DATA', base: '~/.local/share/crush' }
+      ]
+    }
   },
   {
     // SST OpenCode (https://github.com/sst/opencode). MIT 라이선스 오픈소스 AI 코딩 에이전트.

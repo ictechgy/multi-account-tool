@@ -39,6 +39,7 @@ import { UsageError, errorMessage } from './errors.js';
 import { acquireCliLock } from './lockfile.js';
 import { profileExists, validateProfileName } from './profile-store.js';
 import { snapshotLiveToProfile, switchProfile } from './switcher.js';
+import { getRecaptureTimeoutMs, withTimeout } from './timeout.js';
 
 export interface ExecOptions {
   cliId: string;
@@ -59,39 +60,8 @@ export interface ExecResult {
 /** 외부에서 잡고 자식에게 전달할 시그널 목록. */
 const FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
-/**
- * 라이브 재캡처 단계 (snapshotLiveToProfile) 의 타임아웃 (ms, default 10s).
- *
- * sources 의 keychain `security` CLI 가 macOS 인증 prompt 를 띄우거나 NFS 등이
- * stall 하면 무한 대기 → finally 의 restore/release/dispose 가 모두 막혀 mat 자체가
- * 종료되지 않는다 (quad-review iter 1 Strong MED, Codex-2 + Claude-2 합의). timeout
- * 시 stderr 안내 후 swallow → restore 는 정상 진행.
- *
- * 환경변수 `MAT_EXEC_RECAPTURE_TIMEOUT_MS` 로 override 가능 (양의 유한수만 허용).
- *
- * lazy 평가 (PR-N): module-load 시점 1회 평가 → 호출 시점 평가로 전환.
- *  - test 가 process.env 를 dynamic 으로 set/reset 한 뒤 mat exec 호출 시 env 즉시 반영
- *  - daemon/TUI 가 mat exec 를 여러 번 spawn 할 때 사용자 env 변경이 다음 exec 부터 적용
- *  - module-load 시점에 env 가 미설정이어서 default 로 고정되던 회귀 차단
- *  (PR-I* quad-review iter 2 Claude-3 LOW finding)
- */
-function getRecaptureTimeoutMs(): number {
-  const raw = process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
-  if (!raw) return 10_000;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : 10_000;
-}
-
-/** Promise.race timeout — timer cleanup 보장 (Promise 가 먼저 resolve 해도). */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
-  });
-  return Promise.race([p, timeoutPromise]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
+// 라이브 재캡처 단계(snapshotLiveToProfile)의 타임아웃·withTimeout 은 './timeout.js' 공유 모듈에서
+// import 한다 (PR #61 2회차 — session.ts 와의 중복 + 단일 env 가 두 default 를 제어하던 위험 제거).
 
 /**
  * mat exec 메인. 검증 실패는 UsageError throw, 자식 실행 결과는 ExecResult 로 반환.
