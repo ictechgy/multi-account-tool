@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LockHeldError,
   acquireCliLock,
+  acquireRecaptureLock,
   isProcessAlive,
   sanitizeForStderr
 } from '../../src/core/lockfile.js';
-import { cliLockPath } from '../../src/core/paths.js';
+import { cliLockPath, recaptureLockPath } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
 /**
@@ -697,6 +698,187 @@ describe('lockfile.acquireCliLock — PR-I* LockBody 확장', () => {
     expect(fresh.profile).toBe('recovered');
     expect(fresh.affectsCliIds).toEqual(['codex']);  // default 채워짐
     await release();
+  });
+});
+
+/**
+ * issue #62: 프로필 단위 재캡처 advisory 락. cli-lock 과 별도 namespace(locks/recapture/...),
+ * best-effort(실패 시 null), bounded-wait(deadline 후 null), stale-판정은 cli-lock 과 공유
+ * (probeHolder/reclaimStaleLock 단일 출처 — §8 M3). live holder 는 throw 가 아니라 폴링한다.
+ */
+describe('lockfile.acquireRecaptureLock — 프로필 단위 재캡처 락 (#62)', () => {
+  let tmp: TmpHome;
+  beforeEach(async () => { tmp = await setupTmpHome(); });
+  afterEach(async () => { await tmp.cleanup(); });
+
+  it('(1) free 락 즉시 획득 + release 핸들 반환 + recapture/<cli>/<profile>.lock 에 info.json 생성', async () => {
+    const release = await acquireRecaptureLock('codex', 'work');
+    expect(release).not.toBeNull();
+    const lockDir = recaptureLockPath('codex', 'work');
+    const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(info.pid).toBe(process.pid);
+    expect(info.profile).toBe('work');
+    expect(typeof info.token).toBe('string');
+    expect(info.token.length).toBeGreaterThan(0);
+    await release!();
+    await expect(fs.access(lockDir)).rejects.toThrow();
+  });
+
+  it('(2) dead holder → reclaim 후 재획득; 정확히 하나만 acquire 성공', async () => {
+    const deadPid = spawnGhostPid();
+    const lockDir = recaptureLockPath('codex', 'work');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: deadPid,
+        startedAt: new Date().toISOString(),
+        profile: 'old',
+        token: 'foreign-token'
+      })
+    );
+    const release = await acquireRecaptureLock('codex', 'work');
+    expect(release).not.toBeNull();
+    const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(info.pid).toBe(process.pid);
+    expect(info.token).not.toBe('foreign-token');
+    await release!();
+  });
+
+  it('(2b) live holder mid-acquire 윈도우 — mkdir 직후 info.json 부재 → INFLIGHT 대기 중 live pid 안착 → reclaim 안 함', async () => {
+    // MAJOR-A + L3 atomicity: holder 가 mkdir 성공·info.json write 전 상태(lockDir 존재, info.json
+    // 부재)를 시뮬레이트. 대기자의 첫 readInfo==null 이지만, INFLIGHT(200ms) 대기 중 holder 가
+    // 현재 프로세스 pid 의 info.json 을 작성하면 probeHolder 의 재확인이 live 로 판정 → reclaim
+    // 하지 않고 폴링해야 한다. writeFileAtomic 이 atomic 이라 info.json 은 완전부재/완전존재만
+    // 가능(부분 JSON 불가) → INFLIGHT 1회 재확인으로 충분 (회귀 시 이 가정 위반이 드러난다).
+    const lockDir = recaptureLockPath('codex', 'work');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 }); // holder mkdir 만 (info.json 아직 없음)
+    // INFLIGHT(200ms) 보다 짧은 지연 후 live pid info.json 안착 — 대기자의 재확인이 live 를 보게 함.
+    const seedLive = setTimeout(() => {
+      void fs.writeFile(
+        join(lockDir, 'info.json'),
+        JSON.stringify({
+          pid: process.pid, // 살아있는 holder
+          startedAt: new Date().toISOString(),
+          profile: 'work',
+          token: 'live-holder-token'
+        })
+      );
+    }, 80);
+
+    // deadline 안에서 폴링하다, 우리가 release(=info.json 삭제) 해주면 그제서야 획득.
+    const acquirePromise = acquireRecaptureLock('codex', 'work');
+    // holder 가 info 안착 + 잠깐 보유 후 사라지도록: 350ms 후 디렉토리 제거(=holder release 모사).
+    const releaseHolder = setTimeout(() => {
+      void fs.rm(lockDir, { recursive: true, force: true });
+    }, 350);
+
+    const release = await acquirePromise;
+    clearTimeout(seedLive);
+    clearTimeout(releaseHolder);
+    // 핵심: 살아있는 holder 를 reclaim 하지 않고 기다린 끝에 정확히 하나만 획득.
+    expect(release).not.toBeNull();
+    const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(info.pid).toBe(process.pid);
+    expect(info.token).not.toBe('live-holder-token'); // 우리 token 으로 새로 획득
+    await release!();
+  });
+
+  it('(3) release 는 owner-token 일치 시만 삭제 (다른 token 이면 보존)', async () => {
+    const lockDir = recaptureLockPath('codex', 'work');
+    const release = await acquireRecaptureLock('codex', 'work');
+    expect(release).not.toBeNull();
+    // 외부에서 token 을 다른 값으로 교체 (방어 검증).
+    const original = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({ ...original, token: 'someone-else-token' })
+    );
+    await release!();
+    // 다른 token 이므로 우리 release 가 삭제하지 않아 lock 디렉토리 보존.
+    await expect(fs.access(lockDir)).resolves.toBeUndefined();
+  });
+
+  it('(4) 지속 live 경합 → deadline 후 null 반환(throw 안 함), 경과 ≈ deadline', async () => {
+    // 영구히 살아있는 holder(현재 프로세스 pid) → 대기자는 폴링하다 deadline(5s) 초과 시 null.
+    // 테스트 시간을 줄이기 위해 env 가 아닌 실제 5s 를 쓰지 않고, holder 를 끝까지 두면 5s 소요.
+    // 5s 전체를 기다리는 대신 "deadline 후 null" 시맨틱만 확인 (실제 wait 상수 검증은 5b 와 분리).
+    const lockDir = recaptureLockPath('codex', 'work');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: process.pid, // 영구 live (현재 프로세스)
+        startedAt: new Date().toISOString(),
+        profile: 'forever',
+        token: 'forever-token'
+      })
+    );
+    const t0 = Date.now();
+    const release = await acquireRecaptureLock('codex', 'work');
+    const elapsed = Date.now() - t0;
+    expect(release).toBeNull(); // throw 가 아니라 null
+    // deadline(RECAPTURE_LOCK_WAIT_MS=5s) 근처까지 대기 후 폴백.
+    expect(elapsed).toBeGreaterThanOrEqual(4_500);
+    expect(elapsed).toBeLessThan(7_000);
+    // live holder 의 info.json 은 reclaim 되지 않고 보존돼야.
+    const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(info.token).toBe('forever-token');
+  }, 10_000);
+
+  it('(5) 순차 두 acquire 직렬화 — 첫 release 전 둘째는 wait, release 후 획득', async () => {
+    const r1 = await acquireRecaptureLock('codex', 'work');
+    expect(r1).not.toBeNull();
+    // 둘째 acquire 는 r1 이 살아있는 동안 폴링하다, r1 release 후 획득.
+    const secondPromise = acquireRecaptureLock('codex', 'work');
+    setTimeout(() => { void r1!(); }, 150); // 첫 락 release
+    const r2 = await secondPromise;
+    expect(r2).not.toBeNull();
+    await r2!();
+  }, 10_000);
+
+  it('(5b) live holder 보유 중 → release 직후 획득(null 아님). isProcessAlive 실제 hit', async () => {
+    // MAJOR-1: 정상 경합 폴백 0 회귀 가드. live holder(현재 프로세스 pid info.json seed)는
+    // isProcessAlive=true 가 실제로 hit 돼 dead 경로로 퇴화하지 않음을 명시. holder 가 짧게
+    // 보유 후 release(=lockDir 제거)하면 대기자는 deadline 전에 획득한다(폴백 아님).
+    const lockDir = recaptureLockPath('codex', 'work');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: process.pid, // 실제 live → isProcessAlive true 가 hit (dead 경로 퇴화 방지)
+        startedAt: new Date().toISOString(),
+        profile: 'work',
+        token: 'live-holder-token'
+      })
+    );
+    // sanity: holder pid 가 실제 alive (테스트가 dead 경로로 퇴화하지 않음을 명시).
+    expect(isProcessAlive(process.pid)).toBe(true);
+
+    const t0 = Date.now();
+    const acquirePromise = acquireRecaptureLock('codex', 'work');
+    setTimeout(() => { void fs.rm(lockDir, { recursive: true, force: true }); }, 400);
+    const release = await acquirePromise;
+    const elapsed = Date.now() - t0;
+    expect(release).not.toBeNull(); // 폴백(null) 아님 — holder release 후 정상 획득
+    expect(elapsed).toBeLessThan(4_000); // deadline(5s) 전에 획득 = 조기 폴백 없음
+    await release!();
+  }, 10_000);
+
+  it('(7) LockBody 최소 shape ({pid,startedAt,profile,token}, execMode 미설정) 직렬화', async () => {
+    const release = await acquireRecaptureLock('codex', 'work');
+    expect(release).not.toBeNull();
+    const lockDir = recaptureLockPath('codex', 'work');
+    const info = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(info.pid).toBe(process.pid);
+    expect(typeof info.startedAt).toBe('string');
+    expect(info.profile).toBe('work');
+    expect(typeof info.token).toBe('string');
+    // 최소 shape — execMode/previousActive/affectsCliIds 는 설정하지 않음.
+    expect(info.execMode).toBeUndefined();
+    expect(info.previousActive).toBeUndefined();
+    expect(info.affectsCliIds).toBeUndefined();
+    await release!();
   });
 });
 

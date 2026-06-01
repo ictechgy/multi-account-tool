@@ -28,7 +28,7 @@ import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { writeFileAtomic } from './io-atomic.js';
-import { cliLockPath } from './paths.js';
+import { cliLockPath, recaptureLockPath } from './paths.js';
 
 const INFO_FILENAME = 'info.json';
 
@@ -370,6 +370,69 @@ async function releaseIfOwned(lockDir: string, myToken: string): Promise<void> {
   const info = await readInfo(lockDir);
   if (!info || info.token !== myToken) return;
   await fs.rm(lockDir, { recursive: true, force: true }).catch(() => { /* best-effort */ });
+}
+
+/**
+ * 프로필 단위 재캡처 lock 의 bounded-wait 총 한도(ms). 5s = 정상 재캡처(소형 cred atomic
+ * byte-write, 무네트워크라 ms-scale — 측정 전 코드추론 근거, OQ3 재확인 대상) 보다 수천 배 길다.
+ * 폴백은 진짜 데드홀더(SIGKILL 누수)/mkdir 권한오류에서만 발생하며, 정상 경합에서는 holder 의
+ * ms-scale 완료를 기다린 뒤 즉시 획득한다. (env override 는 follow-up)
+ */
+const RECAPTURE_LOCK_WAIT_MS = 5_000;
+/** 재캡처 lock 폴링 간격(ms). live holder 점유 중 deadline 까지 이 간격으로 재시도. */
+const RECAPTURE_POLL_MS = 50;
+
+/**
+ * 프로필 단위 재캡처 advisory lock 을 best-effort 로 획득한다 (`mat session` 종료 재캡처 직렬화,
+ * issue #62). cli-lock(`acquireCliLock`)과 **별도 namespace**(`locks/recapture/<cli>/<profile>.lock`)
+ * 라 exec 와 충돌하지 않는다. 획득 시 release 핸들, deadline(`RECAPTURE_LOCK_WAIT_MS`) 초과/권한
+ * 오류 시 `null` 을 반환한다 — **throw 하지 않아** 세션 종료를 막지 않는다(best-effort degrade).
+ *
+ * stale-판정·회수는 cli-lock 과 동일한 `probeHolder`/`reclaimStaleLock` 단일 출처를 공유하며(§8 M3),
+ * live holder 는 throw 대신 폴링한다. mkdir↔write mid-acquire 윈도우는 `probeHolder` 의 INFLIGHT
+ * 재확인이 보호해 살아있는 holder 를 회수하지 않는다(MAJOR-A).
+ */
+export async function acquireRecaptureLock(
+  cliId: string,
+  profileName: string
+): Promise<(() => Promise<void>) | null> {
+  const lockDir = recaptureLockPath(cliId, profileName);
+  await fs.mkdir(dirname(lockDir), { recursive: true, mode: 0o700 });
+  const body = makeRecaptureBody(profileName);
+  return waitLoop(lockDir, body);
+}
+
+/** 재캡처 lock 의 최소 LockBody — execMode/previousActive/affectsCliIds 미설정. */
+function makeRecaptureBody(profileName: string): LockBody {
+  return {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    profile: profileName,
+    token: randomBytes(16).toString('hex')
+  };
+}
+
+/** deadline 까지 tryAcquire 반복. 성공 시 release 핸들, EEXIST 면 classifyAndAct 후 재시도, 초과 시 null. */
+async function waitLoop(
+  lockDir: string,
+  body: LockBody
+): Promise<(() => Promise<void>) | null> {
+  const deadline = Date.now() + RECAPTURE_LOCK_WAIT_MS;
+  for (;;) {
+    if (await tryAcquire(lockDir, body)) return () => releaseIfOwned(lockDir, body.token);
+    await classifyAndAct(lockDir, deadline);
+    if (Date.now() >= deadline) return null;
+  }
+}
+
+/** EEXIST 후 holder 분류 — live 면 deadline 까지 폴링, dead/absent 면 공유 reclaim(warn 없음). */
+async function classifyAndAct(lockDir: string, deadline: number): Promise<void> {
+  const h = await probeHolder(lockDir); // INFLIGHT 대기 후 판정 → cli-lock 동형(MAJOR-A)
+  if (h.kind === 'live') {
+    await delay(Math.min(RECAPTURE_POLL_MS, Math.max(0, deadline - Date.now())));
+    return;
+  }
+  await reclaimStaleLock(lockDir); // dead/absent — warn 없이 회수 (재캡처 경로는 정책 B 안내 생략)
 }
 
 function delay(ms: number): Promise<void> {
