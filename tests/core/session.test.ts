@@ -37,23 +37,30 @@ vi.mock('../../src/core/lockfile.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/core/lockfile.js')>(
     '../../src/core/lockfile.js'
   );
-  return { ...actual, acquireCliLock: vi.fn() };
+  return { ...actual, acquireCliLock: vi.fn(), acquireRecaptureLock: vi.fn() };
 });
 
 import { spawn } from 'node:child_process';
 
 import { findCliDef } from '../../src/core/cli-defs.js';
 import { UsageError } from '../../src/core/errors.js';
-import { acquireCliLock } from '../../src/core/lockfile.js';
+import { acquireCliLock, acquireRecaptureLock } from '../../src/core/lockfile.js';
 import { sessionDir, sessionsDir } from '../../src/core/paths.js';
 import {
   commitStagedFile,
   profileExists,
   readProfileFile,
+  removeProfileFile,
   stageProfileFile,
   writeProfileFile
 } from '../../src/core/profile-store.js';
-import { listSessions, reapOrphans, runSession, stopSession } from '../../src/core/session.js';
+import {
+  listSessions,
+  recaptureSession,
+  reapOrphans,
+  runSession,
+  stopSession
+} from '../../src/core/session.js';
 import { switchProfile } from '../../src/core/switcher.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
@@ -63,9 +70,11 @@ const mockReadProfile = vi.mocked(readProfileFile);
 const mockWriteProfile = vi.mocked(writeProfileFile);
 const mockStage = vi.mocked(stageProfileFile);
 const mockCommit = vi.mocked(commitStagedFile);
+const mockRemoveProfile = vi.mocked(removeProfileFile);
 const mockSpawn = vi.mocked(spawn);
 const mockSwitch = vi.mocked(switchProfile);
 const mockAcquire = vi.mocked(acquireCliLock);
+const mockAcquireRecapture = vi.mocked(acquireRecaptureLock);
 
 const DEF = {
   id: 'codex',
@@ -111,7 +120,10 @@ beforeEach(async () => {
   mockWriteProfile.mockResolvedValue(undefined);
   mockStage.mockResolvedValue('/stub/staged'); // staging 경로 stub (commit 도 mock)
   mockCommit.mockResolvedValue(undefined);
+  mockRemoveProfile.mockResolvedValue(undefined);
   mockAcquire.mockResolvedValue(vi.fn() as never);
+  // 재캡처 락 기본값 — release 핸들 반환(획득 성공). null 폴백은 개별 테스트에서 override.
+  mockAcquireRecapture.mockResolvedValue(vi.fn().mockResolvedValue(undefined));
 });
 afterEach(async () => {
   await tmp.cleanup();
@@ -303,5 +315,129 @@ describe('listSessions / stopSession / reapOrphans', () => {
     await makeSessionWithMeta('codex-work-badpid01', { pid: 0, startedAt: new Date().toISOString() });
     const sessions = await listSessions();
     expect(sessions.find((s) => s.id === 'codex-work-badpid01')).toBeUndefined();
+  });
+});
+
+/**
+ * issue #62: recaptureSession 의 프로필 단위 락 통합 (TOCTOU 차단 + release 순서 불변식).
+ *
+ * recaptureSession 을 직접 호출해 (1) 락이 backup-read 이전 획득되는지(시나리오 3①),
+ * (2) 락 null 폴백 시 경고 1회 + 재캡처 진행, (3) release 가 마지막 commit/rollback 이후에
+ * 일어나는지(MAJOR-2, 시나리오 3②)를 spy 호출 인덱스로 검증한다.
+ */
+describe('recaptureSession — 프로필 단위 락 통합 (#62)', () => {
+  /** 락 1개·cred 1개를 가진 최소 SessionPlan + 격리본 파일 생성. 격리본 새 값 반환. */
+  async function makePlanWithIsolate(newValue: string) {
+    const id = 'codex-work-1a2b3c4d';
+    const dir = join(sessionDir(id), 'CODEX_HOME');
+    await fs.mkdir(dir, { recursive: true });
+    const absInSession = join(dir, 'auth.json');
+    await fs.writeFile(absInSession, newValue);
+    const plan = {
+      id,
+      cli: 'codex',
+      profile: 'work',
+      roots: [
+        { env: 'CODEX_HOME', dir, baseAbs: '/base', share: [],
+          creds: [{ saveAs: 'auth.json', rel: 'auth.json', absInSession }] }
+      ]
+    };
+    return plan;
+  }
+
+  /** 2-cred SessionPlan + 격리본 파일 — 부분 commit 실패 시 rollback 경로 검증용. */
+  async function makePlanWith2Creds(v1: string, v2: string) {
+    const id = 'codex-work-2c2c2c2c';
+    const dir = join(sessionDir(id), 'CODEX_HOME');
+    await fs.mkdir(dir, { recursive: true });
+    const abs1 = join(dir, 'auth.json');
+    const abs2 = join(dir, 'env.json');
+    await fs.writeFile(abs1, v1);
+    await fs.writeFile(abs2, v2);
+    return {
+      id,
+      cli: 'codex',
+      profile: 'work',
+      roots: [
+        { env: 'CODEX_HOME', dir, baseAbs: '/base', share: [],
+          creds: [
+            { saveAs: 'auth.json', rel: 'auth.json', absInSession: abs1 },
+            { saveAs: 'env.json', rel: 'env.json', absInSession: abs2 }
+          ] }
+      ]
+    };
+  }
+
+  it('(11) 락이 첫 backup-read(readProfileFile) 이전에 획득된다 (시나리오 3①)', async () => {
+    const order: string[] = [];
+    mockAcquireRecapture.mockImplementation(async () => {
+      order.push('acquire');
+      return vi.fn().mockResolvedValue(undefined);
+    });
+    mockReadProfile.mockImplementation(async () => {
+      order.push('backup-read');
+      return 'BACKUP';
+    });
+    const plan = await makePlanWithIsolate('NEW-TOKEN');
+    await recaptureSession(plan as never);
+    // 락 호출 인덱스 < 첫 backup-read 호출 인덱스.
+    const acquireIdx = order.indexOf('acquire');
+    const firstReadIdx = order.indexOf('backup-read');
+    expect(acquireIdx).toBeGreaterThanOrEqual(0);
+    expect(firstReadIdx).toBeGreaterThanOrEqual(0);
+    expect(acquireIdx).toBeLessThan(firstReadIdx);
+  });
+
+  it('(12) 락 null 폴백 → stderr 경고 1회 + 재캡처 진행 (best-effort degrade)', async () => {
+    mockAcquireRecapture.mockResolvedValue(null); // 락 획득 실패
+    const plan = await makePlanWithIsolate('NEW-TOKEN');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await recaptureSession(plan as never);
+      const warns = stderrSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((s) => /프로필 락 획득 실패|lock-free/.test(s));
+      expect(warns).toHaveLength(1); // 경고 정확히 1회
+      // 폴백이어도 재캡처(stage→commit) 는 진행.
+      expect(mockStage).toHaveBeenCalledWith('codex', 'work', 'auth.json', 'NEW-TOKEN');
+      expect(mockCommit).toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('(14a) 정상 commit: release 인덱스 > 마지막 commitStagedFile 인덱스 (MAJOR-2)', async () => {
+    const order: string[] = [];
+    const releaseSpy = vi.fn(async () => { order.push('release'); });
+    mockAcquireRecapture.mockResolvedValue(releaseSpy);
+    mockCommit.mockImplementation(async () => { order.push('commit'); });
+    const plan = await makePlanWithIsolate('NEW-TOKEN');
+    await recaptureSession(plan as never);
+    const lastCommitIdx = order.lastIndexOf('commit');
+    const releaseIdx = order.lastIndexOf('release');
+    expect(lastCommitIdx).toBeGreaterThanOrEqual(0);
+    expect(releaseIdx).toBeGreaterThan(lastCommitIdx); // release 가 마지막 commit 이후
+  });
+
+  it('(14b) 부분 commit 실패 → rollback: release 인덱스 > 마지막 rollbackCred(write) 인덱스 (MAJOR-2)', async () => {
+    // 2-cred: 첫 commit 성공(committed 기록) → 둘째 commit 실패 → 첫 cred 역순 rollback 발생.
+    const order: string[] = [];
+    const releaseSpy = vi.fn(async () => { order.push('release'); });
+    mockAcquireRecapture.mockResolvedValue(releaseSpy);
+    // backup-read + rollback 의 compare-and-restore current 가 모두 'NEW-1' 이어야 첫 cred 원복.
+    mockReadProfile.mockResolvedValue('NEW-1');
+    mockWriteProfile.mockImplementation(async () => { order.push('rollback-write'); });
+    let commitCalls = 0;
+    mockCommit.mockImplementation(async () => {
+      order.push('commit');
+      commitCalls += 1;
+      if (commitCalls >= 2) throw new Error('두번째 commit 실패 주입'); // 둘째에서만 실패
+    });
+    const plan = await makePlanWith2Creds('NEW-1', 'NEW-2');
+    await expect(recaptureSession(plan as never)).rejects.toThrow(/두번째 commit 실패/);
+    const lastRollbackIdx = order.lastIndexOf('rollback-write');
+    const releaseIdx = order.lastIndexOf('release');
+    expect(lastRollbackIdx).toBeGreaterThanOrEqual(0); // 첫 cred rollback 이 실제 발생
+    expect(releaseIdx).toBeGreaterThan(lastRollbackIdx); // release 가 마지막 rollback 이후
   });
 });

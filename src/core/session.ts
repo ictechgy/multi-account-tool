@@ -34,7 +34,7 @@ import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { findCliDef } from './cli-defs.js';
 import { UsageError } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
-import { isProcessAlive, sanitizeForStderr } from './lockfile.js';
+import { acquireRecaptureLock, isProcessAlive, sanitizeForStderr } from './lockfile.js';
 import {
   expandTilde,
   sessionDir,
@@ -258,29 +258,49 @@ async function assertContainedRealpath(baseAbs: string, childAbs: string): Promi
 /** 재캡처 1건 단위 (preflight 수집물). */
 interface RecaptureItem {
   saveAs: string;
-  /** 프로필 현재값 (롤백 백업). 신규 프로필이면 null. */
+  /** 프로필 현재값 (롤백 백업). 신규 프로필이면 null. 락 획득 이후 채운다(TOCTOU 차단). */
   backup: string | null;
   /** 격리본 새 값. */
   newValue: string;
 }
 
 /**
- * 종료 재캡처 (2-phase commit — split 방지, PR #61 Codex H1 정정).
- *  - preflight: 각 cred 의 (프로필 현재값=롤백 백업) + (격리본 새 값) 수집. 격리본 부재는 skip.
- *  - phase 1 (stage): 각 cred 의 새 값을 프로필 경로 옆 staging 파일에 쓴다(라이브 무변경).
- *    cred 단위 withTimeout(liveness 보호). 한 건이라도 hang/실패 → commit 이 전무하므로 라이브
- *    프로필은 손상 0(split 0) — staging 만 best-effort 정리 후 throw. hung stage 가 late-landing
- *    해도 staging 임시파일만 오염되고 라이브에 닿지 않는다.
- *  - phase 2 (commit): staging → 라이브 일괄 rename(동일 fs 내 빠른 atomic). rename 은 취소 불가라
- *    withTimeout 으로 감싸지 않는다(timeout 후 late-land 시 롤백 누락 split 방지) — 완료/예외까지
- *    대기. 부분 실패 → 미커밋 staging 정리 + 커밋된 cred 를 compare-and-restore 역순 원복(없던
- *    cred 는 삭제) 후 throw.
+ * 종료 재캡처 (2-phase commit + 프로필 단위 advisory 락 — split 방지, issue #62).
  *
- * 한계 (스펙 §6.1): 같은 cli·**같은 프로필**을 동시에 두 세션이 띄우면 재캡처가 lock 없이 같은
- * 프로필에 써서 토큰 세대가 섞일 수 있다(같은 계정 한정 — wrong-account 아님, 다음 사용 시 자가
- * 치유). 본 기능은 터미널마다 다른 프로필 전제. 프로필 단위 lock 은 follow-up 아키텍처 결정.
+ *  - **phase 0 (락 밖)**: 각 cred 의 격리본 새 값만 수집한다. 격리본은 세션 전용(non-shared)이라
+ *    락 밖 읽기가 정합성을 깨지 않는다. 후보 없으면 즉시 return.
+ *  - **프로필 락 획득**: `acquireRecaptureLock`. best-effort — null(획득 실패/timeout)이면 경고
+ *    1회 후 현행 lock-free 2-phase commit 으로 degrade(오늘 동작 보존, "오늘보다 나빠지지 않음").
+ *  - **락 안 (try)**: backup-read(`readProfileFile`)를 **락 획득 이후**에 수행해 두 세션이 같은
+ *    backup 을 보는 TOCTOU 를 차단한다(시나리오 3①). 이어서 phase 1(stage)→phase 2(commit), 실패
+ *    시 compare-and-restore 역순 rollback. **release 는 finally** 에 둬 "release > 마지막 commit/
+ *    rollback" 불변식을 구조적으로 보장한다(MAJOR-2, 시나리오 3②).
+ *
+ * 양쪽 세션이 모두 락 획득에 성공하면 backup-read→commit→rollback 전체가 직렬화돼 multi-cred 의
+ * cred 별 winner 분기 split(compare-and-restore 가 cred 별 독립이라 흡수 못 하는 cross-cred 비일관)
+ * 까지 제거된다. 한쪽이라도 락 실패 시 그 구간은 lock-free 로 degrade(같은 계정 한정 — wrong-account
+ * 아님, 다음 사용 시 자가 치유). 스펙 §6.1 참조.
  */
 export async function recaptureSession(plan: SessionPlan): Promise<void> {
+  const items = await collectRecaptureItems(plan);
+  if (items.length === 0) return;
+
+  const release = await acquireRecaptureLock(plan.cli, plan.profile);
+  if (!release) {
+    process.stderr.write(
+      `[mat] 프로필 락 획득 실패 — lock-free 재캡처로 진행: ` +
+        `${sanitizeForStderr(plan.cli)}/${sanitizeForStderr(plan.profile)}\n`
+    );
+  }
+  try {
+    await runRecaptureLocked(plan, items); // 락 안: backup-read(TOCTOU 차단) → stage → commit → rollback
+  } finally {
+    if (release) await release(); // release 인덱스 > 마지막 commit/rollback 인덱스 보장
+  }
+}
+
+/** phase 0 (락 밖): 각 cred 의 격리본 새 값만 수집. 격리본 부재는 안내 후 skip. backup 은 락 안에서 채운다. */
+async function collectRecaptureItems(plan: SessionPlan): Promise<RecaptureItem[]> {
   const items: RecaptureItem[] = [];
   for (const root of plan.roots) {
     for (const cred of root.creds) {
@@ -289,15 +309,25 @@ export async function recaptureSession(plan: SessionPlan): Promise<void> {
         newValue = await fs.readFile(cred.absInSession, 'utf8');
       } catch {
         process.stderr.write(
-          `[mat] 세션 격리본 부재 — 재캡처 skip: ${plan.cli}/${plan.profile}/${cred.saveAs}\n`
+          `[mat] 세션 격리본 부재 — 재캡처 skip: ${sanitizeForStderr(plan.cli)}/${sanitizeForStderr(plan.profile)}/${sanitizeForStderr(cred.saveAs)}\n`
         );
         continue;
       }
-      const backup = await readProfileFile(plan.cli, plan.profile, cred.saveAs);
-      items.push({ saveAs: cred.saveAs, backup, newValue });
+      items.push({ saveAs: cred.saveAs, backup: null, newValue });
     }
   }
-  if (items.length === 0) return;
+  return items;
+}
+
+/**
+ * 락 안 재캡처 본문 — backup-read(TOCTOU 차단) → 2-phase commit → 실패 시 rollback.
+ * 본 함수 전체가 프로필 락 보유 구간이다(release 는 호출자 finally).
+ */
+async function runRecaptureLocked(plan: SessionPlan, items: RecaptureItem[]): Promise<void> {
+  // backup-read 는 반드시 락 획득 이후 (두 세션이 같은 backup 을 보는 TOCTOU 차단, 시나리오 3①).
+  for (const it of items) {
+    it.backup = await readProfileFile(plan.cli, plan.profile, it.saveAs);
+  }
 
   const ms = getRecaptureTimeoutMs();
 
@@ -641,8 +671,8 @@ async function recaptureBestEffort(plan: SessionPlan): Promise<Error | undefined
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
     process.stderr.write(
-      `[mat] 세션 종료 재캡처 실패 (${plan.cli}/${plan.profile}): ${sanitizeForStderr(e.message)}. ` +
-        `'mat freshness ${plan.cli}' 로 확인하세요.\n`
+      `[mat] 세션 종료 재캡처 실패 (${sanitizeForStderr(plan.cli)}/${sanitizeForStderr(plan.profile)}): ${sanitizeForStderr(e.message)}. ` +
+        `'mat freshness ${sanitizeForStderr(plan.cli)}' 로 확인하세요.\n`
     );
     return e;
   }

@@ -15,6 +15,7 @@ import {
   profileFilePath,
   profileMetaPath,
   profilesDir,
+  recaptureLockPath,
   sessionDir,
   sessionsDir,
   validateCliId,
@@ -118,6 +119,62 @@ describe('paths', () => {
       ['a'.repeat(33), '33자 (상한 32 초과)']
     ])('위험한 cliId 거부: %s (%s)', (id, _reason) => {
       expect(() => cliLockPath(id)).toThrow(/path segment/);
+    });
+  });
+
+  describe('recaptureLockPath — 프로필 단위 재캡처 락 namespace (issue #62)', () => {
+    // 테스트 8: 정상 합성 — locks/recapture/<cli>/<profile>.lock 중첩 구조.
+    it('정상 cli/profile → join(locksDir, "recapture", cli, profile+".lock")', () => {
+      expect(recaptureLockPath('codex', 'work')).toBe(
+        join(locksDir(), 'recapture', 'codex', 'work.lock')
+      );
+    });
+
+    // 테스트 9: cli/profile 각각 검증 — invalid 은 throw.
+    it.each([
+      ['../escape', 'work', 'cli traversal'],
+      ['codex', '../escape', 'profile traversal'],
+      ['1cli', 'work', 'cli 숫자 시작 (SAFE_CLI_ID_RE 위배)'],
+      ['codex', '.', 'profile 예약명'],
+      ['cli space', 'work', 'cli 공백'],
+      ['codex\x00', 'work', 'cli NUL']
+    ])('invalid 입력 throw: cli=%s profile=%s (%s)', (cli, profile, _r) => {
+      expect(() => recaptureLockPath(cli, profile)).toThrow();
+    });
+
+    // 테스트 9(중첩 분리): 'a-b'/'c' vs 'a'/'b-c' 가 별도 세그먼트라 충돌 안 함.
+    it('cli/profile 별도 세그먼트 분리 → "a-b"/"c" 와 "a"/"b-c" 가 충돌하지 않는다', () => {
+      const left = recaptureLockPath('a-b', 'c');
+      const right = recaptureLockPath('a', 'b-c');
+      expect(left).not.toBe(right);
+      expect(left).toBe(join(locksDir(), 'recapture', 'a-b', 'c.lock'));
+      expect(right).toBe(join(locksDir(), 'recapture', 'a', 'b-c.lock'));
+    });
+
+    // 테스트 9: profile 은 NFC 정규화 결과로 합성 (validateProfileName 대칭).
+    it('profile NFD 입력 → NFC 정규화된 경로 반환', () => {
+      const nfd = '가'.normalize('NFD');
+      const nfc = '가'.normalize('NFC');
+      expect(recaptureLockPath('codex', nfd)).toBe(recaptureLockPath('codex', nfc));
+    });
+
+    // 테스트 10: exec namespace 분리 — cliLockPath 와 절대 같은 경로를 만들지 않는다.
+    it('exec namespace 분리: recaptureLockPath 와 cliLockPath 는 disjoint', () => {
+      expect(recaptureLockPath('codex', 'work')).not.toBe(cliLockPath('codex'));
+      // recapture 는 locks/recapture/ 하위, exec 는 locks/ 직속.
+      expect(recaptureLockPath('codex', 'work')).toContain(join('locks', 'recapture'));
+      expect(cliLockPath('codex')).toBe(join(locksDir(), 'codex.lock'));
+    });
+
+    // 테스트 10b: cliId='recapture' 코너 — exec 의 locks/recapture.lock(파일) 과
+    // 재캡처의 locks/recapture/<profile>.lock(디렉토리 하위) 가 무해 공존 (.lock 접미사로 disjoint).
+    it('cliId="recapture" 코너 — exec locks/recapture.lock 과 재캡처 locks/recapture/<p>.lock 공존', () => {
+      // validateCliId 가 'recapture' 를 허용 (validators.ts SAFE_CLI_ID_RE).
+      const execPath = cliLockPath('recapture');
+      const recapPath = recaptureLockPath('recapture', 'work');
+      expect(execPath).toBe(join(locksDir(), 'recapture.lock'));
+      expect(recapPath).toBe(join(locksDir(), 'recapture', 'recapture', 'work.lock'));
+      expect(execPath).not.toBe(recapPath);
     });
   });
 
