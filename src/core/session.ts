@@ -9,8 +9,12 @@
  *  - 자격증명: mat 이 새로 만든 fresh 세션 디렉토리에 0600 으로 **복사**(symlink 아님).
  *    `writeFileAtomic` 의 mkdir/rename 은 symlink-safe 가 아니지만(io-atomic.ts), fresh
  *    non-symlink 경로에만 쓰므로 base 오염 경로가 구조적으로 없다.
- *  - allow-list(`SessionRoot.share`): read-mostly 비-secret config 만 실제 base 로 symlink
- *    공유(대상이 symlink 면 거부 — fail-closed). **1차 빌트인 메타는 share=∅**(M-A).
+ *  - allow-list(`SessionRoot.share`): read-mostly 비-secret config(예: codex `config.toml`)을
+ *    base 원본에서 세션 디렉토리로 **0600 복사**한다(symlink 아님 — issue #72). 세션 내 CLI 가
+ *    그 config 를 수정해도(예: `codex mcp add`/`plugin add` 가 `[mcp_servers.*]` 같은
+ *    authority-bearing 설정을 실제로 기록함 — 실측 확인) 격리본만 바뀌고 base 는 오염되지 않는다.
+ *    격리본은 종료 시 폐기되며 재캡처(creds 전용) 대상이 아니라 write-back 이 없다. base 대상이
+ *    symlink 면 거부(fail-closed). **1차 빌트인 메타는 share=∅**(M-A).
  *  - 그 외 base 엔트리: materialize 안 함(세션 내 ephemeral) — fail-closed.
  *
  * 종료 재캡처는 **2-phase commit(stage → commit)** 으로 split(절반 새/절반 옛 토큰)을
@@ -28,7 +32,7 @@
 
 import { ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 import { findCliDef } from './cli-defs.js';
@@ -71,11 +75,11 @@ interface MaterializedRoot {
   env: string;
   /** 세션 디렉토리 내 이 root 의 디렉토리 (env 값으로 주입). */
   dir: string;
-  /** 실제 base 절대경로 (allow-list symlink 대상 계산용). */
+  /** 실제 base 절대경로 (allow-list 복사 대상 계산용). */
   baseAbs: string;
   /** 이 root 의 자격증명 격리본 목록. */
   creds: SessionCred[];
-  /** base 와 symlink 공유할 read-mostly config (base 상대경로, cred 와 disjoint). */
+  /** base 에서 세션으로 0600 복사할 read-mostly config (base 상대경로, cred 와 disjoint, write-back 없음 — #72). */
   share: string[];
 }
 
@@ -197,9 +201,9 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
         }
         await writeFileAtomic(cred.absInSession, value);
       }
-      // (나중) allow-list symlink — 양측 경로 봉쇄 검증 (스펙 §4.2).
+      // (나중) allow-list 복사 — 양측 경로 봉쇄 검증 (스펙 §4.2, copy-isolate #72).
       for (const shareRel of root.share) {
-        await materializeShareLink(root, shareRel);
+        await materializeShareCopy(root, shareRel);
       }
     }
   } catch (err) {
@@ -211,13 +215,23 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
 }
 
 /**
- * allow-list 항목 1개를 base 원본으로 symlink 공유. 스펙 §4.2 양측 검증:
+ * allow-list 항목 1개를 base 원본에서 세션 디렉토리로 **0600 복사**한다 (copy-isolate, #72).
+ *
+ * **왜 symlink 가 아니라 복사인가**: codex 는 `config.toml` 을 read-only 로만 쓰지 않는다 —
+ * `codex mcp add`/`codex plugin add` 등이 `[mcp_servers.*]` 같은 authority-bearing 설정을
+ * config.toml 에 **실제로 기록**한다(실측 확인). symlink 공유였다면 세션 안에서 그 명령을 쓰는
+ * 순간 base `~/.codex/config.toml` 이 변경돼 세션 격리가 깨지고 동시 세션끼리 간섭한다. 복사하면
+ * 세션의 수정은 격리본에만 남고, 격리본은 종료 시 removeSessionDir 로 폐기되며 재캡처(creds 전용)
+ * 대상이 아니라 write-back 이 발생하지 않는다. 세션 시작 시점의 사용자 설정 재현(UX)은 유지된다.
+ *
+ * 스펙 §4.2 양측 검증 (symlink 공유 시절의 봉쇄를 복사에도 그대로 유지):
  *  (b) base 측: 대상이 symlink 면 거부(fail-closed) + 대상 부모가 base realpath 하위로 봉쇄
- *      (nested shareRel 의 symlink 컴포넌트 escape 차단).
- *  (a) 세션 측: 링크 부모가 실제 디렉토리(symlink 아님)인지 검증 후 링크 생성.
+ *      (nested shareRel 의 symlink 컴포넌트 escape 차단). 읽기는 O_NOFOLLOW 로 열어 lstat→read
+ *      사이 symlink swap(TOCTOU)에도 마지막 컴포넌트 추적을 막는다(writeFileAtomic tmp 와 동형).
+ *  (a) 세션 측: 복사 부모가 실제 디렉토리(symlink 아님)인지 검증 후 0600 atomic 복사.
  * shareRel 은 planSession 의 validateShareRel 로 이미 traversal-safe.
  */
-async function materializeShareLink(root: MaterializedRoot, shareRel: string): Promise<void> {
+async function materializeShareCopy(root: MaterializedRoot, shareRel: string): Promise<void> {
   const target = join(root.baseAbs, shareRel);
   // 방어적 봉쇄 (#71 결함4): shareRel 은 planSession 의 validateShareRel 로 진입 시점에 이미
   // traversal/absolute 가 차단돼 join 결과가 base 안에 있음이 보장된다. 그럼에도 아래 optional
@@ -225,7 +239,7 @@ async function materializeShareLink(root: MaterializedRoot, shareRel: string): P
   // 여부와 무관하게 순수 경로 레벨로 재확인**한 뒤 skip 한다(부재 대상이라 realpath 는 못 씀).
   // 이로써 ENOENT skip 은 base 봉쇄가 보장된 경로에만 적용된다 — fail-closed 유지.
   assertLexicallyContained(root.baseAbs, target);
-  // share 대상이 base에 없으면 optional 공유로 간주해 건너뛴다(config.toml 등 read-mostly
+  // share 대상이 base에 없으면 optional 복사로 간주해 건너뛴다(config.toml 등 read-mostly
   // 설정은 부재해도 세션 진행 무관, 자격증명 아님). ENOENT 이외의 예기치 못한 오류(권한 등)는
   // 그대로 surface한다(CLAUDE.md 에러 무시 금지 원칙). 아래 symlink/비-파일/escape 보안 검증은
   // 대상이 존재할 때 fail-closed 유지.
@@ -237,23 +251,37 @@ async function materializeShareLink(root: MaterializedRoot, shareRel: string): P
     throw err;
   }
   if (tst.isSymbolicLink()) {
-    throw new Error(`allow-list 대상이 symlink 입니다 (공유 거부): ${target}`);
+    throw new Error(`allow-list 대상이 symlink 입니다 (복사 거부): ${target}`);
   }
-  // 일반 파일만 공유 (PR #61 2회차 Forge): 디렉토리를 symlink 하면 그 안의 nested/미래 파일·
-  // symlink 가 개별 allow-list 없이 통째 노출돼 좁은 공유 계약이 깨진다. 디렉토리 공유는 미지원.
+  // 일반 파일만 복사 (PR #61 2회차 Forge): 디렉토리를 통째로 복사하면 그 안의 nested/미래 파일·
+  // symlink 가 개별 allow-list 없이 노출돼 좁은 공유 계약이 깨진다. 디렉토리 공유는 미지원.
   if (!tst.isFile()) {
     throw new Error(`allow-list 대상이 일반 파일이 아닙니다 (디렉토리 공유 미지원): ${target}`);
   }
   await assertContainedRealpath(root.baseAbs, dirname(target));
 
-  const linkPath = join(root.dir, shareRel);
-  const linkParent = dirname(linkPath);
-  await fs.mkdir(linkParent, { recursive: true, mode: 0o700 });
-  const pst = await fs.lstat(linkParent);
+  const copyPath = join(root.dir, shareRel);
+  const copyParent = dirname(copyPath);
+  await fs.mkdir(copyParent, { recursive: true, mode: 0o700 });
+  const pst = await fs.lstat(copyParent);
   if (!pst.isDirectory() || pst.isSymbolicLink()) {
-    throw new Error(`allow-list 세션측 부모가 정상 디렉토리가 아닙니다: ${linkParent}`);
+    throw new Error(`allow-list 세션측 부모가 정상 디렉토리가 아닙니다: ${copyParent}`);
   }
-  await fs.symlink(target, linkPath);
+  // base 원본을 O_NOFOLLOW 로 읽어(마지막 컴포넌트 symlink swap 차단) 격리본으로 0600 atomic 복사.
+  // 부모 디렉토리 escape 는 위 assertContainedRealpath 가, fresh non-symlink 쓰기는 writeFileAtomic
+  // (O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와 동일 보안 모델. 부모 컴포넌트는
+  // realpath 검증이 point-in-time 이라 nested share 의 중간 디렉토리 TOCTOU 는 이론상 잔존하나,
+  // 단일 사용자 홈 위협 모델(공격자가 이미 base 원본 접근 가능)에서 권한 상승이 없어 수용한다.
+  // share 대상은 **UTF-8 텍스트 전제**(codex config.toml=TOML=UTF-8). 비-UTF-8 바이너리 config 를
+  // share 에 추가하면 utf8 round-trip 으로 손상될 수 있어 미지원 — 그런 대상은 share 에 넣지 않는다.
+  const handle = await fs.open(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  let content: string;
+  try {
+    content = await handle.readFile('utf8');
+  } finally {
+    await handle.close();
+  }
+  await writeFileAtomic(copyPath, content);
 }
 
 /**

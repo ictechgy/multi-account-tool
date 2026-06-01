@@ -152,8 +152,10 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
       { type: 'file', path: '~/.codex/auth.json', saveAs: 'auth.json' }
     ],
     // CODEX_HOME 으로 ~/.codex 전체 재배치 가능 (auth.json 포함). 세션 격리 지원.
-    // config.toml 은 secret-free read-mostly 설정(모델/MCP/feature flag 등)이라 세션에서 base 공유 —
-    // UX 보존. OAuth 토큰은 auth.json 에만 있으며 source 로 격리 복사된다 (issue #63-3).
+    // config.toml 은 secret-free read-mostly 설정(모델/MCP/feature flag 등)이라 세션 시작 시
+    // base 에서 **0600 복사**(copy-isolate, issue #72) — 시작 시점 설정 재현(UX)은 유지하되,
+    // 세션 내 `codex mcp add`/`plugin add` 가 config.toml 에 써도 base 가 오염되지 않는다(write-back
+    // 없음). OAuth 토큰은 auth.json 에만 있으며 source 로 격리 복사된다 (issue #63-3).
     session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex', share: ['config.toml'] }] }
   },
   {

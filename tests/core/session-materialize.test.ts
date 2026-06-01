@@ -7,6 +7,7 @@
  * writeFileAtomic(실제) 를 쓰므로 mock 영향 없음.
  */
 
+import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
@@ -192,41 +193,81 @@ describe('materializeSession — 빌트인 경로 (copy-isolate, share=[config.t
     expect(await fs.readFile(credPath, 'utf8')).toBe('TOKEN-A');
   });
 
-  it('config.toml 은 base 원본으로의 symlink 로 세션 디렉토리에 공유됨 (issue #63-3)', async () => {
-    // config.toml 이 share 에 있으므로 materializeSession 이 base 원본을 symlink 로 연결한다.
+  it('config.toml 은 base 원본의 0600 복사로 세션 디렉토리에 격리됨 (copy-isolate, #72)', async () => {
+    // config.toml 이 share 에 있으므로 materializeSession 이 base 원본을 복사한다(symlink 아님).
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
     await writeBaseFile('.codex/config.toml', 'model=gpt');
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
-    const linkPath = join(plan.roots[0].dir, 'config.toml');
-    const st = await fs.lstat(linkPath);
-    expect(st.isSymbolicLink()).toBe(true); // symlink 로 공유
-    expect(await fs.readFile(linkPath, 'utf8')).toBe('model=gpt'); // 내용은 base 원본
+    const copyPath = join(plan.roots[0].dir, 'config.toml');
+    const st = await fs.lstat(copyPath);
+    expect(st.isSymbolicLink()).toBe(false); // symlink 아님 — 복사본
+    expect(st.mode & 0o777).toBe(0o600); // 자격증명과 동일 0600
+    expect(await fs.readFile(copyPath, 'utf8')).toBe('model=gpt'); // 내용은 base 원본
   });
 
-  it('codex share=[config.toml] → 세션 디렉토리에 symlink 1개(config.toml), cred(auth.json)는 실파일', async () => {
+  it('세션 config.toml 복사본 수정은 base 로 write-back 되지 않음 (copy-isolate 핵심 보장, #72)', async () => {
+    // codex mcp add/plugin add 가 세션 안에서 config.toml 을 수정하는 상황을 모사: 세션 격리본을
+    // 직접 덮어쓴 뒤 base 원본이 무손상인지 확인한다. symlink 공유였다면 base 가 함께 바뀐다.
+    await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    const target = await writeBaseFile('.codex/config.toml', 'model=gpt');
+    const plan = planSession(findCliDef('codex')!, 'work', SID);
+    await materializeSession(plan);
+    const copyPath = join(plan.roots[0].dir, 'config.toml');
+    // 세션 안에서 config 수정(mcp 서버 추가 등) 모사.
+    await fs.writeFile(copyPath, 'model=gpt\n[mcp_servers.added]\ncommand = "x"\n');
+    // base 원본은 무손상 — write-back 없음 (symlink 였다면 함께 바뀜).
+    expect(await fs.readFile(target, 'utf8')).toBe('model=gpt');
+    // 격리본만 바뀜.
+    expect(await fs.readFile(copyPath, 'utf8')).toContain('[mcp_servers.added]');
+  });
+
+  it('recaptureSession 은 share(config.toml)를 재캡처하지 않음 — write-back 없음 (#72)', async () => {
+    // PR 의 두 번째 핵심 주장 가드: share 는 cred 가 아니라 종료 재캡처(write-back) 대상이 아니다.
+    // collectRecaptureItems 가 root.share 를 순회하도록 잘못 바뀌면 이 가드가 FAIL 한다(회귀 방어).
+    await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    const target = await writeBaseFile('.codex/config.toml', 'model=gpt');
+    const plan = planSession(findCliDef('codex')!, 'work', SID);
+    await materializeSession(plan);
+    // 세션 안에서 config 수정(codex mcp add 등) 모사.
+    await fs.writeFile(
+      join(plan.roots[0].dir, 'config.toml'),
+      'model=gpt\n[mcp_servers.x]\ncommand = "y"\n'
+    );
+    await recaptureSession(plan);
+    // config.toml 은 cred 가 아니므로 프로필로 재캡처되지 않는다 (share 미순회 가드).
+    expect(await readProfileFile('codex', 'work', 'config.toml')).toBeNull();
+    // base config.toml 도 무손상 (재캡처는 base 를 건드리지 않는다).
+    expect(await fs.readFile(target, 'utf8')).toBe('model=gpt');
+    // 대조군: 자격증명(auth.json)은 정상 재캡처된다.
+    expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('TOKEN-A');
+  });
+
+  it('codex share=[config.toml] → 세션 디렉토리에 복사본 config.toml(symlink 0개), cred(auth.json)도 실파일', async () => {
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
     await writeBaseFile('.codex/config.toml', 'model=gpt');
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
     const entries = await fs.readdir(plan.roots[0].dir, { withFileTypes: true });
     const symlinks = entries.filter((e) => e.isSymbolicLink()).map((e) => e.name);
-    expect(symlinks).toEqual(['config.toml']); // symlink 는 config.toml 1개
+    expect(symlinks).toEqual([]); // copy-isolate — symlink 0개
+    const configSt = await fs.lstat(join(plan.roots[0].dir, 'config.toml'));
+    expect(configSt.isSymbolicLink()).toBe(false); // config.toml 은 복사본(실파일)
     const authSt = await fs.lstat(join(plan.roots[0].dir, 'auth.json'));
-    expect(authSt.isSymbolicLink()).toBe(false); // 자격증명은 실파일
+    expect(authSt.isSymbolicLink()).toBe(false); // 자격증명도 실파일
   });
 
-  it('base 에 config.toml 부재 시 — throw 없이 materialize 성공, config.toml 링크 미생성 (optional skip)', async () => {
+  it('base 에 config.toml 부재 시 — throw 없이 materialize 성공, config.toml 복사본 미생성 (optional skip)', async () => {
     // config.toml 은 read-mostly 설정이므로 부재해도 세션 진행에 지장 없다.
-    // materializeShareLink 는 ENOENT 를 skip(return)하고 세션을 정상 완료해야 한다.
+    // materializeShareCopy 는 ENOENT 를 skip(return)하고 세션을 정상 완료해야 한다.
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
     // config.toml 미생성 — base 에 없음
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     // throw 없이 완료 (optional share skip)
     await expect(materializeSession(plan)).resolves.toBeUndefined();
-    // config.toml 링크 미생성
-    const linkPath = join(plan.roots[0].dir, 'config.toml');
-    await expect(fs.access(linkPath)).rejects.toThrow();
+    // config.toml 복사본 미생성
+    const copyPath = join(plan.roots[0].dir, 'config.toml');
+    await expect(fs.access(copyPath)).rejects.toThrow();
     // creds 격리본(auth.json)은 정상 생성됨
     expect(await fs.readFile(join(plan.roots[0].dir, 'auth.json'), 'utf8')).toBe('TOKEN-A');
   });
@@ -260,14 +301,17 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['config.toml'] }] }
   };
 
-  it('allow-list 항목 = base 원본을 가리키는 symlink', async () => {
+  it('allow-list 항목 = base 원본의 0600 복사 (symlink 아님, base 무손상)', async () => {
     await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
     const target = await writeBaseFile('.fake/config.toml', 'shared-config');
     const plan = planSession(fakeDef, 'work', SID);
     await materializeSession(plan);
-    const linkPath = join(plan.roots[0].dir, 'config.toml');
-    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
-    expect(await fs.realpath(linkPath)).toBe(await fs.realpath(target));
+    const copyPath = join(plan.roots[0].dir, 'config.toml');
+    const st = await fs.lstat(copyPath);
+    expect(st.isSymbolicLink()).toBe(false); // 복사본 — symlink 아님
+    expect(st.mode & 0o777).toBe(0o600);
+    expect(await fs.readFile(copyPath, 'utf8')).toBe('shared-config'); // 내용=base 원본
+    expect(await fs.realpath(copyPath)).not.toBe(await fs.realpath(target)); // 별도 파일(공유 아님)
   });
 
   it('allow-list 대상이 base 에서 symlink 면 거부 + 세션 디렉토리 미잔류', async () => {
@@ -285,15 +329,15 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     // config.toml 미생성
     const plan = planSession(fakeDef, 'work', SID);
     await expect(materializeSession(plan)).resolves.toBeUndefined();
-    // config.toml 링크 미생성
-    const linkPath = join(plan.roots[0].dir, 'config.toml');
-    await expect(fs.access(linkPath)).rejects.toThrow();
+    // config.toml 복사본 미생성
+    const copyPath = join(plan.roots[0].dir, 'config.toml');
+    await expect(fs.access(copyPath)).rejects.toThrow();
     // creds 격리본(auth.json — cred.rel) 은 정상 생성됨
     // fakeDef source path=~/.fake/auth.json → cred.rel='auth.json', absInSession=dir/auth.json
     expect(await fs.readFile(join(plan.roots[0].dir, 'auth.json'), 'utf8')).toBe('TOK');
   });
 
-  it('정상 nested share → 세션 하위 디렉토리에 symlink 생성', async () => {
+  it('정상 nested share → 세션 하위 디렉토리에 복사본 생성', async () => {
     const nestedDef: CliDef = {
       id: 'fakecli', name: 'Fake',
       sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
@@ -303,9 +347,9 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     await writeBaseFile('.fake/sub/config.toml', 'nested-shared');
     const plan = planSession(nestedDef, 'work', SID);
     await materializeSession(plan);
-    const linkPath = join(plan.roots[0].dir, 'sub', 'config.toml');
-    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
-    expect(await fs.readFile(linkPath, 'utf8')).toBe('nested-shared');
+    const copyPath = join(plan.roots[0].dir, 'sub', 'config.toml');
+    expect((await fs.lstat(copyPath)).isSymbolicLink()).toBe(false); // 복사본 — symlink 아님
+    expect(await fs.readFile(copyPath, 'utf8')).toBe('nested-shared');
   });
 
   it('base 측 부모가 symlink 로 base 밖을 가리키면 거부 (realpath 봉쇄, §4.2)', async () => {
@@ -337,6 +381,17 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     const plan = planSession(dirDef, 'work', SID);
     await expect(materializeSession(plan)).rejects.toThrow();
     await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+  });
+
+  it('allow-list 대상이 FIFO(특수파일)면 거부 (isFile 가드 — open 블록 차단)', async () => {
+    // isFile() 가드가 디렉토리뿐 아니라 FIFO/소켓 등 비-일반 파일도 거부하는지(open 전 차단)
+    // 명시 회귀 가드. FIFO 를 O_RDONLY 로 열면 writer 부재 시 블록될 수 있어, isFile() 거부가 중요.
+    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    await fs.mkdir(join(tmp.home, '.fake'), { recursive: true });
+    execFileSync('mkfifo', [join(tmp.home, '.fake', 'config.toml')]);
+    const plan = planSession(fakeDef, 'work', SID);
+    await expect(materializeSession(plan)).rejects.toThrow(/일반 파일이 아닙니다/);
+    await expect(fs.access(sessionDir(SID))).rejects.toThrow(); // 세션 디렉토리 미잔류
   });
 });
 
@@ -532,7 +587,7 @@ describe('removeSessionDir', () => {
     await expect(removeSessionDir('../escape')).rejects.toThrow();
   });
 
-  it('정상 id → 디렉토리 삭제, symlink 대상 base 무손상', async () => {
+  it('정상 id → 디렉토리 삭제, 복사 원본 base 무손상 (copy-isolate)', async () => {
     await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
     const target = await writeBaseFile('.fake/config.toml', 'shared');
     const def: CliDef = {
@@ -545,7 +600,7 @@ describe('removeSessionDir', () => {
     await materializeSession(plan);
     await removeSessionDir(SID);
     await expect(fs.access(sessionDir(SID))).rejects.toThrow();
-    // symlink 가 가리키던 base 원본은 남아있음
+    // 복사 원본 base 는 남아있음 (격리본만 삭제 — symlink 가 아니라 별도 파일).
     expect(await fs.readFile(target, 'utf8')).toBe('shared');
   });
 });
