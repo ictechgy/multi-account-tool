@@ -231,6 +231,28 @@ describe('lockfile.acquireCliLock', () => {
     }
   });
 
+  it('(6b) handleConflict default-콜백 회귀 — live holder 면 LockHeldError throw (acquireCliLock 경유)', async () => {
+    // BLOCKING-1: handleConflict 에 onLiveHolder 옵션 인자를 추가하는 파라미터화가 exec 동작을
+    // 한 바이트도 바꾸지 않음을 가드. exec 호출부(acquireCliLock)는 콜백을 넘기지 않아 default
+    // (= LockHeldError throw) 로 동작해야 한다. 살아있는 현재 프로세스 pid 의 info.json 을 미리
+    // 심어, default 콜백 경로가 기존과 동일하게 throw 하는지 확인 (probeHolder live 분기).
+    const lockDir = cliLockPath('codex');
+    await fs.mkdir(lockDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      join(lockDir, 'info.json'),
+      JSON.stringify({
+        pid: process.pid, // 살아있는 holder
+        startedAt: new Date().toISOString(),
+        profile: 'live-work',
+        token: 'live-token'
+      })
+    );
+    await expect(acquireCliLock('codex', 'new')).rejects.toThrowError(LockHeldError);
+    // live holder 의 info.json 은 reclaim 되지 않고 보존돼야 (default 콜백이 throw 했으므로).
+    const stillThere = JSON.parse(await fs.readFile(join(lockDir, 'info.json'), 'utf8'));
+    expect(stillThere.token).toBe('live-token');
+  });
+
   it('단일 프로세스 내 연속 acquire 는 정확히 하나만 성공한다 (cross-process race 는 별도 시나리오)', async () => {
     // single-process 한계 명시: V8 single-thread microtask 큐 특성상 사실상 직렬이라
     // OS-level mkdir race 자체는 검증하지 못한다. 다만 "두 번째 acquire 가 LockHeldError" 라는
