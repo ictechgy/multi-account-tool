@@ -1032,14 +1032,14 @@ export async function stopSession(id: string): Promise<void> {
  *  (c) 그 외 — owner/child 중 'unknown'(확정 불가)이 하나라도 끼면 **UNKNOWN_TTL_MS(24h)** 기반
  *      bounded 회수, 둘 다 'dead-or-reused' 면 **ORPHAN_TTL_MS(1h)** 기반 회수.
  *
- * 소유 mat × 자식 신원 결정 매트릭스 (행=owner, 열=child; 값=적용 TTL 또는 보존):
+ * 소유 mat × 자식 신원 결정 매트릭스 (행=mat 신원, 열=child 신원; 값=적용 TTL 또는 보존):
  * ```
- *                child:owner   child:unknown        child:dead-or-reused
- *  owner         보존(a/b)      보존(a)              보존(a)
- *  unknown       보존(b)        24h(c)               24h(c)
- *  dead-or-reused 보존(b)       24h(c)               1h(c)
+ *  mat \ child:    owner       unknown      dead-or-reused
+ *  owner           보존(a)     보존(a)      보존(a)
+ *  unknown         보존(b)     24h(c)       24h(c)
+ *  dead-or-reused  보존(b)     24h(c)       1h(c)
  * ```
- * (owner 행/열은 (a)/(b) 로 TTL 평가 전에 early-continue 되어 절대 회수되지 않는다.)
+ * (mat='owner' 행은 (a), child='owner' 열은 (b) 로 TTL 평가 전에 early-continue → 절대 회수 안 함.)
  *
  * 핵심 불변식: **확실히 살아있는(owner) 부모나 자식이 있으면 절대 회수하지 않는다.** unknown 은
  * 무한 보존하지 않고 충분히 긴 TTL(24h)로 bounded 회수해, ps 영구 불능 환경의 orphan 무한 잔존을
@@ -1073,9 +1073,10 @@ export async function reapOrphans(): Promise<string[]> {
 /**
  * startedAt 과 세션 디렉토리 mtime 이 둘 다 ttl 초과인지 — 죽은 세션 식별 안정성 교차검증 (M-B).
  *
- * 파라미터는 의존하는 값만 받는다(`meta.startedAt` + `id`) — 전체 `SessionMeta` 가 아니라
- * 실제 사용하는 `startedAt` 만 명시해 계약을 좁혔다 (#71 follow-up, cosmetic). 회수 판정이
- * pid/childPid 등 메타의 다른 필드와 무관함을 시그니처로 드러낸다.
+ * 파라미터는 의존하는 값만 받는다(`startedAt` + `id`) — 전체 `SessionMeta` 가 아니라 실제
+ * 사용하는 `startedAt` 만 명시해 계약을 좁혔다 (#71 follow-up, cosmetic). 회수 판정이
+ * pid/childPid 등 메타의 다른 필드와 무관함을 시그니처로 드러낸다. `id` 는 세션 디렉토리
+ * mtime 교차검증(M-B)에만 쓰인다.
  */
 async function isReapableByTtl(
   id: string,

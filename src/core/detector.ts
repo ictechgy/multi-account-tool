@@ -9,7 +9,7 @@
  * 를 반환한다. 즉 detector 는 그 source 를 **"부재(missing)"로 집계**한다 — keyring 에 실제
  * 자격증명이 있어도 CLI(secret-tool)가 없으면 감지에서 빠진다. 결과적으로 첫 실행 import 는
  * 그 keyring-backed cred 를 **제외**하고(부분/무 자격증명으로 분류), wrong-account 위험은
- * `osKeyringExists` 의 강한 stderr 경고(warnSecretToolMissing)가 안내한다. ENOENT 아닌 spawn
+ * 강한 stderr 경고(`warnSecretToolMissing` — backup/exists 공유)가 안내한다. ENOENT 아닌 spawn
  * 실패(EACCES 등)·daemon-down 은 osKeyringExists 가 throw 하므로 여기서 "부재"로 집계되지 않고
  * 에러로 surface 된다 (fail-closed).
  */
