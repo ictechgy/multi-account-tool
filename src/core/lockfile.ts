@@ -396,10 +396,17 @@ export async function acquireRecaptureLock(
   cliId: string,
   profileName: string
 ): Promise<(() => Promise<void>) | null> {
-  const lockDir = recaptureLockPath(cliId, profileName);
-  await fs.mkdir(dirname(lockDir), { recursive: true, mode: 0o700 });
-  const body = makeRecaptureBody(profileName);
-  return waitLoop(lockDir, body);
+  try {
+    const lockDir = recaptureLockPath(cliId, profileName);
+    await fs.mkdir(dirname(lockDir), { recursive: true, mode: 0o700 });
+    const body = makeRecaptureBody(profileName);
+    return await waitLoop(lockDir, body);
+  } catch {
+    // best-effort degrade: 경로 검증·mkdir 권한오류(EACCES/EPERM/ENOTDIR)·reclaim 실패 등
+    // 어떤 획득 오류든 null 반환 → recaptureSession 이 lock-free 2-phase commit 으로 진행(JSDoc 계약).
+    // 세션 종료를 막지 않는다.
+    return null;
+  }
 }
 
 /** 재캡처 lock 의 최소 LockBody — execMode/previousActive/affectsCliIds 미설정. */

@@ -880,6 +880,24 @@ describe('lockfile.acquireRecaptureLock — 프로필 단위 재캡처 락 (#62)
     expect(info.affectsCliIds).toBeUndefined();
     await release!();
   });
+
+  it('(8) 획득 오류(mkdir ENOTDIR) 시 throw 하지 않고 null 반환 — best-effort degrade', async () => {
+    // 결정적 재현: recaptureLockPath 의 부모 경로(locks/recapture/<cli>)에 해당하는 위치에
+    // 파일을 미리 생성해 fs.mkdir(dirname(lockDir), {recursive:true}) 가 ENOTDIR 로 실패하게 한다.
+    // recaptureLockPath('codex','work') = locksDir()/recapture/codex/work.lock
+    // dirname                           = locksDir()/recapture/codex
+    // 따라서 locksDir()/recapture/codex 를 파일로 먼저 만들면 mkdir 가 ENOTDIR throw.
+    const lockDir = recaptureLockPath('codex', 'work');
+    const parentDir = dirname(lockDir); // locks/recapture/codex
+    // 부모의 부모(locks/recapture)까지는 디렉토리로 생성.
+    await fs.mkdir(dirname(parentDir), { recursive: true, mode: 0o700 });
+    // 부모 경로(locks/recapture/codex)를 파일로 생성 → mkdir(parentDir) 가 ENOTDIR 실패.
+    await fs.writeFile(parentDir, 'blocker');
+
+    // 수정 전: reject(ENOTDIR) — 수정 후: null 을 resolve (throw 하지 않음).
+    const result = await acquireRecaptureLock('codex', 'work');
+    expect(result).toBeNull(); // best-effort degrade: null 반환, throw 없음
+  });
 });
 
 /**
