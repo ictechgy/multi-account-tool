@@ -31,6 +31,9 @@ const mockSpawn = vi.mocked(spawn);
 
 afterEach(() => {
   mockSpawn.mockReset();
+  // spyOn(process.stderr,...) 등 spy/mock 과 stubGlobal 누출을 테스트 간 일괄 정리한다.
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 /** stdin 기록용 fake (secret 이 stdin 으로 전달됐는지 검증). */
@@ -160,11 +163,19 @@ describe('os-keyring — readSource (search --all)', () => {
     await expect(readSource(src)).rejects.toThrow(/keyring daemon/);
   });
 
-  it('spawn error (미설치, code=-1) → throw (libsecret-tools 설치 안내, fail-closed)', async () => {
-    // primitive 는 부재를 추정하지 않고 fail-closed throw 한다. Goose file-backend 사용자용
-    // skip 은 source 정의(cli-defs.ts gooseUsesFileBackend, GOOSE_DISABLE_KEYRING)에서 처리 (#59).
+  it('spawn error (미설치, code=-1) → null (soft-fail, throw 안 함) + 강한 경고 (#59)', async () => {
+    // ENOENT(tooling 만 깨짐)는 throw 하지 않고 null 반환 → switcher 가 다음 source
+    // (secrets.yaml)로 fallback. wrong-account 위험은 강한 stderr 경고로 완화한다 (#59).
+    // 경고는 모듈 레벨 1회 가드라, 파일 내 ENOENT 를 처음 트리거하는 본 테스트에서 내용을 검증한다.
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     mockSpawn.mockReturnValueOnce(fakeProc({ error: new Error('spawn ENOENT') }));
-    await expect(readSource(src)).rejects.toThrow(/libsecret-tools/);
+    expect(await readSource(src)).toBeNull();
+    // 강한 경고가 libsecret-tools 설치 / GOOSE_DISABLE_KEYRING / wrong-account 안내를 포함하는지.
+    const warned = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(warned).toMatch(/libsecret-tools/);
+    expect(warned).toMatch(/GOOSE_DISABLE_KEYRING/);
+    expect(warned).toMatch(/wrong-account/);
+    stderrSpy.mockRestore();
   });
 
   it('N=1 인데 secret 추출 실패 → 구조적 throw, raw output(secret 후보) 미포함', async () => {
@@ -306,6 +317,20 @@ describe('os-keyring — sourceExists / 입력 검증', () => {
     const serviceOnly: OsKeyringSource = { type: 'os-keyring', service: 'mat-svc', saveAs: 'c.json' };
     mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, ...searchN2() }));
     await expect(sourceExists(serviceOnly)).rejects.toBeInstanceOf(OsKeyringAccountMissingError);
+  });
+
+  it('spawn error (미설치, code=-1) → false (soft-fail, throw 안 함) (#59)', async () => {
+    // exists 도 ENOENT 면 부재로 간주해 false 반환 (throw 금지) → yaml fallback 차단 안 함.
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: new Error('spawn ENOENT') }));
+    expect(await sourceExists(src)).toBe(false);
+    stderrSpy.mockRestore();
+  });
+
+  it('exit≠0 (daemon-down) → throw (회귀 0 — infra 문제는 fail-closed 유지) (#59)', async () => {
+    // 미설치(code=-1)와 달리 daemon-down(code>0)은 기존대로 throw — tooling vs infra 구분.
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 1, stderr: 'Cannot connect to D-Bus' }));
+    await expect(sourceExists(src)).rejects.toThrow(/keyring daemon/);
   });
 
   it('빈 문자열 account → throw (service-only fallthrough 차단)', async () => {
