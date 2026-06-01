@@ -114,6 +114,20 @@ export function cliLockPath(cliId: string): string {
   return join(locksDir(), `${safeCli}.lock`);
 }
 
+/**
+ * 프로필 단위 재캡처 advisory 락 디렉토리 경로 (`mat session` 종료 재캡처 직렬화용, issue #62).
+ *
+ * cliId 와 profileName 을 **각각 검증한 뒤 별도 세그먼트**로 join 한다 — `'a-b'`/`'c'` 와
+ * `'a'`/`'b-c'` 가 단일 문자열로 합쳐질 때 발생하는 경로 충돌을 중첩 디렉토리로 차단한다.
+ * `mat exec` 의 `locks/<cli>.lock` 과는 **별도 namespace**(`locks/recapture/...`)라 exec 의
+ * cli-lock 과 절대 같은 경로를 만들지 않아 세션 동시성을 깨지 않는다 (LockHeldError 충돌 회피).
+ */
+export function recaptureLockPath(cliId: string, profileName: string): string {
+  const safeCli = validateCliId(cliId);
+  const safeProfile = validateProfileName(profileName);
+  return join(locksDir(), 'recapture', safeCli, `${safeProfile}.lock`);
+}
+
 /** 선행 `~/` 를 home 으로 확장. 그 외 경로는 그대로 반환. */
 export function expandTilde(p: string): string {
   if (p === '~') return homedir();
