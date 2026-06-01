@@ -576,6 +576,11 @@ type OwnerStatus = 'owner' | 'dead-or-reused' | 'unknown';
  *  - `dead-or-reused`: pid 죽음, 또는 서명이 기록·조회됐는데 불일치(재사용).
  *  - `owner`: pid 생존 + (서명 미기록 옛 메타 → liveness-only) 또는 (서명 일치).
  *  - `unknown`: pid 생존 + 서명 기록됐으나 현재값 조회 실패(ps 실패/타임아웃) → 확정 불가.
+ *
+ * **알려진 잔여 한계(부모·자식 공통)**: 서명은 `processStartSignature` 의 `ps -o lstart`(1초
+ * granularity)라, pid 가 죽고 **같은 초 안에** 재할당된 무관 프로세스는 시작 서명까지 동일해
+ * 'owner' 로 오판될 수 있다(미탐). 동일 OS 한계로, lstart 보다 정밀한 신원(예: PID 네임스페이스/
+ * 시작 tick)이 없는 한 해소 불가 — 영향은 극히 좁은 타이밍 윈도우. 상세는 processStartSignature 참조.
  */
 async function classifyPid(pid: number, pidStart: string | undefined): Promise<OwnerStatus> {
   if (!isProcessAlive(pid)) return 'dead-or-reused';
@@ -1027,6 +1032,15 @@ export async function stopSession(id: string): Promise<void> {
  *  (c) 그 외 — owner/child 중 'unknown'(확정 불가)이 하나라도 끼면 **UNKNOWN_TTL_MS(24h)** 기반
  *      bounded 회수, 둘 다 'dead-or-reused' 면 **ORPHAN_TTL_MS(1h)** 기반 회수.
  *
+ * 소유 mat × 자식 신원 결정 매트릭스 (행=mat 신원, 열=child 신원; 값=적용 TTL 또는 보존):
+ * ```
+ *  mat \ child:    owner       unknown      dead-or-reused
+ *  owner           보존(a)     보존(a)      보존(a)
+ *  unknown         보존(b)     24h(c)       24h(c)
+ *  dead-or-reused  보존(b)     24h(c)       1h(c)
+ * ```
+ * (mat='owner' 행은 (a), child='owner' 열은 (b) 로 TTL 평가 전에 early-continue → 절대 회수 안 함.)
+ *
  * 핵심 불변식: **확실히 살아있는(owner) 부모나 자식이 있으면 절대 회수하지 않는다.** unknown 은
  * 무한 보존하지 않고 충분히 긴 TTL(24h)로 bounded 회수해, ps 영구 불능 환경의 orphan 무한 잔존을
  * 막되 라이브 child 오삭제는 긴 TTL 로 방지한다. pid 가 살아있어도 **SIGTERM 은 보내지 않고**
@@ -1046,7 +1060,7 @@ export async function reapOrphans(): Promise<string[]> {
     // (c) owner/child 중 unknown 이 하나라도 있으면 24h, 둘 다 dead-or-reused 면 1h.
     const isUnknown = ownerStatus === 'unknown' || childStatus === 'unknown';
     const ttl = isUnknown ? getUnknownTtlMs() : ORPHAN_TTL_MS;
-    if (!(await isReapableByTtl(id, meta, now, ttl))) continue; // startedAt·mtime 둘 다 초과만 회수
+    if (!(await isReapableByTtl(id, meta.startedAt, now, ttl))) continue; // startedAt·mtime 둘 다 초과만 회수
     await removeSessionDir(id).catch(() => {
       /* best-effort */
     });
@@ -1056,14 +1070,21 @@ export async function reapOrphans(): Promise<string[]> {
   return reaped;
 }
 
-/** startedAt 과 세션 디렉토리 mtime 이 둘 다 ttl 초과인지 — 죽은 세션 식별 안정성 교차검증 (M-B). */
+/**
+ * startedAt 과 세션 디렉토리 mtime 이 둘 다 ttl 초과인지 — 죽은 세션 식별 안정성 교차검증 (M-B).
+ *
+ * 파라미터는 의존하는 값만 받는다(`startedAt` + `id`) — 전체 `SessionMeta` 가 아니라 실제
+ * 사용하는 `startedAt` 만 명시해 계약을 좁혔다 (#71 follow-up, cosmetic). 회수 판정이
+ * pid/childPid 등 메타의 다른 필드와 무관함을 시그니처로 드러낸다. `id` 는 세션 디렉토리
+ * mtime 교차검증(M-B)에만 쓰인다.
+ */
 async function isReapableByTtl(
   id: string,
-  meta: SessionMeta,
+  startedAt: string,
   now: number,
   ttl: number
 ): Promise<boolean> {
-  const startedMs = Date.parse(meta.startedAt);
+  const startedMs = Date.parse(startedAt);
   if (Number.isFinite(startedMs) && now - startedMs <= ttl) return false; // TTL 내 보존
   // 세션 디렉토리 자체 mtime 교차검증 (격리본 mtime 아님 — 죽은 세션 식별 안정성, M-B).
   let dirMtime = 0;
