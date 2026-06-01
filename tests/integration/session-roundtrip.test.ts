@@ -21,7 +21,9 @@ import { runSession } from '../../src/core/session.js';
 import { sessionsDir } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
-const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-cli.mjs');
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const FAKE_CLI = join(FIXTURES, 'fake-cli.mjs');
+const FAKE_CLI_MULTICRED = join(FIXTURES, 'fake-cli-multicred.mjs');
 
 let tmp: TmpHome;
 let originalShell: string | undefined;
@@ -85,5 +87,52 @@ describe('session 통합 — 라운드트립 + 동시 격리', () => {
     expect(await fs.readFile(join(baseDir, 'config.toml'), 'utf8')).toBe('model=gpt');
     // 프로필만 재캡처됨.
     expect(await readProfileFile('codex', 'work', 'auth.json')).toMatch(/^ORIG\+ROT:/);
+  });
+});
+
+/**
+ * issue #62: 동시 같은-프로필 multi-cred(Qwen) 재캡처가 프로필 단위 락으로 직렬화돼
+ * cred 별 winner 분기 split 을 제거하는지 검증 (BLOCKING-2 / 시나리오 2③ 불변식 가드).
+ *
+ * Qwen 은 단일 QWEN_HOME root 에 settings.json + .env 2 cred 를 가진다. 락 없이 두 세션이
+ * 동시에 commit 하면 cred 단위 interleave 로 cred-A 는 S1 winner·cred-B 는 S2 winner 인
+ * 어느 세션에도 속하지 않는 split 세대가 가능하다(compare-and-restore 는 cred 별 독립이라
+ * 흡수 못 함). 락이 backup-read→commit→rollback 전체를 직렬화하면 최종 두 cred 가 **단일
+ * 일관 세대**(같은 세션 ROT 마커)가 된다.
+ */
+describe('session 통합 — 동시 같은-프로필 multi-cred 직렬화 (Qwen, #62)', () => {
+  beforeEach(async () => {
+    await fs.chmod(FAKE_CLI_MULTICRED, 0o755); // git +x 미보존 환경 대비
+    process.env.SHELL = FAKE_CLI_MULTICRED; // multi-cred fake-cli 로 교체
+  });
+  // afterEach 는 상위 describe 밖 전역 afterEach 가 SHELL 복원 + tmp cleanup 수행.
+
+  it('(15) 동시 2세션 같은 프로필 → 두 cred 가 단일 일관 세대 (cred 별 winner 분기 0)', async () => {
+    await writeProfileFile('qwen', 'work', 'qwen-settings.json', 'SETTINGS');
+    await writeProfileFile('qwen', 'work', 'qwen.env', 'ENV');
+
+    // 같은 cli·같은 프로필을 동시에 2세션 실행 — 락이 재캡처 전체를 직렬화해야 한다.
+    await Promise.all([
+      runSession({ cliId: 'qwen', profileName: 'work' }),
+      runSession({ cliId: 'qwen', profileName: 'work' })
+    ]);
+
+    const settings = await readProfileFile('qwen', 'work', 'qwen-settings.json');
+    const env = await readProfileFile('qwen', 'work', 'qwen.env');
+    expect(settings).not.toBeNull();
+    expect(env).not.toBeNull();
+
+    // 각 cred 의 **마지막 ROT 마커 세션 id** 를 추출 — 핵심 불변식: 두 cred 가 동일 세션.
+    const lastMarker = (s: string): string => {
+      const all = [...s.matchAll(/\+ROT:(qwen-work-[0-9a-f]{8})/g)];
+      return all.length ? all[all.length - 1][1] : '';
+    };
+    const settingsWinner = lastMarker(settings!);
+    const envWinner = lastMarker(env!);
+    expect(settingsWinner).toMatch(/^qwen-work-[0-9a-f]{8}$/);
+    // cred 별 winner 분기 0 — 두 cred 의 최종 세대가 같은 세션이어야 (split 없음).
+    expect(envWinner).toBe(settingsWinner);
+    // 모든 세션 디렉토리 정리됨.
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
   });
 });
