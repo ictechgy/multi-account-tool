@@ -27,10 +27,16 @@ afterEach(async () => {
   await tmp.cleanup();
 });
 
-/** sessionsDir 에 가짜 세션 + session.json(pidStart 포함) 직접 생성. */
+/** sessionsDir 에 가짜 세션 + session.json(pidStart/childPid 포함) 직접 생성. */
 async function makeSession(
   id: string,
-  opts: { pid: number; startedAt: string; pidStart?: string }
+  opts: {
+    pid: number;
+    startedAt: string;
+    pidStart?: string;
+    childPid?: number;
+    childPidStart?: string;
+  }
 ): Promise<string> {
   const dir = sessionDir(id);
   await fs.mkdir(dir, { recursive: true });
@@ -42,6 +48,8 @@ async function makeSession(
       profile: 'work',
       pid: opts.pid,
       pidStart: opts.pidStart,
+      childPid: opts.childPid,
+      childPidStart: opts.childPidStart,
       startedAt: opts.startedAt,
       roots: []
     })
@@ -146,5 +154,56 @@ describe('reapOrphans — pid 재사용 방어 (H2)', () => {
     const reaped = await reapOrphans();
     expect(reaped).not.toContain('codex-work-sig00004');
     await expect(fs.access(dir)).resolves.toBeUndefined();
+  });
+});
+
+const DEAD_PID = 2147483646; // 사실상 존재하지 않는 pid → isProcessAlive false
+
+describe('reapOrphans / stopSession — 자식 subshell 생존 추적 (#63-2)', () => {
+  it('소유 mat 죽음(서명 불일치)이어도 자식 서명 일치(생존) → reapOrphans 보존', async () => {
+    const childSig = await processStartSignature(process.pid);
+    expect(childSig).toBeTruthy(); // ps 동작 전제
+    const old = new Date(Date.now() - 2 * HOUR).toISOString();
+    const dir = await makeSession('codex-work-csig0001', {
+      pid: process.pid,
+      pidStart: 'v1:Mon Jan  1 00:00:00 2000', // 소유 mat = dead-or-reused(값 불일치)
+      childPid: process.pid,
+      childPidStart: childSig!, // 자식 = 서명 일치(생존)
+      startedAt: old
+    });
+    const oldTime = new Date(Date.now() - 2 * HOUR);
+    await fs.utimes(dir, oldTime, oldTime);
+    const reaped = await reapOrphans();
+    expect(reaped).not.toContain('codex-work-csig0001'); // 자식 생존 → 라이브 보존
+    await expect(fs.access(dir)).resolves.toBeUndefined();
+  });
+
+  it('소유 mat·자식 모두 죽음(서명 불일치) + TTL 초과 → reapOrphans 회수', async () => {
+    const old = new Date(Date.now() - 2 * HOUR).toISOString();
+    const dir = await makeSession('codex-work-csig0002', {
+      pid: DEAD_PID, // 소유 mat 죽음
+      childPid: DEAD_PID, // 자식도 죽음 → dead-or-reused
+      startedAt: old
+    });
+    const oldTime = new Date(Date.now() - 2 * HOUR);
+    await fs.utimes(dir, oldTime, oldTime);
+    const reaped = await reapOrphans();
+    expect(reaped).toContain('codex-work-csig0002');
+    await expect(fs.access(dir)).rejects.toThrow();
+  });
+
+  it('stopSession: 소유 mat 죽음이어도 자식 서명 일치(생존) → 보존', async () => {
+    const childSig = await processStartSignature(process.pid);
+    expect(childSig).toBeTruthy();
+    const dir = await makeSession('codex-work-csig0003', {
+      pid: DEAD_PID, // 소유 mat 죽음 → dead-or-reused
+      childPid: process.pid,
+      childPidStart: childSig!, // 자식 생존
+      startedAt: new Date().toISOString()
+    });
+    const kill = spyKill();
+    await stopSession('codex-work-csig0003');
+    expect(kill.mock.calls.filter(([, s]) => s !== 0)).toEqual([]); // 종료 신호 0회
+    await expect(fs.access(dir)).resolves.toBeUndefined(); // 자식 생존 → 보존
   });
 });

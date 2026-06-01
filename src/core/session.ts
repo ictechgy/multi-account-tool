@@ -219,11 +219,16 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
  */
 async function materializeShareLink(root: MaterializedRoot, shareRel: string): Promise<void> {
   const target = join(root.baseAbs, shareRel);
+  // share 대상이 base에 없으면 optional 공유로 간주해 건너뛴다(config.toml 등 read-mostly
+  // 설정은 부재해도 세션 진행 무관, 자격증명 아님). ENOENT 이외의 예기치 못한 오류(권한 등)는
+  // 그대로 surface한다(CLAUDE.md 에러 무시 금지 원칙). 아래 symlink/비-파일/escape 보안 검증은
+  // 대상이 존재할 때 fail-closed 유지.
   let tst;
   try {
     tst = await fs.lstat(target);
-  } catch {
-    throw new Error(`allow-list 대상이 base 에 없습니다: ${target}`);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
   }
   if (tst.isSymbolicLink()) {
     throw new Error(`allow-list 대상이 symlink 입니다 (공유 거부): ${target}`);
@@ -434,8 +439,32 @@ const SESSION_FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'
 /** orphan 회수 TTL (ms). pid 죽음 AND startedAt 이 이보다 오래됐을 때만 회수 (M2). */
 const ORPHAN_TTL_MS = 60 * 60 * 1000; // 1h
 
+/**
+ * unknown(소유 미확정) 세션 회수 TTL (ms, default 24h). ORPHAN_TTL_MS(1h)보다 충분히 길어
+ * 일시적 ps 실패 회복 시간을 보장한다 — pid 는 살아있으나 서명 조회 실패로 소유 확정 불가한
+ * 세션을, ps 영구 불능 환경에서도 결국 회수해 orphan 디렉토리 무한 잔존을 막는다 (#63-1).
+ */
+const UNKNOWN_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+/** MAT_UNKNOWN_SESSION_TTL_MS override 의 최소값 (ms, 1h). 그 미만은 거부 — 일시적 ps 실패 회복 보장. */
+const UNKNOWN_TTL_MIN_MS = 3_600_000; // 1h
+
 /** processStartSignature ps 호출 timeout (ms) — 행 방지. */
 const PS_SIGNATURE_TIMEOUT_MS = 2_000;
+
+/**
+ * unknown 세션 회수 TTL (ms) — `MAT_UNKNOWN_SESSION_TTL_MS` 로 override 가능. **호출 시점 평가**
+ * (getRecaptureTimeoutMs 동형) — test/daemon 이 env 를 동적으로 바꿔도 다음 호출부터 반영된다.
+ *
+ * **최소값 가드 1h**: override 가 1h 미만이거나 파싱 불가(음수/NaN/0)면 default(24h)로 폴백한다.
+ * 너무 짧은 TTL 은 일시적 ps 실패 회복 시간을 없애 살아있는 unknown 세션을 조기 회수할 위험이 있다.
+ */
+function getUnknownTtlMs(): number {
+  const raw = process.env.MAT_UNKNOWN_SESSION_TTL_MS;
+  if (!raw) return UNKNOWN_TTL_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= UNKNOWN_TTL_MIN_MS ? n : UNKNOWN_TTL_MS;
+}
 
 /**
  * pidStart 서명 형식 버전. 서명 산출 방식(ps 포맷/필드)이 바뀌면 bump 한다. 기록된 서명이 현재
@@ -493,15 +522,37 @@ export async function processStartSignature(pid: number): Promise<string | null>
  */
 type OwnerStatus = 'owner' | 'dead-or-reused' | 'unknown';
 
-async function classifyOwner(meta: SessionMeta): Promise<OwnerStatus> {
-  if (!isProcessAlive(meta.pid)) return 'dead-or-reused';
-  if (!meta.pidStart) return 'owner'; // 옛 메타(서명 미기록) — liveness-only
+/**
+ * pid + 시작 서명으로 프로세스 신원을 판정하는 tri-state 코어. 소유 mat(classifyOwner)과
+ * 자식 subshell(classifyChildOwner)이 동일 로직을 공유하게 추출했다 (#63-2).
+ *
+ *  - `dead-or-reused`: pid 죽음, 또는 서명이 기록·조회됐는데 불일치(재사용).
+ *  - `owner`: pid 생존 + (서명 미기록 옛 메타 → liveness-only) 또는 (서명 일치).
+ *  - `unknown`: pid 생존 + 서명 기록됐으나 현재값 조회 실패(ps 실패/타임아웃) → 확정 불가.
+ */
+async function classifyPid(pid: number, pidStart: string | undefined): Promise<OwnerStatus> {
+  if (!isProcessAlive(pid)) return 'dead-or-reused';
+  if (!pidStart) return 'owner'; // 옛 메타(서명 미기록) — liveness-only
   // 기록된 서명이 현재 버전 형식이 아니면 비교 불가 → unknown(보존). 형식 차이를 재사용으로 오인해
   // 살아있는 세션을 dead-or-reused 로 삭제하는 것을 막는다 (PR #61 3회차 Codex).
-  if (!meta.pidStart.startsWith(`${PID_SIG_VERSION}:`)) return 'unknown';
-  const liveSig = await processStartSignature(meta.pid);
+  if (!pidStart.startsWith(`${PID_SIG_VERSION}:`)) return 'unknown';
+  const liveSig = await processStartSignature(pid);
   if (!liveSig) return 'unknown'; // 현재값 조회 실패 → 확정 불가
-  return liveSig === meta.pidStart ? 'owner' : 'dead-or-reused';
+  return liveSig === pidStart ? 'owner' : 'dead-or-reused';
+}
+
+/** 세션 소유 mat 프로세스의 신원 판정 (pid 재사용 방어, tri-state — PR #61 2회차 Forge HIGH). */
+async function classifyOwner(meta: SessionMeta): Promise<OwnerStatus> {
+  return classifyPid(meta.pid, meta.pidStart);
+}
+
+/**
+ * 자식 subshell 프로세스의 신원 판정 (#63-2). childPid 가 없는 옛 메타는 'dead-or-reused' 로
+ * 보아 기존 로직(소유 mat 만 보던 동작)을 그대로 유지한다 — 호출부가 자식 가드를 skip 하게 한다.
+ */
+async function classifyChildOwner(meta: SessionMeta): Promise<OwnerStatus> {
+  if (meta.childPid == null) return 'dead-or-reused'; // 옛 메타 — 자식 추적 정보 없음
+  return classifyPid(meta.childPid, meta.childPidStart);
 }
 
 export interface SessionStartOptions {
@@ -531,6 +582,16 @@ interface SessionMeta {
    * undefined (옛 메타도 동일) → liveness-only 폴백 (PR #61 Codex H2).
    */
   pidStart?: string;
+  /**
+   * subshell(자식) OS pid (#63-2). reapOrphans/stopSession 이 소유 mat 사망 후에도 자식 생존을
+   * 확인해 라이브 세션 디렉토리 오삭제를 막는 데 쓴다. 옛 메타는 undefined (자식 추적 정보 없음).
+   */
+  childPid?: number;
+  /**
+   * subshell 의 시작 서명(`ps -o lstart`) — childPid 재사용 방어 (pidStart 와 동형). 자식 pid 가
+   * 죽고 재할당돼도 시작 시각이 달라 구분된다. ps 미지원/조회 실패·옛 메타는 undefined.
+   */
+  childPidStart?: string;
   /** ISO-8601 시작 시각. */
   startedAt: string;
   roots: { env: string; dir: string }[];
@@ -569,7 +630,7 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
   await materializeSession(plan); // 세션 디렉토리 생성 + 자격증명 복사
   // pid 재사용 검출용 시작 서명 (조회 실패해도 세션 생성을 막지 않음 — liveness-only 폴백).
   const pidStart = (await processStartSignature(process.pid)) ?? undefined;
-  await writeSessionMeta(id, {
+  const meta: SessionMeta = {
     id,
     cli: opts.cliId,
     profile: profileName,
@@ -577,7 +638,8 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
     pidStart,
     startedAt: new Date().toISOString(),
     roots: plan.roots.map((r) => ({ env: r.env, dir: r.dir }))
-  });
+  };
+  await writeSessionMeta(id, meta);
 
   const childRef: { current: ChildProcess | null } = { current: null };
   const forwarders = registerSessionForwarders(childRef);
@@ -585,7 +647,9 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
     let spawnResult: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     let spawnError: unknown;
     try {
-      spawnResult = await spawnSessionShell(plan, childRef);
+      spawnResult = await spawnSessionShell(plan, childRef, (childPid) =>
+        recordChildPid(id, meta, childPid)
+      );
     } catch (err) {
       spawnError = err;
     }
@@ -603,6 +667,25 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
   }
 }
 
+/**
+ * 자식 subshell pid + 시작 서명을 session.json 에 병합 기록 (#63-2, best-effort).
+ *
+ * spawn 직후 호출돼, 기존 meta 객체에 childPid/childPidStart 를 채운 뒤 writeSessionMeta 로
+ * 재기록한다. 서명 조회 실패는 undefined 폴백(liveness-only). 기록 자체가 실패해도 경고만 남기고
+ * spawn 라이프사이클을 막지 않는다 — 자식 추적은 reapOrphans 오삭제 방지용 보강이라 부재 시 옛
+ * 메타와 동형으로 안전하게 degrade 한다.
+ */
+async function recordChildPid(id: string, meta: SessionMeta, childPid: number): Promise<void> {
+  try {
+    meta.childPid = childPid;
+    meta.childPidStart = (await processStartSignature(childPid)) ?? undefined;
+    await writeSessionMeta(id, meta);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[mat] 자식 pid 기록 실패 (계속 진행): ${sanitizeForStderr(message)}\n`);
+  }
+}
+
 /** 세션 id 생성 — `<cli>-<profile>-<rand8>`. profile 은 sessionId 화이트리스트로 sanitize + 길이 cap. */
 function makeSessionId(cliId: string, profileName: string): string {
   const rand8 = randomBytes(4).toString('hex');
@@ -612,10 +695,17 @@ function makeSessionId(cliId: string, profileName: string): string {
   return validateSessionId(id); // 방어 — 위 sanitize 로 항상 통과
 }
 
-/** subshell spawn (stdio inherit, env 에 root env + MAT_SESSION 주입, 셸 미경유 argv). */
+/**
+ * subshell spawn (stdio inherit, env 에 root env + MAT_SESSION 주입, 셸 미경유 argv).
+ *
+ * `onSpawned` 는 spawn 직후 child.pid 가 유효한 정수일 때 1회 await 호출된다 (#63-2) — 자식 pid
+ * 추적 정보를 session.json 에 기록할 기회를 호출자에게 준다. 콜백 throw/실패는 spawn 라이프사이클을
+ * 막지 않게 호출자가 best-effort 로 흡수해야 한다. spawn 실패로 child.pid 가 undefined 면 호출 안 함.
+ */
 function spawnSessionShell(
   plan: SessionPlan,
-  childRef: { current: ChildProcess | null }
+  childRef: { current: ChildProcess | null },
+  onSpawned?: (childPid: number) => Promise<void>
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve, reject) => {
     const shell = process.env.SHELL || '/bin/sh';
@@ -623,6 +713,11 @@ function spawnSessionShell(
     for (const root of plan.roots) env[root.env] = root.dir; // 격리 디렉토리 주입 (토큰 미포함, 경로만)
     const child = spawn(shell, [], { stdio: 'inherit', env });
     childRef.current = child;
+
+    // 자식 pid 가 유효하면 추적 콜백 호출 (best-effort — 콜백 실패가 spawn 을 막지 않게 호출자 책임).
+    if (onSpawned && Number.isInteger(child.pid) && (child.pid as number) > 0) {
+      void onSpawned(child.pid as number);
+    }
 
     let settled = false;
     const settle = (action: () => void) => {
@@ -698,12 +793,22 @@ async function readSessionMeta(id: string): Promise<SessionMeta | null> {
     ) {
       return null;
     }
+    // childPid 는 양의 정수만 인정 — 손상/조작된 값(음수/0/소수/NaN)은 undefined 로 떨궈
+    // 자식 생존 가드가 무관 프로세스를 살아있다고 오판하지 않게 한다 (#63-2, pid 파싱과 동형).
+    const childPid =
+      typeof parsed.childPid === 'number' &&
+      Number.isInteger(parsed.childPid) &&
+      parsed.childPid > 0
+        ? parsed.childPid
+        : undefined;
     return {
       id: parsed.id,
       cli: typeof parsed.cli === 'string' ? parsed.cli : '',
       profile: typeof parsed.profile === 'string' ? parsed.profile : '',
       pid: parsed.pid,
       pidStart: typeof parsed.pidStart === 'string' ? parsed.pidStart : undefined,
+      childPid,
+      childPidStart: typeof parsed.childPidStart === 'string' ? parsed.childPidStart : undefined,
       startedAt: typeof parsed.startedAt === 'string' ? parsed.startedAt : '',
       roots: Array.isArray(parsed.roots) ? (parsed.roots as SessionMeta['roots']) : []
     };
@@ -774,17 +879,30 @@ export async function stopSession(id: string): Promise<void> {
     );
     return;
   }
-  await removeSessionDir(id); // dead-or-reused — 재캡처 없이 정리
+  // dead-or-reused 라도 자식 subshell 이 살아있으면(또는 확정 불가) 라이브 세션이므로 정리 회피 (#63-2).
+  if ((await classifyChildOwner(meta)) !== 'dead-or-reused') {
+    process.stderr.write(
+      `[mat] 세션 ${sanitizeForStderr(id)} 의 자식 프로세스(pid ${meta.childPid})가 살아있어 ` +
+        `정리를 생략합니다 (라이브 세션). 자식 종료 후 다시 시도하세요.\n`
+    );
+    return;
+  }
+  await removeSessionDir(id); // dead-or-reused (소유 mat·자식 모두 죽음) — 재캡처 없이 정리
 }
 
 /**
- * orphan 세션 회수 — 소유 프로세스 사망 AND startedAt TTL 초과 AND 세션 디렉토리 mtime TTL
- * 초과 (셋 다 충족만, 보수적). 재캡처 없이 삭제 + 경고. 회수한 id 목록 반환.
+ * orphan 세션 회수 — 소유 프로세스 신원에 따라 회수 경로가 갈린다. 재캡처 없이 삭제 + 경고.
+ * 회수한 id 목록 반환. (모든 경로에서 자식 subshell 생존 시 보존 — #63-2)
  *
- * "소유 프로세스 사망" 판정은 시작 서명까지 본다 (PR #61 Codex H2): pid 가 재사용돼 살아있는
- * 것처럼 보여도 서명이 다르면(`dead-or-reused`) 회수 대상에 포함 — pid 재사용이 stale 세션을
- * 영구 보존하던 문제 해소. `owner`/`unknown`(서명 조회 실패로 확정 불가)은 보존(보수적 — 살아있는
- * 세션을 잘못 삭제하지 않음, PR #61 2회차 Forge).
+ *  - `owner`(소유 mat 생존 확인): 보존.
+ *  - `dead-or-reused`(소유 mat 사망/pid 재사용): startedAt·디렉토리 mtime 둘 다 ORPHAN_TTL_MS
+ *    초과 시 회수 (보수적 — pid 재사용 stale 세션 영구보존 해소, PR #61 Codex H2).
+ *  - `unknown`(서명 조회 실패로 확정 불가): startedAt·디렉토리 mtime 둘 다 UNKNOWN_TTL_MS(24h,
+ *    ORPHAN_TTL_MS 보다 김) 초과 시에만 회수 (#63-1). pid 가 살아있어 **SIGTERM 은 보내지 않고**
+ *    디렉토리만 삭제 — ps 영구 불능 환경의 orphan 무한 잔존을 막되 무관 프로세스 kill 은 피한다.
+ *
+ * 자식 가드: dead-or-reused/unknown 이라도 자식 subshell 이 살아있거나(또는 확정 불가) 하면
+ * 라이브 세션이므로 회수하지 않는다 (소유 mat 만 보던 누락 보강, #63-2).
  */
 export async function reapOrphans(): Promise<string[]> {
   const now = Date.now();
@@ -792,25 +910,51 @@ export async function reapOrphans(): Promise<string[]> {
   for (const id of await listSessionIds()) {
     const meta = await readSessionMeta(id);
     if (!meta) continue;
-    if ((await classifyOwner(meta)) !== 'dead-or-reused') continue; // owner/unknown → 보존
-    const startedMs = Date.parse(meta.startedAt);
-    if (Number.isFinite(startedMs) && now - startedMs <= ORPHAN_TTL_MS) continue; // TTL 내 보존
-    // 세션 디렉토리 자체 mtime 교차검증 (격리본 mtime 아님 — 죽은 세션 식별 안정성, M-B).
-    let dirMtime = 0;
-    try {
-      dirMtime = (await fs.stat(sessionDir(id))).mtimeMs;
-    } catch {
-      continue;
-    }
-    if (now - dirMtime <= ORPHAN_TTL_MS) continue; // 최근 디렉토리 → 보존
+    const status = await classifyOwner(meta);
+    if (status === 'owner') continue; // 소유 mat 생존 → 보존
+    // 자식 subshell 이 살아있으면(확정 불가 포함) 라이브 세션 — 소유 mat 사망과 무관하게 보존.
+    if ((await classifyChildOwner(meta)) !== 'dead-or-reused') continue;
+    const ttl = status === 'unknown' ? getUnknownTtlMs() : ORPHAN_TTL_MS;
+    if (!(await isReapableByTtl(id, meta, now, ttl))) continue; // startedAt·mtime 둘 다 초과만 회수
     await removeSessionDir(id).catch(() => {
       /* best-effort */
     });
-    process.stderr.write(
-      `[mat] orphan 세션 회수: ${sanitizeForStderr(id)} ` +
-        `(비정상 종료 — 프로필은 마지막 정상 재캡처 상태).\n`
-    );
+    writeReapWarning(id, status);
     reaped.push(id);
   }
   return reaped;
+}
+
+/** startedAt 과 세션 디렉토리 mtime 이 둘 다 ttl 초과인지 — 죽은 세션 식별 안정성 교차검증 (M-B). */
+async function isReapableByTtl(
+  id: string,
+  meta: SessionMeta,
+  now: number,
+  ttl: number
+): Promise<boolean> {
+  const startedMs = Date.parse(meta.startedAt);
+  if (Number.isFinite(startedMs) && now - startedMs <= ttl) return false; // TTL 내 보존
+  // 세션 디렉토리 자체 mtime 교차검증 (격리본 mtime 아님 — 죽은 세션 식별 안정성, M-B).
+  let dirMtime = 0;
+  try {
+    dirMtime = (await fs.stat(sessionDir(id))).mtimeMs;
+  } catch {
+    return false;
+  }
+  return now - dirMtime > ttl; // 최근 디렉토리면 보존
+}
+
+/** 회수 사유별 stderr 경고 — unknown 은 소유 확인 불가임을 명시한다 (#63-1). */
+function writeReapWarning(id: string, status: OwnerStatus): void {
+  if (status === 'unknown') {
+    process.stderr.write(
+      `[mat] unknown 세션 TTL 초과 회수: ${sanitizeForStderr(id)} ` +
+        `(소유 확인 불가 — 프로필은 마지막 정상 재캡처 상태).\n`
+    );
+    return;
+  }
+  process.stderr.write(
+    `[mat] orphan 세션 회수: ${sanitizeForStderr(id)} ` +
+      `(비정상 종료 — 프로필은 마지막 정상 재캡처 상태).\n`
+  );
 }

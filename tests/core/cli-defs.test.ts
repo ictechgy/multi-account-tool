@@ -301,9 +301,10 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
 describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
   const find = (id: string) => BUILTIN_CLI_DEFS.find((c) => c.id === id)!;
 
-  it('codex: session.roots 1개 (CODEX_HOME / ~/.codex), share 비움(M-A)', () => {
+  it('codex: session.roots 1개 (CODEX_HOME / ~/.codex), share=[config.toml] (issue #63-3)', () => {
+    // config.toml 은 secret-free read-mostly 설정이라 base 공유 허용 (토큰은 auth.json 에 분리).
     expect(find('codex').session).toEqual({
-      roots: [{ env: 'CODEX_HOME', base: '~/.codex' }]
+      roots: [{ env: 'CODEX_HOME', base: '~/.codex', share: ['config.toml'] }]
     });
   });
 
@@ -335,10 +336,16 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     }
   );
 
-  it('M-A: 전 빌트인 CLI 의 모든 root 에서 share 가 비어있음(allow-list=∅ 회귀 가드)', () => {
+  it('share allow-list 회귀 가드: codex root 는 config.toml 1개, 그 외 모든 root 는 비어있음', () => {
+    // codex 의 config.toml 은 secret-free 검증 완료(issue #63-3) — 유일한 비-∅ share.
+    // 나머지 CLI root 에 새 share 항목을 추가할 때는 secret-free 여부를 먼저 검증하고 여기에 명시한다.
     for (const def of BUILTIN_CLI_DEFS) {
       for (const root of def.session?.roots ?? []) {
-        expect(root.share ?? []).toEqual([]);
+        if (def.id === 'codex' && root.env === 'CODEX_HOME') {
+          expect(root.share).toEqual(['config.toml']);
+        } else {
+          expect(root.share ?? []).toEqual([]);
+        }
       }
     }
   });

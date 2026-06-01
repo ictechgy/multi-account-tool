@@ -83,12 +83,13 @@ const SID = 'codex-work-test0001';
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 describe('planSession', () => {
-  it('codex: 단일 root/cred (auth.json, rel auth.json), share ∅', () => {
+  it('codex: 단일 root/cred (auth.json, rel auth.json), share=[config.toml] (issue #63-3)', () => {
+    // config.toml 은 secret-free 검증 완료 — base 공유 허용 (토큰은 auth.json 에 분리).
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     expect(plan).toMatchObject({ cli: 'codex', profile: 'work', id: SID });
     expect(plan.roots).toHaveLength(1);
     expect(plan.roots[0].env).toBe('CODEX_HOME');
-    expect(plan.roots[0].share).toEqual([]);
+    expect(plan.roots[0].share).toEqual(['config.toml']);
     expect(plan.roots[0].creds).toEqual([
       expect.objectContaining({ saveAs: 'auth.json', rel: 'auth.json' })
     ]);
@@ -177,10 +178,10 @@ describe('planSession', () => {
   });
 });
 
-describe('materializeSession — 빌트인 경로 (copy-isolate, share ∅)', () => {
+describe('materializeSession — 빌트인 경로 (copy-isolate, share=[config.toml])', () => {
   it('자격증명 = 0600 실파일(symlink 아님), 내용=프로필값', async () => {
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
-    await writeBaseFile('.codex/config.toml', 'model=gpt'); // 비-secret (ephemeral 대상)
+    await writeBaseFile('.codex/config.toml', 'model=gpt'); // share 대상 — base 에 실파일 필요
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
 
@@ -191,24 +192,48 @@ describe('materializeSession — 빌트인 경로 (copy-isolate, share ∅)', ()
     expect(await fs.readFile(credPath, 'utf8')).toBe('TOKEN-A');
   });
 
-  it('그 외 base 파일(config.toml)은 세션 디렉토리에 없음 (ephemeral)', async () => {
+  it('config.toml 은 base 원본으로의 symlink 로 세션 디렉토리에 공유됨 (issue #63-3)', async () => {
+    // config.toml 이 share 에 있으므로 materializeSession 이 base 원본을 symlink 로 연결한다.
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
     await writeBaseFile('.codex/config.toml', 'model=gpt');
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
-    await expect(fs.access(join(plan.roots[0].dir, 'config.toml'))).rejects.toThrow();
+    const linkPath = join(plan.roots[0].dir, 'config.toml');
+    const st = await fs.lstat(linkPath);
+    expect(st.isSymbolicLink()).toBe(true); // symlink 로 공유
+    expect(await fs.readFile(linkPath, 'utf8')).toBe('model=gpt'); // 내용은 base 원본
   });
 
-  it('빌트인 share=∅ → 세션 디렉토리에 symlink 0개', async () => {
+  it('codex share=[config.toml] → 세션 디렉토리에 symlink 1개(config.toml), cred(auth.json)는 실파일', async () => {
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    await writeBaseFile('.codex/config.toml', 'model=gpt');
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
     const entries = await fs.readdir(plan.roots[0].dir, { withFileTypes: true });
-    expect(entries.some((e) => e.isSymbolicLink())).toBe(false);
+    const symlinks = entries.filter((e) => e.isSymbolicLink()).map((e) => e.name);
+    expect(symlinks).toEqual(['config.toml']); // symlink 는 config.toml 1개
+    const authSt = await fs.lstat(join(plan.roots[0].dir, 'auth.json'));
+    expect(authSt.isSymbolicLink()).toBe(false); // 자격증명은 실파일
   });
 
-  it('base 부재 시에도 자격증명 격리본은 생성됨', async () => {
+  it('base 에 config.toml 부재 시 — throw 없이 materialize 성공, config.toml 링크 미생성 (optional skip)', async () => {
+    // config.toml 은 read-mostly 설정이므로 부재해도 세션 진행에 지장 없다.
+    // materializeShareLink 는 ENOENT 를 skip(return)하고 세션을 정상 완료해야 한다.
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    // config.toml 미생성 — base 에 없음
+    const plan = planSession(findCliDef('codex')!, 'work', SID);
+    // throw 없이 완료 (optional share skip)
+    await expect(materializeSession(plan)).resolves.toBeUndefined();
+    // config.toml 링크 미생성
+    const linkPath = join(plan.roots[0].dir, 'config.toml');
+    await expect(fs.access(linkPath)).rejects.toThrow();
+    // creds 격리본(auth.json)은 정상 생성됨
+    expect(await fs.readFile(join(plan.roots[0].dir, 'auth.json'), 'utf8')).toBe('TOKEN-A');
+  });
+
+  it('base 에 config.toml 있을 때 자격증명 격리본은 생성됨', async () => {
+    await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    await writeBaseFile('.codex/config.toml', 'model=gpt');
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
     expect(await fs.readFile(join(plan.roots[0].dir, 'auth.json'), 'utf8')).toBe('TOKEN-A');
@@ -254,10 +279,18 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     await expect(fs.access(sessionDir(SID))).rejects.toThrow();
   });
 
-  it('allow-list 대상이 base 에 부재면 거부', async () => {
+  it('allow-list 대상이 base 에 부재면 skip — throw 없이 materialize 성공, 링크 미생성 (optional)', async () => {
+    // config.toml 등 read-mostly 설정 파일이 없어도 세션은 정상 진행된다.
     await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    // config.toml 미생성
     const plan = planSession(fakeDef, 'work', SID);
-    await expect(materializeSession(plan)).rejects.toThrow();
+    await expect(materializeSession(plan)).resolves.toBeUndefined();
+    // config.toml 링크 미생성
+    const linkPath = join(plan.roots[0].dir, 'config.toml');
+    await expect(fs.access(linkPath)).rejects.toThrow();
+    // creds 격리본(auth.json — cred.rel) 은 정상 생성됨
+    // fakeDef source path=~/.fake/auth.json → cred.rel='auth.json', absInSession=dir/auth.json
+    expect(await fs.readFile(join(plan.roots[0].dir, 'auth.json'), 'utf8')).toBe('TOK');
   });
 
   it('정상 nested share → 세션 하위 디렉토리에 symlink 생성', async () => {
@@ -481,6 +514,7 @@ describe('recaptureSession — 2-phase stage/commit 원자성 (H1)', () => {
 
   it('격리본 부재 cred 는 skip (stage/commit 안 함)', async () => {
     await writeProfileFile('codex', 'work', 'auth.json', 'OLD');
+    await writeBaseFile('.codex/config.toml', 'model=gpt'); // share 대상 — base 에 실파일 필요
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     await materializeSession(plan);
     await fs.rm(join(plan.roots[0].dir, 'auth.json')); // CLI 가 격리본 삭제 모사
