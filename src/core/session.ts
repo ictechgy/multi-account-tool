@@ -269,7 +269,11 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
   }
   // base 원본을 O_NOFOLLOW 로 읽어(마지막 컴포넌트 symlink swap 차단) 격리본으로 0600 atomic 복사.
   // 부모 디렉토리 escape 는 위 assertContainedRealpath 가, fresh non-symlink 쓰기는 writeFileAtomic
-  // (O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와 동일 보안 모델.
+  // (O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와 동일 보안 모델. 부모 컴포넌트는
+  // realpath 검증이 point-in-time 이라 nested share 의 중간 디렉토리 TOCTOU 는 이론상 잔존하나,
+  // 단일 사용자 홈 위협 모델(공격자가 이미 base 원본 접근 가능)에서 권한 상승이 없어 수용한다.
+  // share 대상은 **UTF-8 텍스트 전제**(codex config.toml=TOML=UTF-8). 비-UTF-8 바이너리 config 를
+  // share 에 추가하면 utf8 round-trip 으로 손상될 수 있어 미지원 — 그런 대상은 share 에 넣지 않는다.
   const handle = await fs.open(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   let content: string;
   try {

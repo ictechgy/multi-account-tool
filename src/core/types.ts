@@ -100,12 +100,14 @@ export interface SessionRoot {
   /** 이 env 가 재배치하는 CLI 의 기본 base 디렉토리 (예: '~/.codex'). 선행 `~/` 는 확장된다. */
   base: string;
   /**
-   * 선택. base 상대경로의 read-mostly 비-secret config allow-list — 격리 복사 대신 실제
-   * base 와 symlink 로 **공유**할 항목. **자격증명 파일은 절대 포함하지 않는다**(항상 격리 복사).
+   * 선택. base 상대경로의 read-mostly 비-secret config allow-list — 세션 시작 시 base 에서
+   * **0600 복사**(copy-isolate, issue #72)할 항목. 자격증명처럼 격리본에만 존재하므로 세션 내
+   * 수정이 base 로 write-back 되지 않는다(재캡처 대상 아님). **자격증명 파일은 절대 포함하지
+   * 않는다**(항상 별도 격리 복사). 최초 설계는 symlink 공유였으나, codex 가 `codex mcp add`/
+   * `plugin add` 로 config.toml 에 실제로 쓴다는 실측에 따라 복사로 전환했다.
    *
-   * 미지정/미포함 항목은 공유하지 않는다(fail-closed, 세션 내 ephemeral). 메커니즘은 코드에
-   * 존재하나, 1차 빌트인 메타에선 전 CLI 비움 — Codex `config.toml` 의 OAuth state 포함
-   * 여부 미검증 등 (검증 후 follow-up 으로 켠다).
+   * 미지정/미포함 항목은 복사하지 않는다(fail-closed, 세션 내 ephemeral). 빌트인 메타에선
+   * Codex `config.toml`(OAuth 토큰은 auth.json 에 분리 — secret-free 검증 완료)만 share 한다.
    */
   share?: string[];
 }
