@@ -396,14 +396,15 @@ export async function acquireRecaptureLock(
   cliId: string,
   profileName: string
 ): Promise<(() => Promise<void>) | null> {
+  // 검증/프로그래머 오류(invalid cliId/profileName)는 surface — best-effort 대상 아님.
+  const lockDir = recaptureLockPath(cliId, profileName);
   try {
-    const lockDir = recaptureLockPath(cliId, profileName);
     await fs.mkdir(dirname(lockDir), { recursive: true, mode: 0o700 });
     const body = makeRecaptureBody(profileName);
     return await waitLoop(lockDir, body);
   } catch {
-    // best-effort degrade: 경로 검증·mkdir 권한오류(EACCES/EPERM/ENOTDIR)·reclaim 실패 등
-    // 어떤 획득 오류든 null 반환 → recaptureSession 이 lock-free 2-phase commit 으로 진행(JSDoc 계약).
+    // best-effort degrade: 운영성 획득 오류(mkdir 권한오류 EACCES/EPERM/ENOTDIR·reclaim 실패·
+    // waitLoop 거부)만 null 반환 → recaptureSession 이 lock-free 2-phase commit 으로 진행(JSDoc 계약).
     // 세션 종료를 막지 않는다.
     return null;
   }

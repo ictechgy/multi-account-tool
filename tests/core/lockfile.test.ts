@@ -898,6 +898,15 @@ describe('lockfile.acquireRecaptureLock — 프로필 단위 재캡처 락 (#62)
     const result = await acquireRecaptureLock('codex', 'work');
     expect(result).toBeNull(); // best-effort degrade: null 반환, throw 없음
   });
+
+  it('(9) 잘못된 profileName(검증 오류)은 null 로 삼키지 않고 throw — best-effort 대상 아님', async () => {
+    // quad-review-loop 2트랙 consensus MEDIUM 반영:
+    // recaptureLockPath 의 validateProfileName 이 던지는 ValidationError 는
+    // 프로그래머/검증 오류이므로 best-effort catch 로 삼켜서는 안 된다.
+    // try 블록 밖으로 lockDir 계산을 이동한 후 이 경계를 결정적으로 가드한다.
+    // 'bad/name' 은 path traversal 로 validateProfileName 이 throw 한다.
+    await expect(acquireRecaptureLock('codex', 'bad/name')).rejects.toThrow();
+  });
 });
 
 /**
