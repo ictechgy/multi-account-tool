@@ -1,0 +1,21 @@
+# Dependabot 설정 — GitHub Actions 액션 버전 자동 업데이트 (issue #68).
+#
+# 모든 워크플로 액션은 가변 메이저 태그(@v6) 대신 40-hex commit SHA 로 핀되어 있다(공급망 보안).
+# SHA 핀은 업스트림 태그 재이동/저장소 오염으로 인한 "리뷰 없는 실행 코드 변경"을 차단하지만,
+# 수동 갱신이 번거롭다 → Dependabot 이 새 릴리스를 감지해 SHA + 주석 버전(# v6.0.2)을 함께
+# 올려주는 PR 을 생성한다. 가변 태그의 자동 코드 변경 위험 없이 최신 보안 패치를 추적한다.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    # 워크플로는 항상 리포지토리 루트(.github/workflows/) 기준이라 directory 는 "/" 로 둔다.
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # 여러 액션 업데이트를 단일 PR 로 묶어 리뷰 부담을 줄인다.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    # 저장소의 Conventional Commits 컨벤션(ci:)에 맞춰 커밋 메시지 prefix 지정.
+    commit-message:
+      prefix: "ci"
