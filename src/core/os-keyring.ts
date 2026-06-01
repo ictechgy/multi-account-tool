@@ -7,9 +7,19 @@
  *    `attribute.<key>` 는 **stderr** 로 분리된다. N 카운트는 stdout 의 `[/N]`
  *    헤더 출현 횟수(secret 내용/멀티라인 비의존), account 역조회는 stderr 의
  *    `attribute.account`.
- *  - 부재 = **exit 0 + 빈 출력** (exit code 로 부재 판정 불가). exit code≠0 은
- *    미설치(spawn ENOENT) 또는 daemon-down 으로 구분해 throw (fail-closed). Goose
- *    file-backend 사용자용 skip 은 source 정의(cli-defs.ts gooseUsesFileBackend)에서
+ *  - 부재 = **exit 0 + 빈 출력** (exit code 로 부재 판정 불가). exit code≠0 의 처리는
+ *    읽기/쓰기 경로에서 갈린다 (#59, #73):
+ *      · **미설치 (spawn ENOENT → code=-1, spawnErrno='ENOENT')**: 읽기(backup/exists)는
+ *        **soft-fail** — 강한 stderr 경고 1회 후 null/false 반환 → yaml fallback 도달.
+ *        쓰기(store/clear)는 조용히 넘기면 안 되므로 **throw 유지** (osKeyringErr).
+ *        secret-tool CLI 만 미설치인 활성 keyring 사용자는 stale yaml swap(wrong-account)
+ *        위험이 있어 경고로 안내한다.
+ *      · **ENOENT 아닌 spawn 실패 (EACCES 등 → code=-1, spawnErrno!=='ENOENT')**: secret-tool
+ *        이 있으나 실행 권한이 없는 등 '미설치 아님' 이라, 부재로 오인해 yaml swap 하면
+ *        wrong-account 위험이 의도 이상으로 확대된다. 읽기/쓰기 모두 **throw** (fail-closed, #73).
+ *      · **daemon-down / 접근 거부 (code>0)**: infra 가 깨진 경우라 읽기/쓰기 모두
+ *        **throw 유지** (fail-closed). tooling 만 깨진 미설치(ENOENT)와 구분한다.
+ *    Goose file-backend 사용자용 명시 skip 은 source 정의(cli-defs.ts gooseUsesFileBackend)에서
  *    GOOSE_DISABLE_KEYRING 양성 증거로 처리한다 — primitive 는 부재를 추정하지 않는다 (#59).
  *  - `store` 는 **upsert**(덮어쓰기), value 는 **stdin**(argv 미노출, PR-3a).
  *  - `clear` 는 **deletes-all** — service+account 2-attribute 매칭은 실측상
@@ -25,6 +35,60 @@ import type { KeychainStored, OsKeyringSource } from './types.js';
 
 /** Linux `secret-tool` 절대경로. PATH shim 공격을 방지 (SECURITY_BIN 미러). */
 const SECRET_TOOL_BIN = '/usr/bin/secret-tool';
+
+/**
+ * `secret-tool` 이 **미설치(ENOENT)** 라서 읽기 soft-fail 대상인지 판정한다 (#73).
+ *
+ * runCommand 는 ENOENT 뿐 아니라 EACCES(실행 권한 없음)·ENOTDIR·실행포맷 오류 등
+ * **모든 spawn 실패**에 code=-1 을 반환한다. 따라서 code=-1 만으로 soft-fail 하면
+ * 'secret-tool 은 있으나 실행 권한이 없는' 경우 등도 부재로 오인해 yaml swap →
+ * wrong-account 위험이 의도 이상으로 확대된다. 사용자 결정은 **ENOENT(미설치)만
+ * soft-fail** 이므로, spawnErrno 가 정확히 'ENOENT' 일 때만 true 를 반환한다.
+ * 그 외 spawn 실패(EACCES 등)는 호출자가 fail-closed throw 한다.
+ */
+function isSecretToolMissing(r: CmdResult): boolean {
+  return r.code === -1 && r.spawnErrno === 'ENOENT';
+}
+
+/**
+ * secret-tool 미설치(ENOENT) soft-fail 경고를 프로세스당 1회만 출력하기 위한 가드.
+ * read 경로(backup/exists)가 source 순회마다 호출될 수 있어, 같은 경고가 반복 노출되는
+ * 것을 막는다 (호출당 1회가 아니라 모듈 레벨 1회).
+ */
+let secretToolMissingWarned = false;
+
+/**
+ * secret-tool(libsecret-tools) 미설치로 OS keyring 읽기에 실패해 file backend
+ * (secrets.yaml) 로 fallback 함을 stderr 로 강하게 경고한다 (#59).
+ *
+ * **왜 강한 경고인가**: ENOENT soft-fail 은 "keyring 을 실제 사용 중인데 secret-tool
+ * CLI 만 미설치" 인 사용자에게 stale yaml 로 swap 되는 wrong-account 위험을 도입한다.
+ * 이를 완화하기 위해, keyring 을 실제 쓰는 중이라면 `libsecret-tools` 설치 또는
+ * `GOOSE_DISABLE_KEYRING=1` 설정을 명시 안내한다. best-effort — 프로세스당 1회만 출력.
+ */
+function warnSecretToolMissing(): void {
+  if (secretToolMissingWarned) return;
+  secretToolMissingWarned = true;
+  process.stderr.write(
+    `[mat] 경고: secret-tool(libsecret-tools) 미설치로 OS keyring 을 읽지 못해 ` +
+    `file backend(secrets.yaml)로 fallback 합니다.\n` +
+    `      keyring 을 실제 사용 중이라면 stale 자격증명으로 swap 되어 wrong-account 가 될 수 있습니다. ` +
+    `정확한 swap 을 위해 'libsecret-tools' 를 설치하거나, file backend 를 쓴다면 ` +
+    `'GOOSE_DISABLE_KEYRING=1' 을 설정하세요.\n`
+  );
+}
+
+/**
+ * `secretToolMissingWarned` 모듈 가드 초기화 — **테스트 전용** (resetCliDefCache 컨벤션 미러).
+ *
+ * 경고는 프로세스당 1회만 출력되는 모듈 레벨 가드라, 한 테스트가 ENOENT 를 트리거하면
+ * 이후 테스트에서 같은 가드가 이미 true 라 경고 검증이 불안정해진다. 테스트가 가드를
+ * 명시 리셋해 '1회 출력' 동작과 '경고 내용' 을 독립적으로 검증할 수 있게 한다.
+ * production 에서는 호출하지 않는다.
+ */
+export function resetSecretToolMissingWarnedForTest(): void {
+  secretToolMissingWarned = false;
+}
 
 /** search 결과 1건 backup — value + account(역조회, 없을 수 있음). */
 interface OsKeyringBackup {
@@ -54,26 +118,51 @@ function assertValidOsKeyringSource(src: OsKeyringSource): void {
 }
 
 /**
- * 미설치 / daemon-down 을 구분한 에러. raw search 출력(secret 포함 가능)은 절대
- * 포함하지 않는다 — 구조적 메시지만 (parse-failure secret 누설 차단, plan F4).
+ * spawn 실패(미설치 ENOENT / 권한·기타) / daemon-down 을 구분한 에러. raw search
+ * 출력(secret 포함 가능)은 절대 포함하지 않는다 — 구조적 메시지만 (parse-failure
+ * secret 누설 차단, plan F4).
  *
- * `runCommand` 가 spawn 실패(ENOENT 등)면 code=-1 을 반환한다 → 미설치로 판정.
- * 그 외 code≠0 은 daemon 미응답/접근 거부로 판정.
+ * `runCommand` 는 **모든 spawn 실패**(ENOENT/EACCES/ENOTDIR 등)에 code=-1 을 반환하되,
+ * errno 는 `spawnErrno` 로 보존한다. 따라서 code=-1 은 'ENOENT(미설치)' 와 'EACCES 등
+ * 다른 spawn 실패' 둘 다일 수 있어, 메시지를 errno 로 분기한다 (#73). 그 외 code≠0 은
+ * daemon 미응답/접근 거부로 판정한다.
+ *
+ * **읽기 vs 쓰기** (#59, #73): 읽기 경로(backup/exists)는 **ENOENT(미설치)만** soft-fail 로
+ * 가로채(warnSecretToolMissing → null/false) 이 함수에 도달하지 않는다. 따라서 이 함수의
+ * code=-1 분기는 (a) **쓰기 경로(store/clear)의 ENOENT** — 쓰기 실패를 조용히 넘기면
+ * 자격증명 손실이라 미설치도 명시 throw — 또는 (b) **읽기/쓰기 공통의 ENOENT 아닌 spawn
+ * 실패(EACCES 등)** 에서 도달한다 (읽기에서도 fail-closed throw). daemon-down(code>0)은
+ * 읽기/쓰기 모두 throw.
  */
 function osKeyringErr(stage: string, r: CmdResult): Error {
   // 메시지에 raw output 을 넣지 않는 게 1차 방어지만, redactMessage 로도 감싸
   // 심층 방어한다 (keychainErr 와 일관 — 향후 메시지에 실수로 output 이 들어가도
   // token-shaped secret 은 redact). 구조적 메시지라 redact 가 잘라낼 내용은 없다.
-  // 미설치 메시지에는 file-backend 탈출구를 함께 안내한다 — keyring 을 안 쓰는 사용자가
-  // 불필요한 패키지 설치 대신 file backend 전환을 택할 수 있도록 (#59 quad-review LOW).
+  // 미설치(ENOENT) 메시지에는 file-backend 탈출구를 함께 안내한다 — keyring 을 안 쓰는
+  // 사용자가 불필요한 패키지 설치 대신 file backend 전환을 택할 수 있도록 (#59 quad-review LOW).
   // CLI-중립 문구로 둔다 (primitive 라 특정 env 명을 결합하지 않음 — CLI 별 env 는 README).
-  const msg = r.code === -1
-    ? `os-keyring ${stage} 실패: secret-tool 을 실행할 수 없습니다 ` +
-      `(${SECRET_TOOL_BIN} 미설치 또는 실행 불가). libsecret-tools 패키지를 설치하거나, ` +
-      `해당 CLI 가 file backend(평문 파일) 모드를 지원하면 그 모드로 전환하세요 (README 참고).`
-    : `os-keyring ${stage} 실패 (code=${r.code}): Secret Service keyring daemon 미응답 또는 접근 거부. ` +
-      `gnome-keyring 등 keyring daemon 활성화를 확인하세요.`;
+  const msg = osKeyringErrMessage(stage, r);
   return new Error(redactMessage(msg));
+}
+
+/**
+ * osKeyringErr 의 메시지 빌더 — spawn 실패의 errno(ENOENT 미설치 / EACCES 등 권한·기타)
+ * 와 daemon-down(code>0)을 구분해 정확한 원인·해결 방향을 안내한다 (#73).
+ */
+function osKeyringErrMessage(stage: string, r: CmdResult): string {
+  if (r.code !== -1) {
+    return `os-keyring ${stage} 실패 (code=${r.code}): Secret Service keyring daemon 미응답 또는 접근 거부. ` +
+      `gnome-keyring 등 keyring daemon 활성화를 확인하세요.`;
+  }
+  if (r.spawnErrno === 'ENOENT') {
+    return `os-keyring ${stage} 실패: secret-tool 이 미설치입니다 ` +
+      `(${SECRET_TOOL_BIN} 부재, ENOENT). libsecret-tools 패키지를 설치하거나, ` +
+      `해당 CLI 가 file backend(평문 파일) 모드를 지원하면 그 모드로 전환하세요 (README 참고).`;
+  }
+  // EACCES(실행 권한 없음)·ENOTDIR·실행포맷 오류 등 ENOENT 아닌 spawn 실패.
+  // 미설치가 아니므로 패키지 설치 안내 대신 실행 권한/바이너리 점검을 안내한다 (#73).
+  return `os-keyring ${stage} 실패: secret-tool 을 실행할 수 없습니다 ` +
+    `(${SECRET_TOOL_BIN}, errno=${r.spawnErrno ?? '미상'}). 실행 권한 또는 바이너리 상태를 확인하세요.`;
 }
 
 /** block-header `[/N]` 라인 정규식 (단독 라인). */
@@ -141,7 +230,12 @@ async function rawSearch(service: string, scopeAccount?: string): Promise<CmdRes
 
 /**
  * backup 로드 (loadKeychainBackup 미러). search --all 의 0/1/N 분기:
- *  - exit code≠0 → 미설치/daemon-down throw (osKeyringErr, fail-closed).
+ *  - 미설치 (code=-1 && spawnErrno==='ENOENT') → **soft-fail**: 강한 stderr 경고 1회 후
+ *    null 반환 → readOsKeyringSerialized null → switcher 가 다음 source(secrets.yaml)로
+ *    fallback (#59).
+ *  - ENOENT 아닌 spawn 실패 (code=-1 && spawnErrno!=='ENOENT', EACCES 등) → throw
+ *    (osKeyringErr, fail-closed — 미설치 아닌데 부재로 오인 시 wrong-account 위험, #73).
+ *  - 그 외 code≠0 (daemon-down / 접근 거부) → throw (osKeyringErr, fail-closed).
  *  - N=0 → null (정상 부재; exit 0 + 빈 출력).
  *  - N>1 → OsKeyringAccountMissingError (clear deletes-all 로 인한 data loss 차단).
  *  - N=1 → { value, account }. secret 추출 실패 시 raw output 미포함 구조적 throw.
@@ -151,6 +245,15 @@ async function osKeyringBackup(
   scopeAccount?: string
 ): Promise<OsKeyringBackup | null> {
   const r = await rawSearch(service, scopeAccount);
+  // 미설치(ENOENT)만 tooling 이 깨진 경우 — yaml fallback 으로 진행하되 wrong-account
+  // 위험을 강한 경고로 안내한다 (#59). 그 외 spawn 실패(EACCES 등, code=-1 이지만
+  // spawnErrno!=='ENOENT')는 'secret-tool 이 있으나 실행 불가' 라 부재로 오인하면
+  // wrong-account 위험이 의도 이상 확대된다 → fail-closed throw (#73). daemon-down
+  // (code>0)도 infra 문제라 throw 유지.
+  if (isSecretToolMissing(r)) {
+    warnSecretToolMissing();
+    return null;
+  }
   if (r.code !== 0) throw osKeyringErr('조회', r);
   const count = blockCount(r.stdout);
   if (count === 0) return null;
@@ -186,6 +289,10 @@ async function osKeyringClear(service: string, account: string): Promise<void> {
  * 새 항목 store + 실패 시 backup 복구 (addKeychainEntryOrRollback 미러).
  * backup 이 있고 store 가 실패하면 backup.account 로 재기록 — rollback 도 실패하면
  * 양쪽 에러를 동시 surface. 에러 메시지에 secret/raw output 은 포함하지 않는다.
+ *
+ * **쓰기는 모든 실패를 throw** (#73): store 가 spawn 실패(ENOENT 미설치 포함, code=-1)든
+ * daemon-down(code>0)이든 `res.code !== 0` 이면 throw 한다. 읽기처럼 ENOENT 를 soft-fail
+ * 하지 않는다 — 쓰기 실패를 조용히 넘기면 자격증명이 손실되기 때문이다.
  */
 async function osKeyringStoreOrRollback(
   service: string,
@@ -258,6 +365,10 @@ export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized:
 /**
  * os-keyring 항목의 존재 여부 (keychainExists 미러).
  *
+ * 미설치(code=-1 && spawnErrno==='ENOENT') 는 `osKeyringBackup` 과 동일하게 soft-fail —
+ * 강한 stderr 경고 1회 후 **false**(부재로 간주) 반환해 yaml fallback 을 막지 않는다 (#59).
+ * ENOENT 아닌 spawn 실패(EACCES 등)·daemon-down(code>0)은 throw 유지 (fail-closed, #73).
+ *
  * N>1 (collision) 은 `osKeyringBackup` 과 동일하게 `OsKeyringAccountMissingError`
  * 로 throw 한다 — sourceExists 를 validity check 로 쓰는 호출자에게 unsafe 한
  * deletes-all 상태를 true 로 숨기지 않기 위함.
@@ -265,6 +376,12 @@ export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized:
 export async function osKeyringExists(src: OsKeyringSource): Promise<boolean> {
   assertValidOsKeyringSource(src);
   const r = await rawSearch(src.service, src.account);
+  // osKeyringBackup 과 동일 정책 — ENOENT(미설치)만 soft-fail(false), 그 외 spawn
+  // 실패(EACCES 등)·daemon-down 은 throw (#73). 부재(N=0)와 미설치를 혼동하지 않게.
+  if (isSecretToolMissing(r)) {
+    warnSecretToolMissing();
+    return false;
+  }
   if (r.code !== 0) throw osKeyringErr('조회', r);
   const count = blockCount(r.stdout);
   if (count > 1) throw new OsKeyringAccountMissingError(src.service, count);

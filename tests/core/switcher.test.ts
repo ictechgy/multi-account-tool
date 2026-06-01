@@ -30,7 +30,7 @@ vi.mock('../../src/core/sources.js', () => ({
 // 'tri-cli' fake CliDef (3 sources) 주입 — switcher 의 reverse-order rollback 검증용.
 // BUILTIN 에는 1~2 source CLI 만 있어 sequential 과 구분 안 됨 (line 196 한계 해결).
 // vi.hoisted 로 factory 보다 먼저 평가되도록 보장.
-const { TRI_CLI } = vi.hoisted(() => ({
+const { TRI_CLI, KEYRING_CLI } = vi.hoisted(() => ({
   TRI_CLI: {
     id: 'tri-cli',
     name: 'Tri Source Test CLI',
@@ -39,6 +39,17 @@ const { TRI_CLI } = vi.hoisted(() => ({
       { type: 'file', path: '/tmp/mat-tri-b', saveAs: 'b.json' },
       { type: 'file', path: '/tmp/mat-tri-c', saveAs: 'c.json' }
     ]
+  },
+  // os-keyring(맨 앞) → file(yaml fallback) 2-source — Goose Linux 형상 모사.
+  // os-keyring 이 secret-tool 미설치 soft-fail 로 null 을 반환할 때 switcher 가
+  // 그 source 를 skip 하고 다음 file source(secrets.yaml)로 fallback 하는지 검증용 (#59).
+  KEYRING_CLI: {
+    id: 'keyring-cli',
+    name: 'Keyring Then Yaml Test CLI',
+    sources: [
+      { type: 'os-keyring', service: 'goose', account: 'secrets', backend: 'secret-service', saveAs: 'goose-keyring.json' },
+      { type: 'file', path: '/tmp/mat-goose-secrets.yaml', saveAs: 'goose-secrets.yaml' }
+    ]
   }
 }));
 
@@ -46,8 +57,9 @@ vi.mock('../../src/core/cli-defs.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/core/cli-defs.js')>();
   return {
     ...actual,
-    // 'tri-cli' 만 fake 로 override, 나머지 ('codex' / 'gemini' 등) 는 real lookup 유지.
-    findCliDef: (id: string) => (id === 'tri-cli' ? TRI_CLI : actual.findCliDef(id))
+    // fake CliDef 만 override, 나머지 ('codex' / 'gemini' 등) 는 real lookup 유지.
+    findCliDef: (id: string) =>
+      id === 'tri-cli' ? TRI_CLI : id === 'keyring-cli' ? KEYRING_CLI : actual.findCliDef(id)
   };
 });
 
@@ -134,6 +146,22 @@ describe('switcher', () => {
 
     it('알 수 없는 cli → throw', async () => {
       await expect(snapshotLiveToProfile('unknown-cli', 'p')).rejects.toThrow(/알 수 없는 CLI/);
+    });
+
+    it('os-keyring soft-fail(null) → 그 source skip 하고 yaml(file) source 로 fallback 캡처 (#59)', async () => {
+      // secret-tool 미설치 시 os-keyring.readOsKeyringSerialized 가 null 을 반환한다(soft-fail).
+      // switcher 는 value==null 인 source 를 empty 로 skip 하고 다음 file source(secrets.yaml)를
+      // 정상 캡처해야 한다 — 미설치로 swap 전체가 죽지 않고 yaml fallback 에 도달함을 입증.
+      mockReadSource.mockImplementation(async (s: Source) =>
+        s.saveAs === 'goose-keyring.json' ? null : 'yaml-creds'
+      );
+
+      const result = await snapshotLiveToProfile('keyring-cli', 'work');
+
+      // os-keyring 은 skip(empty), yaml 은 캡처(captured) — fallback 도달.
+      expect(result.empty).toEqual(['goose-keyring.json']);
+      expect(result.captured).toEqual(['goose-secrets.yaml']);
+      expect(await readProfileFile('keyring-cli', 'work', 'goose-secrets.yaml')).toBe('yaml-creds');
     });
   });
 

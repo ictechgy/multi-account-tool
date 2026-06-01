@@ -47,6 +47,17 @@ export interface CmdResult {
   code: number;
   stdout: string;
   stderr: string;
+  /**
+   * spawn 실패 시의 errno (NodeJS.ErrnoException.code — 예: 'ENOENT', 'EACCES').
+   * 정상 종료(close)에선 undefined. spawn 'error' 핸들러에서만 기록한다.
+   *
+   * **왜 필요한가** (#73 quad-review): spawn 실패는 모두 code=-1 로 settle 되지만,
+   * 'secret-tool 미설치(ENOENT)' 와 '실행 권한 없음(EACCES)·기타' 는 의미가 다르다.
+   * os-keyring 읽기 soft-fail 은 ENOENT 만 대상이어야 하므로 (그 외 spawn 실패는
+   * fail-closed throw), 호출자가 errno 로 구분할 수 있도록 보존한다.
+   * 기존 code=-1 반환은 그대로 유지해 다른 호출자(keychain 등)는 무영향이다.
+   */
+  spawnErrno?: string;
 }
 
 /**
@@ -65,14 +76,18 @@ export function runCommand(cmd: string, args: string[], stdinData?: string): Pro
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const settle = (code: number, errMsg?: string): void => {
+    // spawnErrno 는 spawn 'error' 핸들러에서만 채워 호출자가 ENOENT(미설치)와
+    // EACCES 등 다른 spawn 실패를 구분할 수 있게 한다 (#73). close 경로엔 미전달.
+    const settle = (code: number, errMsg?: string, spawnErrno?: string): void => {
       if (settled) return;
       settled = true;
-      resolve({ code, stdout, stderr: errMsg ?? stderr });
+      resolve({ code, stdout, stderr: errMsg ?? stderr, spawnErrno });
     };
     proc.stdout.on('data', (d) => { stdout += d.toString(); });
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('error', (err) => settle(-1, err.message));
+    // err.code 는 NodeJS.ErrnoException 의 errno 문자열 (예: 'ENOENT', 'EACCES').
+    // code=-1 반환은 하위호환을 위해 유지하고, errno 만 추가로 보존한다.
+    proc.on('error', (err) => settle(-1, err.message, (err as NodeJS.ErrnoException).code));
     proc.on('close', (code) => settle(code ?? -1));
     // stdin 주입 — secret 을 argv (ps 등으로 관측 가능) 가 아니라 stdin 으로 전달 (PR-3b secret-tool store).
     // stdin 쪽 에러(EPIPE / write-after-end / destroyed)는 흡수만 한다 (빈 처리가 아니라 의도된 흡수):
