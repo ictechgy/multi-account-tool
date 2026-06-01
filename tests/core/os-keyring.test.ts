@@ -24,6 +24,7 @@ vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 import { spawn } from 'node:child_process';
 
 import { readSource, sourceExists, writeSource } from '../../src/core/sources.js';
+import { resetSecretToolMissingWarnedForTest } from '../../src/core/os-keyring.js';
 import { OsKeyringAccountMissingError } from '../../src/core/errors.js';
 import type { OsKeyringSource } from '../../src/core/types.js';
 
@@ -34,7 +35,21 @@ afterEach(() => {
   // spyOn(process.stderr,...) 등 spy/mock 과 stubGlobal 누출을 테스트 간 일괄 정리한다.
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  // secret-tool 미설치 경고는 모듈 레벨 1회 가드라, 테스트 간 리셋하지 않으면 ENOENT 를
+  // 먼저 트리거한 테스트 때문에 이후 경고 검증이 불안정해진다 (#73). 매 테스트 후 리셋.
+  resetSecretToolMissingWarnedForTest();
 });
+
+/**
+ * spawn 실패 Error 를 errno(code) 부착해 생성한다 (#73).
+ * runCommand 가 `(err as NodeJS.ErrnoException).code` 를 spawnErrno 로 보존하므로,
+ * 테스트는 'ENOENT'(미설치)·'EACCES'(권한 없음) 등을 정확히 구분 시뮬레이션할 수 있다.
+ */
+function spawnError(errno: string, message?: string): NodeJS.ErrnoException {
+  const err = new Error(message ?? `spawn ${errno}`) as NodeJS.ErrnoException;
+  err.code = errno;
+  return err;
+}
 
 /** stdin 기록용 fake (secret 이 stdin 으로 전달됐는지 검증). */
 class FakeStdin extends EventEmitter {
@@ -163,18 +178,31 @@ describe('os-keyring — readSource (search --all)', () => {
     await expect(readSource(src)).rejects.toThrow(/keyring daemon/);
   });
 
-  it('spawn error (미설치, code=-1) → null (soft-fail, throw 안 함) + 강한 경고 (#59)', async () => {
+  it('spawn ENOENT (미설치, code=-1 && spawnErrno=ENOENT) → null (soft-fail, throw 안 함) + 강한 경고 (#59)', async () => {
     // ENOENT(tooling 만 깨짐)는 throw 하지 않고 null 반환 → switcher 가 다음 source
     // (secrets.yaml)로 fallback. wrong-account 위험은 강한 stderr 경고로 완화한다 (#59).
     // 경고는 모듈 레벨 1회 가드라, 파일 내 ENOENT 를 처음 트리거하는 본 테스트에서 내용을 검증한다.
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    mockSpawn.mockReturnValueOnce(fakeProc({ error: new Error('spawn ENOENT') }));
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
     expect(await readSource(src)).toBeNull();
     // 강한 경고가 libsecret-tools 설치 / GOOSE_DISABLE_KEYRING / wrong-account 안내를 포함하는지.
     const warned = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
     expect(warned).toMatch(/libsecret-tools/);
     expect(warned).toMatch(/GOOSE_DISABLE_KEYRING/);
     expect(warned).toMatch(/wrong-account/);
+    stderrSpy.mockRestore();
+  });
+
+  it('spawn EACCES (미설치 아님, code=-1 && spawnErrno!=ENOENT) → throw (fail-closed, soft-fail 아님) (#73)', async () => {
+    // 결함1 핵심 가드: secret-tool 이 있으나 실행 권한이 없는 경우(EACCES)는 code=-1 이지만
+    // ENOENT 가 아니므로 부재로 오인하면 안 된다 — yaml swap(wrong-account) 위험이 의도 이상
+    // 확대되므로 fail-closed throw 한다. null 반환(soft-fail)이면 회귀다.
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('EACCES') }));
+    await expect(readSource(src)).rejects.toThrow(/실행할 수 없습니다/);
+    // ENOENT 가 아니므로 미설치 soft-fail 경고는 출력되지 않아야 한다.
+    const warned = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(warned).not.toMatch(/libsecret-tools/);
     stderrSpy.mockRestore();
   });
 
@@ -300,6 +328,28 @@ describe('os-keyring — writeSource (backup→clear→store→rollback)', () =>
     const argv = clearCall[1] as string[];
     expect(argv[argv.indexOf('account') + 1]).toBe('alice');
   });
+
+  it('backup N=0 → store 자체가 ENOENT(spawn 실패) → throw (쓰기는 ENOENT soft-fail 안 함) (#73)', async () => {
+    // 결함2 계약 고정: 읽기와 달리 쓰기(store)는 ENOENT 도 soft-fail 하지 않고 throw.
+    // backup 이 정상 N=0 을 반환한 뒤 이어지는 store 가 spawn ENOENT(code=-1)면 자격증명
+    // 손실 방지를 위해 명시 throw 해야 한다. 조용히 넘어가면(throw 안 하면) 회귀다.
+    mockSpawn
+      .mockReturnValueOnce(fakeProc({ code: 0, stdout: '', stderr: '' })) // backup 부재(N=0)
+      .mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') })); // store spawn ENOENT
+    await expect(writeSource(src, serialized)).rejects.toThrow(/쓰기 실패/);
+    expect(findSpawnCallsByArg('store').length).toBe(1);
+  });
+
+  it('backup N=1 → store 자체가 ENOENT(spawn 실패) → throw (#73)', async () => {
+    // backup 이 정상 N=1 을 반환하고 clear 도 성공한 뒤, store 가 spawn ENOENT 면 throw.
+    // backup.account=alice 이므로 rollback store 가 한 번 더 시도되지만, 최종적으로 throw 한다.
+    mockSpawn
+      .mockReturnValueOnce(fakeProc({ code: 0, ...searchN1('old-tok', 'alice') })) // backup N=1
+      .mockReturnValueOnce(fakeProc({ code: 0 })) // clear
+      .mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') })) // store spawn ENOENT
+      .mockReturnValueOnce(fakeProc({ code: 0 })); // rollback store
+    await expect(writeSource(src, serialized)).rejects.toThrow(/쓰기 실패/);
+  });
 });
 
 describe('os-keyring — sourceExists / 입력 검증', () => {
@@ -319,12 +369,18 @@ describe('os-keyring — sourceExists / 입력 검증', () => {
     await expect(sourceExists(serviceOnly)).rejects.toBeInstanceOf(OsKeyringAccountMissingError);
   });
 
-  it('spawn error (미설치, code=-1) → false (soft-fail, throw 안 함) (#59)', async () => {
+  it('spawn ENOENT (미설치, code=-1 && spawnErrno=ENOENT) → false (soft-fail, throw 안 함) (#59)', async () => {
     // exists 도 ENOENT 면 부재로 간주해 false 반환 (throw 금지) → yaml fallback 차단 안 함.
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    mockSpawn.mockReturnValueOnce(fakeProc({ error: new Error('spawn ENOENT') }));
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
     expect(await sourceExists(src)).toBe(false);
     stderrSpy.mockRestore();
+  });
+
+  it('spawn EACCES (미설치 아님, code=-1 && spawnErrno!=ENOENT) → throw (fail-closed) (#73)', async () => {
+    // exists 도 ENOENT 아닌 spawn 실패(EACCES 등)는 부재로 오인하지 않고 throw — 결함1 가드.
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('EACCES') }));
+    await expect(sourceExists(src)).rejects.toThrow(/실행할 수 없습니다/);
   });
 
   it('exit≠0 (daemon-down) → throw (회귀 0 — infra 문제는 fail-closed 유지) (#59)', async () => {
@@ -342,5 +398,33 @@ describe('os-keyring — sourceExists / 입력 검증', () => {
   it('NUL 포함 account → throw', async () => {
     const bad: OsKeyringSource = { type: 'os-keyring', service: 'mat-svc', account: 'a\x00b', saveAs: 'c.json' };
     await expect(readSource(bad)).rejects.toThrow(/유효하지 않습니다/);
+  });
+});
+
+describe('os-keyring — 미설치 경고 가드 (모듈 1회) (#73)', () => {
+  it('같은 프로세스에서 ENOENT 2회 → 경고는 1회만 출력 (모듈 레벨 가드)', async () => {
+    // afterEach 의 resetSecretToolMissingWarnedForTest 로 가드가 false 인 상태에서 시작.
+    // ENOENT 를 두 번 트리거해도 경고 헤더([mat] 경고:)는 정확히 1회만 나와야 한다.
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    mockSpawn
+      .mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }))
+      .mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
+    expect(await readSource(src)).toBeNull();
+    expect(await readSource(src)).toBeNull();
+    const warned = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    const occurrences = warned.split('[mat] 경고:').length - 1;
+    expect(occurrences).toBe(1);
+    stderrSpy.mockRestore();
+  });
+
+  it('exists 경로 ENOENT 도 경고를 출력한다 (가드 리셋 후 첫 트리거)', async () => {
+    // 가드가 리셋된 상태에서 exists(=sourceExists) 경로의 ENOENT 가 첫 트리거면 경고가 나와야.
+    // backup 뿐 아니라 exists 경로도 warnSecretToolMissing 을 호출함을 명시 검증.
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
+    expect(await sourceExists(src)).toBe(false);
+    const warned = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(warned).toMatch(/libsecret-tools/);
+    stderrSpy.mockRestore();
   });
 });
