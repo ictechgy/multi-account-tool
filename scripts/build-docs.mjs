@@ -29,6 +29,8 @@ const OUT_DIR = join(ROOT, 'site');
 const REPO = 'ictechgy/multi-account-tool';
 const REPO_URL = `https://github.com/${REPO}`;
 const BLOB_BASE = `${REPO_URL}/blob/main/`;
+/** 배포된 문서 사이트 URL. README 상단의 이 링크는 GitHub 에서만 유용하므로 생성 사이트에선 제거(자기참조 + 히어로 오염 방지). */
+const SITE_URL = 'https://ictechgy.github.io/multi-account-tool/';
 
 /** 빌드할 페이지: README 소스 → 출력 + 언어별 UI 문자열. */
 const PAGES = [
@@ -112,6 +114,16 @@ function hideInlineLangSwitcher(html, otherHref) {
     html.slice(open + '<p>'.length, close + '</p>'.length) +
     html.slice(close + '</p>'.length)
   );
+}
+
+/** needle(예: 사이트 자기 URL)을 포함하는 첫 `<p>` 단락을 통째로 제거. (동적 RegExp 미사용 — 문자열 인덱스.) */
+function stripParagraphWith(html, needle) {
+  const at = html.indexOf(needle);
+  if (at < 0) return html;
+  const open = html.lastIndexOf('<p>', at);
+  const close = html.indexOf('</p>', at);
+  if (open < 0 || close < 0) return html;
+  return html.slice(0, open) + html.slice(close + '</p>'.length);
 }
 
 /** HTML 속성/텍스트 escape. */
@@ -441,6 +453,7 @@ async function build() {
     const md = await fs.readFile(join(ROOT, page.src), 'utf8');
     let body = rewriteLinks(addHeadingIds(marked.parse(md)));
     body = hideInlineLangSwitcher(body, page.switcher.other.href);
+    body = stripParagraphWith(body, SITE_URL); // README 의 문서 사이트 링크 줄 제거 (사이트 자기참조)
     body = body.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, '</table></div>');
     const { hero, main } = splitHero(body);
     const heroHtml = injectHeroExtras(hero, page);
