@@ -7,6 +7,7 @@
  * writeFileAtomic(실제) 를 쓰므로 mock 영향 없음.
  */
 
+import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
@@ -221,6 +222,27 @@ describe('materializeSession — 빌트인 경로 (copy-isolate, share=[config.t
     expect(await fs.readFile(copyPath, 'utf8')).toContain('[mcp_servers.added]');
   });
 
+  it('recaptureSession 은 share(config.toml)를 재캡처하지 않음 — write-back 없음 (#72)', async () => {
+    // PR 의 두 번째 핵심 주장 가드: share 는 cred 가 아니라 종료 재캡처(write-back) 대상이 아니다.
+    // collectRecaptureItems 가 root.share 를 순회하도록 잘못 바뀌면 이 가드가 FAIL 한다(회귀 방어).
+    await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    const target = await writeBaseFile('.codex/config.toml', 'model=gpt');
+    const plan = planSession(findCliDef('codex')!, 'work', SID);
+    await materializeSession(plan);
+    // 세션 안에서 config 수정(codex mcp add 등) 모사.
+    await fs.writeFile(
+      join(plan.roots[0].dir, 'config.toml'),
+      'model=gpt\n[mcp_servers.x]\ncommand = "y"\n'
+    );
+    await recaptureSession(plan);
+    // config.toml 은 cred 가 아니므로 프로필로 재캡처되지 않는다 (share 미순회 가드).
+    expect(await readProfileFile('codex', 'work', 'config.toml')).toBeNull();
+    // base config.toml 도 무손상 (재캡처는 base 를 건드리지 않는다).
+    expect(await fs.readFile(target, 'utf8')).toBe('model=gpt');
+    // 대조군: 자격증명(auth.json)은 정상 재캡처된다.
+    expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('TOKEN-A');
+  });
+
   it('codex share=[config.toml] → 세션 디렉토리에 복사본 config.toml(symlink 0개), cred(auth.json)도 실파일', async () => {
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
     await writeBaseFile('.codex/config.toml', 'model=gpt');
@@ -359,6 +381,17 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     const plan = planSession(dirDef, 'work', SID);
     await expect(materializeSession(plan)).rejects.toThrow();
     await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+  });
+
+  it('allow-list 대상이 FIFO(특수파일)면 거부 (isFile 가드 — open 블록 차단)', async () => {
+    // isFile() 가드가 디렉토리뿐 아니라 FIFO/소켓 등 비-일반 파일도 거부하는지(open 전 차단)
+    // 명시 회귀 가드. FIFO 를 O_RDONLY 로 열면 writer 부재 시 블록될 수 있어, isFile() 거부가 중요.
+    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    await fs.mkdir(join(tmp.home, '.fake'), { recursive: true });
+    execFileSync('mkfifo', [join(tmp.home, '.fake', 'config.toml')]);
+    const plan = planSession(fakeDef, 'work', SID);
+    await expect(materializeSession(plan)).rejects.toThrow(/일반 파일이 아닙니다/);
+    await expect(fs.access(sessionDir(SID))).rejects.toThrow(); // 세션 디렉토리 미잔류
   });
 });
 
@@ -554,7 +587,7 @@ describe('removeSessionDir', () => {
     await expect(removeSessionDir('../escape')).rejects.toThrow();
   });
 
-  it('정상 id → 디렉토리 삭제, symlink 대상 base 무손상', async () => {
+  it('정상 id → 디렉토리 삭제, 복사 원본 base 무손상 (copy-isolate)', async () => {
     await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
     const target = await writeBaseFile('.fake/config.toml', 'shared');
     const def: CliDef = {
@@ -567,7 +600,7 @@ describe('removeSessionDir', () => {
     await materializeSession(plan);
     await removeSessionDir(SID);
     await expect(fs.access(sessionDir(SID))).rejects.toThrow();
-    // symlink 가 가리키던 base 원본은 남아있음
+    // 복사 원본 base 는 남아있음 (격리본만 삭제 — symlink 가 아니라 별도 파일).
     expect(await fs.readFile(target, 'utf8')).toBe('shared');
   });
 });
