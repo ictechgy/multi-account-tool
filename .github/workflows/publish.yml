@@ -27,10 +27,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           # registry-url 가 설정되면 setup-node 가 .npmrc 를 자동 구성해 OIDC 인증 가능.
@@ -134,7 +134,7 @@ jobs:
 
       - name: Checkout tap repo
         if: env.PROCEED == 'yes'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ictechgy/homebrew-mat
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
