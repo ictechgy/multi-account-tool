@@ -144,8 +144,8 @@ export function validateSessionId(rawId: string): string {
  *
  * share 는 격리 세션 디렉토리와 실제 base 양쪽에 `join(dir, shareRel)` 로 합성되므로,
  * 검증 없이는 `../x`/절대경로/구분자 우회로 세션 root 밖을 가리킬 수 있다 (allow-list 가
- * 켜지는 순간 fail-open). 빌트인 메타는 현재 share=∅ 라 dead-path 지만, follow-up 으로
- * 켜기 전에 plan 단계에서 차단한다 (quad-review PR #61 Codex/Claude MEDIUM 합의).
+ * 켜지는 순간 fail-open). 빌트인 메타는 codex `config.toml` 을 share 로 쓰며(copy-isolate,
+ * #72), plan 단계에서 traversal 을 차단한다 (quad-review PR #61 Codex/Claude MEDIUM 합의).
  *
  * 규칙: 비문자열/빈문자열/NUL/절대경로 거부. `\` 를 `/` 와 동일 구분자로 취급(Windows)하고,
  * 각 세그먼트는 비어있지 않고 `.`/`..` 가 아니며 SHARE_REL_SEGMENT_RE 매치여야 한다.

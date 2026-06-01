@@ -5,6 +5,8 @@
 - **관련**: ROADMAP.md §2 (세션별 로그인 격리, 원안=자격증명 **복사**), §3 (lterm 조화), HANDOFF.md "Round 3 #2"
 
 > **개정 이력**: 최초 설계는 symlink-overlay 였으나 ralplan consensus(Architect CONCERNS + Critic ITERATE)가 코드 근거로 결함 4건을 입증 — (1) Qwen/Kimi 자격증명·config 혼재로 공유 이점 무효, (2) io-atomic 이 symlink-safe 아님, (3) 무차별 symlink=fail-open, (4) 비-secret 쓰기 공유로 "전역 무간섭" 거짓. → **copy-isolate(기본) + 명시 allow-list symlink(read-mostly config 만)** 로 전환.
+>
+> **개정 이력 2 (issue #72, 2026-06-02)**: allow-list 도 **symlink → copy-isolate(0600 복사)** 로 전환. 실측으로 codex `config.toml` 이 read-mostly 가 아님을 확인 — `codex mcp add`/`plugin add` 등이 `[mcp_servers.*]` 같은 authority-bearing 설정을 config.toml 에 **실제로 기록**한다. symlink 공유였다면 세션 내 그 명령이 base `~/.codex/config.toml` 을 변경(write-back)해 세션 격리가 깨지고 동시 세션끼리 간섭했다. 복사로 전환해 세션 수정은 격리본에만 남고 종료 시 폐기되며 재캡처(creds 전용) 대상이 아니라 **write-back 이 구조적으로 제거**된다(§6.1 한계 해소). 읽기는 `O_NOFOLLOW` 로 열어 lstat→read TOCTOU 도 막는다.
 
 ---
 
@@ -59,7 +61,7 @@ export interface SessionSpec { roots: SessionRoot[]; }
 export interface SessionRoot {
   env: string;        // 주입할 env var (예: 'CODEX_HOME')
   base: string;       // 이 env 가 재배치하는 CLI 기본 base (예: '~/.codex') — source.path 상대경로 기준
-  share?: string[];   // 명시 allow-list: 실제 base 와 symlink 공유할 read-mostly 비-secret config (base 상대경로). 자격증명은 절대 불포함.
+  share?: string[];   // 명시 allow-list: base 에서 0600 복사할 read-mostly 비-secret config (base 상대경로, copy-isolate #72 — write-back 없음). 자격증명은 절대 불포함.
 }
 // CliDef 에 `session?: SessionSpec` 추가 (optional — backward compat).
 ```
@@ -89,18 +91,18 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 `<env>=<세션디렉토리>` 로 바꾸면 CLI 는 그 디렉토리 전체를 읽는다. mat 이 **세션 디렉토리를 직접 새로 생성**하고 그 안을 다음과 같이 채운다:
 
 1. **자격증명 파일 (항상 격리 복사)**: 해당 root 에 속한 `FileSource` 들을, 프로필에 저장된 값으로 세션 디렉토리 내 네이티브 상대경로에 **복사**(`writeFileAtomic`, 0600). 세션 디렉토리는 우리가 만든 fresh 경로라 path 에 symlink 가 없어 io-atomic 안전 전제가 성립.
-2. **allow-list config (symlink 공유)**: `SessionRoot.share` 의 각 항목만 실제 base 의 해당 파일로 symlink. 생성 전 (a) 세션 측 경로 부모가 실제 디렉토리인지 `lstat` 검증, (b) 실제 base 측 대상이 symlink 가 아닌지 `lstat` 검증(symlink 면 거부, `config.ts:122` 선례). read-mostly 라 동시쓰기 위험 낮음.
+2. **allow-list config (0600 복사 — copy-isolate, #72)**: `SessionRoot.share` 의 각 항목만 실제 base 에서 세션 디렉토리로 **복사**(`writeFileAtomic`, 0600). 생성 전 (a) 세션 측 경로 부모가 실제 디렉토리인지 `lstat` 검증, (b) 실제 base 측 대상이 symlink 가 아닌지 `lstat` 검증(symlink 면 거부, `config.ts:122` 선례) + 읽기는 `O_NOFOLLOW`. 세션 수정은 격리본에만 남아 base write-back 없음(이전 symlink 공유 폐기).
 3. **그 외 base 내용**: **materialize 하지 않는다**(fail-closed). CLI 는 격리 디렉토리에서 해당 파일을 못 찾으면 자체 기본값을 쓰거나 새로 만든다(세션 내 ephemeral, 종료 시 폐기).
 4. `<env>` 를 세션 디렉토리로 set 한 subshell spawn.
 
-**효과**: 자격증명=계정별 격리(실제 base 무관), read-mostly config(Codex `config.toml`)=공유, 미지/휘발성(history/sessions/DB)=세션 내 ephemeral(공유 안 함 → 동시 쓰기 손상 0). 모르는 항목은 공유 안 함 = **fail-closed**.
+**효과**: 자격증명=계정별 격리(실제 base 무관), read-mostly config(Codex `config.toml`)=copy-isolate(시작 시점 재현·write-back 없음), 미지/휘발성(history/sessions/DB)=세션 내 ephemeral(공유 안 함 → 동시 쓰기 손상 0). 모르는 항목은 공유 안 함 = **fail-closed**.
 
 ### 4.1 source ↔ root 매핑 + 직속 제약
 - 각 `FileSource.path`(expandTilde 후)가 어느 root 의 `base` **직속**(rel = `relative(base,path)` 에 path 구분자 `/` 없음)인지 검증. 비직속(`subdir/x`)·비-file·미커버 source → `planSession` 이 **명시 에러**(추측 금지).
 - 4 CLI 자격증명은 모두 base 직속(`auth.json`/`settings.json`/`.env`/`config.toml`/`crush.json`)이라 1차 충족. 디렉토리 내부 자격증명은 follow-up.
 
 ### 4.2 io-atomic 안전성 (개정 — "미러"가 아니라 신규 보장)
-`writeFileAtomic` 의 `O_NOFOLLOW` 는 tmp 열기에만 적용되고 `rename(tmp,path)`·`mkdir(dirname)` 은 symlink-safe 가 아니다. copy-isolate 는 **자격증명을 우리가 만든 fresh 세션 디렉토리(절대 symlink 아님)에만** 쓰므로 이 위험을 회피한다. 세션 디렉토리 생성·allow-list symlink 생성 경로에 대해 부모 `lstat` 검증을 명시한다.
+`writeFileAtomic` 의 `O_NOFOLLOW` 는 tmp 열기에만 적용되고 `rename(tmp,path)`·`mkdir(dirname)` 은 symlink-safe 가 아니다. copy-isolate 는 **자격증명과 allow-list config 를 우리가 만든 fresh 세션 디렉토리(절대 symlink 아님)에만** 쓰므로 이 위험을 회피한다. allow-list 복사는 base 원본을 `O_NOFOLLOW` 로 읽고(마지막 컴포넌트 symlink swap 차단) 부모 realpath 봉쇄로 escape 를 막은 뒤 `writeFileAtomic` 로 쓴다. 세션 디렉토리 생성·복사 경로에 대해 부모 `lstat` 검증을 명시한다.
 
 ---
 
@@ -110,13 +112,13 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 1. 검증: cliId 유효, `CliDef.session` 존재(없으면 미지원 에러), profile 존재 + 자격증명 파일 존재. `planSession` 이 source↔root 매핑·직속 제약 검증(§4.1) — 실패 시 세션 디렉토리 생성 전 중단.
 2. `SessionPlan`(시작시점 고정 매핑: root별 env/dir, 자격증명 rel 목록, allow-list) 산출. 시작·종료가 동일 매핑을 쓰도록 고정(매핑 drift 차단).
 3. `sessionDir(id)` 0700 생성 + `session.json` 기록: `{ id, cli, profile, pid(본 mat 프로세스), startedAt, roots:[{env,dir}] }`.
-4. materialize(§4): 자격증명 복사 + allow-list symlink. 부분 실패 시 생성한 세션 디렉토리 롤백(rm) 후 에러.
+4. materialize(§4): 자격증명 복사 + allow-list 복사(copy-isolate, #72). 부분 실패 시 생성한 세션 디렉토리 롤백(rm) 후 에러.
 5. 시그널 forwarder 등록.
 6. subshell spawn: `process.env.SHELL || '/bin/sh'`, stdio inherit, env=`{...process.env, ...rootEnvs, MAT_SESSION=id}` (argv 배열, 셸 미경유).
 7. 자식 종료 대기(settled-guard).
 8. `finally`:
    a. **재캡처(2-phase commit)**: 각 root 자격증명 격리본 → 프로필. **multi-cred(Qwen/Crush) 는 ① 전 cred 새 값을 프로필 옆 staging 파일에 먼저 쓰고(라이브 무변경) ② 전부 stage 성공 후 일괄 commit(rename)** 한다. preflight 에서 프로필 현재값 백업, 부분 commit 실패는 **compare-and-restore** 롤백(현재 디스크값이 우리가 commit 한 값일 때만 원복/삭제 — 동시 같은-프로필 세션의 commit 을 clobber 하지 않음, PR #61 2회차). stage(byte-write) 만 `withTimeout`(liveness) 으로 감싸고, **commit(rename) 은 감싸지 않는다** — rename 은 취소 불가라 timeout 후 late-landing 하면 committed 에 없어 롤백에서 빠져 split 을 남긴다(PR #61 2회차 Codex/Forge). 완료/예외까지 기다려 롤백을 정확히 한다. `MAT_EXEC_RECAPTURE_TIMEOUT_MS` 는 `mat exec` 와 공유(`timeout.ts` 단일 출처). split 윈도우는 catastrophic-fs rename 한정.
-   b. 세션 디렉토리 삭제(symlink 는 `fs.rm` 이 링크 자체만 제거 — 대상 base 무손상).
+   b. 세션 디렉토리 삭제(allow-list config 격리본도 일반 파일이라 `fs.rm` 으로 함께 제거 — base 무손상, write-back 없음).
    c. forwarder 해제.
 9. 자식 종료 코드/시그널 전파.
 
@@ -133,7 +135,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 
 ## 6. 전역 swap / exec / lock 과의 상호작용
 - 자격증명은 **세션 격리본에만** 존재 → 실제 base 자격증명, `config.json` active map, `mat exec` cli lock 과 **무간섭**(자격증명 충돌 0).
-- 단, **allow-list 로 symlink 공유한 read-mostly config(Codex `config.toml`)는 실제 base 와 공유** → 그 파일에 한해 세션/전역 동시 쓰기 race 가 이론상 가능(자격증명 아님, read-mostly 라 위험 낮음). 명시 한계. 그 외 비-secret 은 세션 내 ephemeral 이라 공유 race 없음.
+- **allow-list config(Codex `config.toml`)도 copy-isolate(0600 복사, issue #72)** → 세션 시작 시점 설정은 재현하되, 세션 내 수정(`codex mcp add`/`plugin add` 가 `[mcp_servers.*]` 를 실제로 기록)은 격리본에만 남고 base 로 write-back 되지 않는다. **세션/전역 동시 쓰기 race 0**(이전 symlink 공유의 이론상 race 해소). 그 외 비-secret 은 세션 내 ephemeral 이라 공유 race 없음.
 
 ### 6.1 동시 **같은-프로필** 세션 재캡처 — 프로필 단위 락으로 해소 (issue #62)
 본 기능은 **터미널마다 서로 다른 프로필**을 쓰는 것이 설계 전제다(§1). 같은 cli·**같은 프로필**을 두 터미널에서 동시에 띄우는 경우(= 같은 계정)는 **프로필 단위 best-effort advisory 락**(`acquireRecaptureLock`, `lockfile.ts`)으로 해소한다:
@@ -155,14 +157,14 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 
 ## 8. 보안
 - 격리본 자격증명: `writeFileAtomic`(0600+O_NOFOLLOW) — fresh 세션 디렉토리(non-symlink) 에만 쓰기. 세션 디렉토리 0700.
-- allow-list symlink: 대상이 symlink 면 거부(`config.ts:122` 선례, fail-closed). 자격증명은 절대 symlink 아님.
+- allow-list 복사(copy-isolate, #72): base 대상이 symlink 면 거부(`config.ts:122` 선례, fail-closed) + 읽기 `O_NOFOLLOW` + 부모 realpath 봉쇄. 격리본은 0600. base write-back 없음(세션 수정은 격리본에만).
 - env 값=디렉토리 경로(비밀 아님) → argv/env 노출 무해. 토큰은 파일로만.
 - 세션 id/profile/cli 기존 validator 로 traversal 차단. orphan 삭제는 `sessionsDir()` 하위 한정.
 - `isProcessAlive`/`sanitizeForStderr` 는 lockfile.ts 에서 **export 재사용**(또는 `process-util.ts` 추출) — 동형 재구현 금지(보안 로직 분기 방지, M3).
 - 프로필 단위 재캡처 락(issue #62)의 stale-판정·회수도 cli-lock(`handleConflict`)과 `probeHolder`/`reclaimStaleLock` **단일 출처를 공유**한다(동형 재구현·재배열 금지, M3). exec 호출부는 default(`throw LockHeldError`), 재캡처는 live holder 시 폴링하도록 옵션 콜백으로만 분기해 exec 런타임 동작을 보존한다.
 
 ## 9. 테스트 전략 (TDD)
-- **단위**: source↔root 매핑/직속 제약 에러, materialize 가 자격증명=복사·allow-list=symlink·그외=부재 인지(임시 HOME), allow-list symlink 거부(symlink 대상/부모), 재캡처 multi-cred 원자성+롤백(부분 실패 시 split 안 됨), orphan 판정(pid liveness + TTL mock), `handleSession` 종료코드 반환, 미지원 CLI 에러.
+- **단위**: source↔root 매핑/직속 제약 에러, materialize 가 자격증명=복사·allow-list=복사(copy-isolate, write-back 격리 가드 포함)·그외=부재 인지(임시 HOME), allow-list 복사 거부(symlink 대상/부모), 재캡처 multi-cred 원자성+롤백(부분 실패 시 split 안 됨), orphan 판정(pid liveness + TTL mock), `handleSession` 종료코드 반환, 미지원 CLI 에러.
 - **통합(명시 PR 산출물)**: 가짜 CLI 스크립트(자격증명 읽고 rewrite)로 start→subshell(non-interactive)→재캡처 라운드트립. **동시 2세션이 서로 다른 격리본을 보는지** + 두 세션이 base 비-secret 을 건드리지 않는지(ephemeral 확인).
 - cli-defs.test 에 빌트인 4개 `session` 메타 회귀 가드. macOS + CI ubuntu 양쪽(파일/symlink 만 — secret-tool 무관).
 
@@ -177,9 +179,9 @@ mat session stop <id>               # 종료(SIGTERM) 또는 orphan 정리
 ```
 
 ## 12. ADR
-- **Decision**: 세션 격리를 env 주입 + **copy-isolate(기본) + allow-list symlink(read-mostly config)** 로 구현. 자격증명은 항상 격리 복사, 종료 시 원자적 재캡처.
+- **Decision**: 세션 격리를 env 주입 + **copy-isolate(자격증명 + allow-list config 모두 0600 복사)** 로 구현. 자격증명은 항상 격리 복사, 종료 시 원자적 재캡처. allow-list config 는 시작 시점 복사만 하고 write-back/재캡처 없음(issue #72 — 최초엔 symlink 였으나 codex 의 config.toml write-back 실측으로 복사 전환).
 - **Drivers**: (1) 자격증명 손실/오염 방지(최우선), (2) 전역/`mat exec` 무간섭, (3) 동시 다계정, (4) 기존 패턴 재사용·단순성.
 - **Alternatives**: symlink-overlay(io-atomic 비안전+fail-open+혼재 CLI 무효 → 기각), 전체 copy-isolate(allow-list 없이 — config 공유 0, 단순하나 Codex config 휘발; allow-list 가 이를 좁게 보완), env-only(자격증명 파일 못 다룸 → 기각).
 - **Why**: copy-isolate 는 fail-closed·io-atomic 부담 소거를 공짜로 얻고, 사용자 1차 요구(자격증명 격리, ROADMAP 원안=copy)와 정합. allow-list 가 분리형 config(Codex) 공유 이점을 좁고 안전하게 회복.
-- **Consequences**: (+) 자격증명 무간섭 보장, 동시 다계정, 동시쓰기 손상 0(allow-list 외). (−) allow-list 외 비-secret 은 세션 내 ephemeral, allow-list 파일은 좁은 공유 race 가능(read-mostly).
+- **Consequences**: (+) 자격증명·allow-list config 무간섭 보장, 동시 다계정, 동시쓰기 손상 0(copy-isolate 로 allow-list 공유 race 도 제거 — #72). (−) allow-list 외 비-secret 은 세션 내 ephemeral, allow-list config 의 세션 내 수정은 base 에 반영되지 않음(write-back 없음 — 영구 변경은 세션 밖에서).
 - **Follow-ups**: Crush data 비-secret 공유 확대(실측 후), Gemini/Claude/Aider/OpenCode, lterm shim, TUI.
