@@ -135,12 +135,14 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 - 자격증명은 **세션 격리본에만** 존재 → 실제 base 자격증명, `config.json` active map, `mat exec` cli lock 과 **무간섭**(자격증명 충돌 0).
 - 단, **allow-list 로 symlink 공유한 read-mostly config(Codex `config.toml`)는 실제 base 와 공유** → 그 파일에 한해 세션/전역 동시 쓰기 race 가 이론상 가능(자격증명 아님, read-mostly 라 위험 낮음). 명시 한계. 그 외 비-secret 은 세션 내 ephemeral 이라 공유 race 없음.
 
-### 6.1 동시 **같은-프로필** 세션 재캡처의 한계 (명시 — PR #61 3회차)
-본 기능은 **터미널마다 서로 다른 프로필**을 쓰는 것이 설계 전제다(§1). 같은 cli·**같은 프로필**을 두 터미널에서 동시에 띄우면(= 같은 계정), 두 세션의 종료 재캡처가 **lock 없이** 같은 프로필 파일에 쓴다. 결과:
-- 재캡처는 프로필 단위로 직렬화되지 않으므로 multi-cred(Qwen/Crush) 의 경우 두 세션의 commit 이 cred 단위로 interleave 돼 **같은 계정의 서로 다른 토큰 세대가 섞일** 수 있다(last-writer-wins / split-by-generation).
-- `rollbackCred` 의 compare-and-restore 는 **값으로만** 소유를 구분하므로, 동시 세션이 동일 값을 쓰면(ABA) 구분 못 한다.
-- **위험 범위**: 모두 **같은 계정** 내 토큰 세대 불일치이지 **wrong-account 노출이 아니다**. 최악도 한쪽 cred 가 stale → 다음 CLI 사용 시 refresh/re-auth 로 자가 치유. 단일-cred CLI(codex/kimi)는 last-writer-wins 로 양쪽 모두 유효.
-- **완전 차단**하려면 프로필 단위 advisory lock 을 재캡처 commit/rollback 구간에 도입해야 한다(`mat exec` cli-lock 과 별도 namespace — exec 충돌 회피). 이는 lock-free 설계와의 트레이드오프라 **follow-up 아키텍처 결정**으로 분리. 1차는 "터미널마다 다른 프로필" 권장 + 본 한계 명시로 운용한다.
+### 6.1 동시 **같은-프로필** 세션 재캡처 — 프로필 단위 락으로 해소 (issue #62)
+본 기능은 **터미널마다 서로 다른 프로필**을 쓰는 것이 설계 전제다(§1). 같은 cli·**같은 프로필**을 두 터미널에서 동시에 띄우는 경우(= 같은 계정)는 **프로필 단위 best-effort advisory 락**(`acquireRecaptureLock`, `lockfile.ts`)으로 해소한다:
+- **양쪽 세션이 모두 락 획득에 성공하면** 종료 재캡처의 backup-read→commit→rollback **전체가 직렬화**돼, multi-cred(Qwen/Crush) 의 cred 단위 interleave 로 cred 별 winner 가 갈리던 **split-by-generation 을 제거**한다(최종 두 cred 가 단일 세션의 일관 세대). compare-and-restore 가 cred 별 독립이라 흡수하지 못하던 cross-cred 비일관을 락 직렬화가 막는다(test 15 가드).
+- 락은 `mat exec` cli-lock 과 **별도 namespace**(`locks/recapture/<cli>/<profile>.lock`)라 exec 와 충돌하지 않는다. stale-판정 로직은 exec `handleConflict` 와 `probeHolder`/`reclaimStaleLock` **단일 출처를 공유**한다(§8 M3 충실).
+- **mid-acquire 윈도우 보호**: live holder 의 mkdir↔info.json write 마이크로초 윈도우는 `probeHolder` 의 `INFLIGHT_WRITE_WAIT_MS`(200ms) 재확인이 보호해, 살아있는 holder 를 stale 로 오판해 reclaim 하는 double-held 손상을 막는다.
+- **best-effort 범위 (무조건 직렬화 아님)**: 한쪽이라도 deadline(`RECAPTURE_LOCK_WAIT_MS`=5s) 초과/mkdir 권한오류로 락 획득에 실패하면 그 구간은 **문서화된 lock-free 2-phase commit 으로 degrade**(경고 1회)한다. 정상 경합은 holder 가 ms-scale(소형 cred byte-write, 무네트워크 — 측정 전 코드추론 근거, follow-up 으로 통합 측정)이라 폴백이 사실상 없어 거의 항상 직렬화되지만, **무조건 직렬화를 보장하지는 않는다**.
+- **위험 범위 (폴백 구간)**: 폴백 시에도 모두 **같은 계정** 내 토큰 세대 불일치이지 **wrong-account 노출이 아니다**. 최악도 한쪽 cred 가 stale → 다음 CLI 사용 시 refresh/re-auth 로 자가 치유. 단일-cred CLI(codex/kimi)는 락 없이도 결정적 last-writer-wins 라 양쪽 모두 유효.
+- **SIGKILL 누수**: 락 보유 중 SIGKILL 되면 락 디렉토리가 잔존하나, 다음 실행이 stale 회수한다(exec orphan 과 동일 한계).
 - `classifyOwner='unknown'`(서명 조회 영구 실패) 세션은 stop/reap 이 보존만 한다 → ps 가 항구적으로 불능인 비현실적 환경에선 orphan 이 남을 수 있다. 수동 삭제(`rm` 세션 디렉토리) 또는 pid 종료로 해소. auto-force-delete 는 라이브 세션 오삭제 위험이 커 도입하지 않음.
 
 ## 7. 에러 처리 / 엣지
@@ -157,6 +159,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 - env 값=디렉토리 경로(비밀 아님) → argv/env 노출 무해. 토큰은 파일로만.
 - 세션 id/profile/cli 기존 validator 로 traversal 차단. orphan 삭제는 `sessionsDir()` 하위 한정.
 - `isProcessAlive`/`sanitizeForStderr` 는 lockfile.ts 에서 **export 재사용**(또는 `process-util.ts` 추출) — 동형 재구현 금지(보안 로직 분기 방지, M3).
+- 프로필 단위 재캡처 락(issue #62)의 stale-판정·회수도 cli-lock(`handleConflict`)과 `probeHolder`/`reclaimStaleLock` **단일 출처를 공유**한다(동형 재구현·재배열 금지, M3). exec 호출부는 default(`throw LockHeldError`), 재캡처는 live holder 시 폴링하도록 옵션 콜백으로만 분기해 exec 런타임 동작을 보존한다.
 
 ## 9. 테스트 전략 (TDD)
 - **단위**: source↔root 매핑/직속 제약 에러, materialize 가 자격증명=복사·allow-list=symlink·그외=부재 인지(임시 HOME), allow-list symlink 거부(symlink 대상/부모), 재캡처 multi-cred 원자성+롤백(부분 실패 시 split 안 됨), orphan 판정(pid liveness + TTL mock), `handleSession` 종료코드 반환, 미지원 CLI 에러.
