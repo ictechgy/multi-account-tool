@@ -677,15 +677,32 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
   const childRef: { current: ChildProcess | null } = { current: null };
   const forwarders = registerSessionForwarders(childRef);
   try {
+    // 자식 pid 기록(recordChildPid)의 진행 중인 promise 를 캡처한다 (#71 결함: race + lifecycle).
+    // spawnSessionShell 은 onSpawned 를 await 없이(`void`) 시작하므로, child 가 빨리 exit 하면 spawn 이
+    // resolve 돼 아래 cleanup 으로 넘어가는데 그 시점에 recordChildPid 가 아직 ps 대기/2단계 write 중일
+    // 수 있다. cleanup 의 removeSessionDir 가 세션 디렉토리를 지운 뒤 recordChildPid 의 writeSessionMeta
+    // 가 실행되면 writeFileAtomic 의 recursive mkdir 가 삭제된 디렉토리에 session.json 만 재생성(orphan)
+    // 한다. 이를 막기 위해 record promise 를 잡아 cleanup 직전에 settle 을 보장한다.
+    let recordChildPidDone: Promise<void> = Promise.resolve();
     let spawnResult: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     let spawnError: unknown;
     try {
-      spawnResult = await spawnSessionShell(plan, childRef, (childPid) =>
-        recordChildPid(id, meta, childPid)
-      );
+      spawnResult = await spawnSessionShell(plan, childRef, (childPid) => {
+        // recordChildPid 는 내부 try/catch 로 throw 하지 않지만, 방어적으로 .catch 를 달아
+        // settle 만 보장(unhandled rejection 봉인).
+        recordChildPidDone = recordChildPid(id, meta, childPid).catch(() => {
+          /* best-effort — recordChildPid 내부에서 이미 흡수, settle 만 필요 */
+        });
+        return recordChildPidDone;
+      });
     } catch (err) {
       spawnError = err;
     }
+
+    // cleanup(재캡처/removeSessionDir) **이전에** pending 자식 pid 기록을 settle 한다 — spawn 성공/실패
+    // (콜백이 이미 시작됐을 수 있음) 무관 공통 경로. 이로써 removeSessionDir 는 항상 recordChildPid
+    // 완료 후 실행돼 삭제된 디렉토리에 orphan session.json 이 재생성되거나 recapture 와 race 하지 않는다.
+    await recordChildPidDone;
 
     // spawn 성공/실패와 무관하게 재캡처 + 정리 (exec.ts runUnderLock 패턴 미러).
     const recaptureError = await recaptureBestEffort(plan);
@@ -742,9 +759,13 @@ function makeSessionId(cliId: string, profileName: string): string {
 /**
  * subshell spawn (stdio inherit, env 에 root env + MAT_SESSION 주입, 셸 미경유 argv).
  *
- * `onSpawned` 는 spawn 직후 child.pid 가 유효한 정수일 때 1회 await 호출된다 (#63-2) — 자식 pid
- * 추적 정보를 session.json 에 기록할 기회를 호출자에게 준다. 콜백 throw/실패는 spawn 라이프사이클을
- * 막지 않게 호출자가 best-effort 로 흡수해야 한다. spawn 실패로 child.pid 가 undefined 면 호출 안 함.
+ * `onSpawned` 는 spawn 직후 child.pid 가 유효한 정수일 때 1회 호출된다 (#63-2, await 하지 않음) —
+ * 자식 pid 추적 정보를 session.json 에 기록할 기회를 호출자에게 준다. 콜백은 즉시 시작만 하고 그
+ * 완료를 여기서 기다리지 않으므로(child exit/error 이벤트로만 resolve 해 데드락 회피), runSession 이
+ * 반환된 promise 를 캡처해 종료 정리(recapture/removeSessionDir) 전에 그 완료를 보장한다 (#71 결함:
+ * 빨리 exit 한 child 의 cleanup 이 진행 중인 콜백의 write 보다 앞서 디렉토리를 지워 orphan session.json
+ * 을 남기는 race 차단). 콜백 throw/실패는 spawn 라이프사이클을 막지 않게 호출자가 best-effort 로
+ * 흡수해야 한다. spawn 실패로 child.pid 가 undefined 면 호출 안 함.
  */
 function spawnSessionShell(
   plan: SessionPlan,

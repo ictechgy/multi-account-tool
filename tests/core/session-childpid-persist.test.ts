@@ -139,3 +139,79 @@ describe('recordChildPid — 2단계 persist (childPid 가 ps 전에 기록, #71
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
   });
 });
+
+/**
+ * PR #71 결함(race + lifecycle): child 가 recordChildPid 진행 중(자식 서명 ps 대기 중)에 **먼저 exit**
+ * 하는 시나리오 — runSession 의 종료 정리(recaptureBestEffort/removeSessionDir)가 recordChildPid 의
+ * 완료를 보장하지 못하면, removeSessionDir 로 세션 디렉토리가 지워진 뒤 recordChildPid 의 2단계
+ * writeSessionMeta 가 실행돼 writeFileAtomic 의 recursive mkdir 가 **삭제된 디렉토리에 session.json 만
+ * 재생성(orphan)** 한다.
+ *
+ * 수정: runSession 이 record promise 를 캡처해 cleanup 직전에 `await` 로 settle 한다. 그러면 child 가
+ * 빨리 exit 해도 removeSessionDir 는 항상 recordChildPid 완료 후 실행돼 orphan 이 남지 않는다.
+ *
+ * 본 테스트는 자식 서명 조회(execFile child ps)를 보류시켜 recordChildPid 를 2단계 진입 전에 **pending**
+ * 으로 묶어둔 채 child exit 를 먼저 emit 한다.
+ *
+ * **결함 재현/포착 포인트**: writeFileAtomic 은 ENOENT 로 실패하지 않고 recursive mkdir 로 삭제된
+ * 디렉토리를 **재생성한 뒤 rename 을 성공**시키므로, 수정 전 코드에서 "자식 pid 기록 실패" 경고는
+ * 나오지 않는다(경고 기반 검증은 결함을 못 잡는다). 또한 2단계 write 는 수정 전 코드에서 cleanup 이
+ * resolve 된 **뒤** detached 로 일어나므로, `await runPromise` 직후가 아니라 그 detached write 가
+ * 디스크에 landing 할 시간을 충분히 흘린 **뒤** orphan(session.json) 부재를 검증해야 race 를 포착한다.
+ *  - 수정 전: removeSessionDir 가 record 완료 전에 실행 → 이후 풀린 2단계 write 가 삭제된 디렉토리에
+ *    session.json 만 재생성(orphan) → 최종 검증에서 디렉토리/파일이 **남는다**(실패).
+ *  - 수정 후: cleanup 이 `await recordChildPidDone` 에서 멈춰 2단계 write 가 먼저 정상 디렉토리에서
+ *    완료된 뒤 removeSessionDir 가 전부 삭제 → orphan **없음**(통과).
+ */
+describe('runSession — exit-before-write race (recordChildPid settle 보장, #71)', () => {
+  it('child 가 ps 대기 중 먼저 exit → cleanup 이 record settle 후 실행돼 orphan session.json 미잔류', async () => {
+    const child = spawnedChild!;
+    const runPromise = runSession({ cliId: 'codex', profileName: 'work' });
+
+    // recordChildPid 1단계(childPid write) 완료 + 2단계 ps 가 pending 으로 보류될 때까지 흘린다.
+    // 이 시점: session.json 에 childPid 있음, childPidStart 없음, 자식 ps 콜백 1개 보류.
+    let armed = false;
+    for (let i = 0; i < 200; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      const meta = await readOnlySessionMeta();
+      if (meta && meta.childPid != null && pendingChildPsCallbacks.length >= 1) {
+        armed = true;
+        break;
+      }
+    }
+    expect(armed).toBe(true); // race 윈도우(2단계 ps 보류) 확보
+
+    // child 를 **먼저** exit 시킨다 — recordChildPid 2단계(ps→write)는 아직 보류 중.
+    // spawnSessionShell 의 promise 가 resolve 되고 runSession 이 cleanup 으로 진행을 시도한다.
+    child.emit('exit', 0, null);
+
+    // exit 후 충분한 시간(매크로태스크 + 실제 fs I/O 윈도우)을 흘린다.
+    //  - 수정 전 코드: cleanup(recapture→removeSessionDir)이 record 완료를 기다리지 않고 끝까지 진행돼
+    //    이 시점에 세션 디렉토리를 이미 삭제한다(ps 는 아직 보류라 2단계 write 미실행).
+    //  - 수정 후 코드: cleanup 이 `await recordChildPidDone` 에서 멈춰 디렉토리를 아직 안 지운다
+    //    (2단계 write 가 먼저 끝나야 진행 — 그 트리거는 아래 flush).
+    for (let i = 0; i < 50; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 이제 보류된 자식 ps 를 풀어 recordChildPid 2단계(ps→writeSessionMeta)를 완료시킨다.
+    //  - 수정 전: 이미 삭제된 디렉토리에 writeFileAtomic 가 recursive mkdir 로 디렉토리를 재생성하고
+    //    rename 을 성공시켜 session.json 만 남는 orphan 을 만든다(경고 없이 조용히 재생성).
+    //  - 수정 후: 이 2단계 settle 이 끝나야 cleanup 이 진행돼 removeSessionDir 가 그 **뒤에** 실행 →
+    //    write 는 항상 정상 디렉토리에서 성공한 뒤 디렉토리 전체가 삭제 → orphan 0.
+    flushChildPs('Mon Jan  1 00:00:00 2000\n');
+
+    const result = await runPromise;
+    expect(result).toEqual({ code: 0, signal: null, recaptureError: undefined });
+
+    // 보류된 자식 ps 콜백이 모두 소진돼야 2단계 write 가 트리거된 것이다(record settle 확인).
+    expect(pendingChildPsCallbacks).toHaveLength(0);
+
+    // **결함 포착 핵심**: 수정 전 코드의 detached 2단계 write 는 runSession resolve 이후에 landing 할
+    // 수 있으므로, `await runPromise` 직후가 아니라 그 write 가 디스크에 반영될 시간을 충분히 흘린 뒤
+    // orphan 을 검증한다. 수정 전이면 여기서 삭제됐던 디렉토리에 session.json 이 재생성돼 남는다.
+    for (let i = 0; i < 100; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 핵심 단언: 세션 디렉토리가 완전히 삭제됨 — orphan session.json/디렉토리 0.
+    // (수정 전 코드에서는 재생성된 orphan 디렉토리가 남아 이 단언이 실패한다.)
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+});
