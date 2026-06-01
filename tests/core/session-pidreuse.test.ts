@@ -192,6 +192,39 @@ describe('reapOrphans / stopSession — 자식 subshell 생존 추적 (#63-2)', 
     await expect(fs.access(dir)).rejects.toThrow();
   });
 
+  it('소유 mat 죽음 + 자식 생존이나 childPidStart 미기록(unknown) + UNKNOWN_TTL 초과(25h) → 회수 (#71 결함2·3, 실제 ps)', async () => {
+    // 결함2: childPid 는 있으나 childPidStart 가 없으면(서명 미기록) liveness-only 'owner' 금지 →
+    // 'unknown'. 결함3: unknown 은 무한 보존하지 않고 UNKNOWN_TTL(24h) bounded 회수. 25h 전 → 회수.
+    // 실제 ps 환경에서도 childPidStart 필드 자체가 없으면 unknown 으로 떨어짐을 확인한다.
+    const old = new Date(Date.now() - 25 * HOUR).toISOString();
+    const dir = await makeSession('codex-work-cunk0001', {
+      pid: DEAD_PID, // 소유 mat 죽음 → dead-or-reused
+      childPid: process.pid, // 자식 생존(실제 ps 로 살아있음) 이나 childPidStart 미기록 → unknown
+      startedAt: old
+      // childPidStart 의도적 미기록 — classifyChildOwner 가 'unknown' 을 반환해야 한다(결함2).
+    });
+    const oldTime = new Date(Date.now() - 25 * HOUR);
+    await fs.utimes(dir, oldTime, oldTime);
+    const reaped = await reapOrphans();
+    expect(reaped).toContain('codex-work-cunk0001'); // unknown 도 24h 초과 → bounded 회수(무한 보존 안 함)
+    await expect(fs.access(dir)).rejects.toThrow();
+  });
+
+  it('소유 mat 죽음 + 자식 생존이나 childPidStart 미기록(unknown) + UNKNOWN_TTL 미만(2h) → 보존 (#71 결함2·3, 실제 ps)', async () => {
+    // 같은 unknown child 라도 24h 미만이면 보존 — 라이브 child 오삭제 방지(긴 TTL).
+    const old = new Date(Date.now() - 2 * HOUR).toISOString();
+    const dir = await makeSession('codex-work-cunk0002', {
+      pid: DEAD_PID, // 소유 mat 죽음 → dead-or-reused
+      childPid: process.pid, // 자식 생존이나 childPidStart 미기록 → unknown
+      startedAt: old
+    });
+    const oldTime = new Date(Date.now() - 2 * HOUR);
+    await fs.utimes(dir, oldTime, oldTime);
+    const reaped = await reapOrphans();
+    expect(reaped).not.toContain('codex-work-cunk0002'); // 24h 미만 → 보존
+    await expect(fs.access(dir)).resolves.toBeUndefined();
+  });
+
   it('stopSession: 소유 mat 죽음이어도 자식 서명 일치(생존) → 보존', async () => {
     const childSig = await processStartSignature(process.pid);
     expect(childSig).toBeTruthy();

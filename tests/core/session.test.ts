@@ -380,22 +380,41 @@ describe('listSessions / stopSession / reapOrphans', () => {
     expect(sessions.find((s) => s.id === 'codex-work-badpid01')).toBeUndefined();
   });
 
-  // ── #63-2: 자식 subshell 생존 추적 ──
+  // ── #63-2 / #71 결함2·3: 자식 subshell 생존 추적 ──
   // execFile mock-out → processStartSignature=null. 따라서 childPidStart 미기록 + 생존 childPid 는
-  // classifyPid 에서 'owner'(liveness-only) → 자식 가드가 보존한다.
+  // classifyChildOwner 에서 'unknown'(#71 결함2 — liveness-only 'owner' 금지) → reapOrphans 가
+  // unknown TTL(24h) bounded 경로로 흘려 무한 보존하지 않는다(#71 결함3). 옛 메타(childPid 부재)는
+  // 기존대로 'dead-or-reused' → ORPHAN_TTL(1h).
 
-  it('reapOrphans: 소유 mat 죽음이어도 자식 subshell 생존 시 보존 (#63-2)', async () => {
+  it('reapOrphans: 소유 mat 죽음 + 자식 childPidStart 미기록(unknown) + UNKNOWN_TTL 미만(2h) → 보존 (#71 결함2·3)', async () => {
     const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     const dir = await makeSessionWithMeta('codex-work-child001', {
       pid: DEAD_PID, // 소유 mat 죽음 → dead-or-reused
-      childPid: process.pid, // 자식 생존 (childPidStart 미기록 → liveness-only owner)
+      childPid: process.pid, // 자식 생존이나 childPidStart 미기록 → classifyChildOwner='unknown'
       startedAt: old
     });
     const oldTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
     await fs.utimes(dir, oldTime, oldTime);
     const reaped = await reapOrphans();
-    expect(reaped).not.toContain('codex-work-child001'); // 자식 생존 → 라이브 세션 보존
+    // child=unknown → 24h TTL. 2h 세션이라 TTL 미만 → 보존(라이브 child 오삭제 방지).
+    expect(reaped).not.toContain('codex-work-child001');
     await expect(fs.access(dir)).resolves.toBeUndefined();
+  });
+
+  it('reapOrphans: 소유 mat 죽음 + 자식 childPidStart 미기록(unknown) + UNKNOWN_TTL 초과(25h) → 회수 (무한 보존 안 함, #71 결함3)', async () => {
+    // 결함3 회귀 가드: 서명 없는 childPid(unknown)가 bounded TTL 을 우회해 무한 보존되던 결함 해소.
+    // 동일 unknown child 라도 24h 초과면 회수돼야 — startedAt·mtime 둘 다 25h 전.
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    const dir = await makeSessionWithMeta('codex-work-child006', {
+      pid: DEAD_PID, // 소유 mat 죽음 → dead-or-reused
+      childPid: process.pid, // 생존 childPid 이나 childPidStart 미기록 → unknown
+      startedAt: old
+    });
+    const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await fs.utimes(dir, oldTime, oldTime);
+    const reaped = await reapOrphans();
+    expect(reaped).toContain('codex-work-child006'); // unknown 도 24h 초과 → bounded 회수
+    await expect(fs.access(dir)).rejects.toThrow();
   });
 
   it('reapOrphans: 소유 mat·자식 모두 죽음 + TTL 초과 → 회수 (#63-2)', async () => {
@@ -425,14 +444,15 @@ describe('listSessions / stopSession / reapOrphans', () => {
     await expect(fs.access(dir)).rejects.toThrow();
   });
 
-  it('stopSession: dead-or-reused 라도 자식 subshell 생존 시 보존 (#63-2)', async () => {
+  it('stopSession: dead-or-reused + 자식 unknown(childPidStart 미기록) → 보존 (#63-2, #71 결함2·3)', async () => {
     const dir = await makeSessionWithMeta('codex-work-child004', {
       pid: DEAD_PID, // 소유 mat 죽음 → dead-or-reused
-      childPid: process.pid, // 자식 생존
+      childPid: process.pid, // 생존 childPid 이나 childPidStart 미기록 → classifyChildOwner='unknown'
       startedAt: new Date().toISOString()
     });
     await stopSession('codex-work-child004');
-    await expect(fs.access(dir)).resolves.toBeUndefined(); // 자식 생존 → 보존
+    // stopSession 은 TTL 없는 명시 종료라 unknown(생존 확정 불가)도 보수적으로 보존(라이브 가능성).
+    await expect(fs.access(dir)).resolves.toBeUndefined();
   });
 
   it('stopSession: dead-or-reused + 자식도 죽음 → 정리 (#63-2)', async () => {

@@ -219,6 +219,12 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
  */
 async function materializeShareLink(root: MaterializedRoot, shareRel: string): Promise<void> {
   const target = join(root.baseAbs, shareRel);
+  // 방어적 봉쇄 (#71 결함4): shareRel 은 planSession 의 validateShareRel 로 진입 시점에 이미
+  // traversal/absolute 가 차단돼 join 결과가 base 안에 있음이 보장된다. 그럼에도 아래 optional
+  // ENOENT skip 이 base-containment 검증보다 먼저이므로, "정규화된 target 이 base 안"임을 **존재
+  // 여부와 무관하게 순수 경로 레벨로 재확인**한 뒤 skip 한다(부재 대상이라 realpath 는 못 씀).
+  // 이로써 ENOENT skip 은 base 봉쇄가 보장된 경로에만 적용된다 — fail-closed 유지.
+  assertLexicallyContained(root.baseAbs, target);
   // share 대상이 base에 없으면 optional 공유로 간주해 건너뛴다(config.toml 등 read-mostly
   // 설정은 부재해도 세션 진행 무관, 자격증명 아님). ENOENT 이외의 예기치 못한 오류(권한 등)는
   // 그대로 surface한다(CLAUDE.md 에러 무시 금지 원칙). 아래 symlink/비-파일/escape 보안 검증은
@@ -248,6 +254,19 @@ async function materializeShareLink(root: MaterializedRoot, shareRel: string): P
     throw new Error(`allow-list 세션측 부모가 정상 디렉토리가 아닙니다: ${linkParent}`);
   }
   await fs.symlink(target, linkPath);
+}
+
+/**
+ * child 경로가 base 하위(또는 동일)인지 **순수 경로(lexical) 레벨**로 검증 — fs 접근 없음 (#71 결함4).
+ * realpath(assertContainedRealpath)와 달리 대상이 존재하지 않아도 쓸 수 있어, optional share 의
+ * ENOENT skip 전 봉쇄 재확인에 쓴다. symlink 컴포넌트 escape 는 대상 존재 시 assertContainedRealpath
+ * 가 별도로 막는다(이 함수는 정규화된 경로의 `..` escape 만 본다).
+ */
+function assertLexicallyContained(baseAbs: string, childAbs: string): void {
+  const rel = relative(baseAbs, childAbs);
+  if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
+    throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${childAbs}`);
+  }
 }
 
 /** child 의 realpath 가 base realpath 하위(또는 동일)인지 — symlink 컴포넌트 escape 차단. */
@@ -547,11 +566,25 @@ async function classifyOwner(meta: SessionMeta): Promise<OwnerStatus> {
 }
 
 /**
- * 자식 subshell 프로세스의 신원 판정 (#63-2). childPid 가 없는 옛 메타는 'dead-or-reused' 로
- * 보아 기존 로직(소유 mat 만 보던 동작)을 그대로 유지한다 — 호출부가 자식 가드를 skip 하게 한다.
+ * 자식 subshell 프로세스의 신원 판정 (#63-2). 부모(classifyOwner)와 달리 **자식은 서명 필수**
+ * 정책을 적용한다 (#71 결함2):
+ *  - `childPid` 없는 옛 메타 → 'dead-or-reused' (자식 가드 skip — 소유 mat 만 보던 기존 동작 유지).
+ *  - `childPid` 있으나 `childPidStart` 없음(서명 조회 실패) → **'unknown'** (liveness-only 'owner'
+ *    금지). childPid/childPidStart 는 #63 에서 새로 도입된 필드라 부모처럼 옛-메타 하위호환 대상이
+ *    아니다. 서명 없는 childPid 를 liveness-only 'owner' 로 접으면, 재사용된 child pid 가 무관
+ *    프로세스를 자식으로 오인해 stale 세션을 영구 보존한다. 따라서 서명 없으면 unknown 으로 보내
+ *    bounded TTL 회수 경로(결함3)를 타게 한다.
+ *  - `childPid` + `childPidStart` 둘 다 있음 → classifyPid 로 정상 판정(서명 일치=owner/불일치=재사용).
+ *
+ * classifyPid 의 `!pidStart→owner`(liveness-only)는 부모용으로 보존하고, 여기서만 "서명 없는
+ * childPid → unknown" 분기를 얇게 덧씌운다.
  */
 async function classifyChildOwner(meta: SessionMeta): Promise<OwnerStatus> {
   if (meta.childPid == null) return 'dead-or-reused'; // 옛 메타 — 자식 추적 정보 없음
+  // 죽은 자식 pid 는 서명 유무와 무관하게 dead-or-reused (재사용 무관 — 그냥 죽음).
+  if (!isProcessAlive(meta.childPid)) return 'dead-or-reused';
+  // 살아있으나 서명 미기록(ps 실패) → unknown. liveness-only 'owner' 금지(child pid 재사용 위험).
+  if (!meta.childPidStart) return 'unknown';
   return classifyPid(meta.childPid, meta.childPidStart);
 }
 
@@ -668,16 +701,27 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
 }
 
 /**
- * 자식 subshell pid + 시작 서명을 session.json 에 병합 기록 (#63-2, best-effort).
+ * 자식 subshell pid + 시작 서명을 session.json 에 **2단계로** 병합 기록 (#63-2, best-effort).
  *
- * spawn 직후 호출돼, 기존 meta 객체에 childPid/childPidStart 를 채운 뒤 writeSessionMeta 로
- * 재기록한다. 서명 조회 실패는 undefined 폴백(liveness-only). 기록 자체가 실패해도 경고만 남기고
- * spawn 라이프사이클을 막지 않는다 — 자식 추적은 reapOrphans 오삭제 방지용 보강이라 부재 시 옛
- * 메타와 동형으로 안전하게 degrade 한다.
+ * **2단계 persist 가 핵심 (#71 결함1)**: childPidStart 서명 조회(`processStartSignature`)는 ps
+ * exec 라 최대 PS_SIGNATURE_TIMEOUT_MS 만큼 걸린다. 한 번에 기록하면 그 ps 시간 동안 session.json
+ * 에 childPid 가 없어, 그 윈도우에 소유 mat 이 죽고 subshell 이 장기 생존하면 reapOrphans 가
+ * childPid 부재 메타를 옛 메타로 오인해 라이브 세션을 삭제할 수 있다. 따라서:
+ *  1) spawn 직후 **childPid 만 먼저** 기록 (ps 호출 전) — 보호 윈도우를 ps 시간만큼 제거한다.
+ *  2) 그 다음 서명을 구해 **childPidStart 를 후속 기록** — best-effort, 실패해도 spawn 미차단.
+ *
+ * 각 write 는 완결된 meta(half-update 아님)를 쓴다 — 1단계 후 meta 는 {childPid, childPidStart:
+ * undefined}(옛-메타 동형 liveness-only 가 아닌 unknown 으로 안전 처리됨, 결함2), 2단계 후
+ * {childPid, childPidStart} 로 in-memory/on-disk 정합을 유지한다. 서명 조회 실패는 undefined
+ * 폴백. 기록 실패는 경고만 남기고 라이프사이클을 막지 않는다 — 자식 추적은 보강이라 부재 시 안전 degrade.
  */
 async function recordChildPid(id: string, meta: SessionMeta, childPid: number): Promise<void> {
   try {
+    // 1단계: childPid 만 먼저 persist (ps 호출 전) — childPid 부재 보호 윈도우 제거.
     meta.childPid = childPid;
+    await writeSessionMeta(id, meta);
+    // 2단계: 서명을 구해 childPidStart 후속 업데이트 (best-effort). ps 가 느려도 1단계로 이미
+    // childPid 는 디스크에 있어 reapOrphans 가 라이브 세션을 옛 메타로 오삭제하지 않는다.
     meta.childPidStart = (await processStartSignature(childPid)) ?? undefined;
     await writeSessionMeta(id, meta);
   } catch (err) {
@@ -879,11 +923,13 @@ export async function stopSession(id: string): Promise<void> {
     );
     return;
   }
-  // dead-or-reused 라도 자식 subshell 이 살아있으면(또는 확정 불가) 라이브 세션이므로 정리 회피 (#63-2).
+  // dead-or-reused 라도 자식 subshell 이 살아있거나(owner) 생존 여부 확정 불가(unknown)면 라이브
+  // 세션일 수 있어 정리를 회피한다 (#63-2, #71 결함3). stopSession 은 사용자 명시 종료라 TTL 이
+  // 없으므로 unknown 도 보수적으로 보존한다 — bounded 회수는 reapOrphans 의 unknown TTL 이 담당.
   if ((await classifyChildOwner(meta)) !== 'dead-or-reused') {
     process.stderr.write(
-      `[mat] 세션 ${sanitizeForStderr(id)} 의 자식 프로세스(pid ${meta.childPid})가 살아있어 ` +
-        `정리를 생략합니다 (라이브 세션). 자식 종료 후 다시 시도하세요.\n`
+      `[mat] 세션 ${sanitizeForStderr(id)} 의 자식 프로세스(pid ${meta.childPid}) 생존 여부를 ` +
+        `확정할 수 없어 정리를 생략합니다 (라이브 세션 가능성). 자식 종료 후 다시 시도하세요.\n`
     );
     return;
   }
@@ -894,15 +940,18 @@ export async function stopSession(id: string): Promise<void> {
  * orphan 세션 회수 — 소유 프로세스 신원에 따라 회수 경로가 갈린다. 재캡처 없이 삭제 + 경고.
  * 회수한 id 목록 반환. (모든 경로에서 자식 subshell 생존 시 보존 — #63-2)
  *
- *  - `owner`(소유 mat 생존 확인): 보존.
- *  - `dead-or-reused`(소유 mat 사망/pid 재사용): startedAt·디렉토리 mtime 둘 다 ORPHAN_TTL_MS
- *    초과 시 회수 (보수적 — pid 재사용 stale 세션 영구보존 해소, PR #61 Codex H2).
- *  - `unknown`(서명 조회 실패로 확정 불가): startedAt·디렉토리 mtime 둘 다 UNKNOWN_TTL_MS(24h,
- *    ORPHAN_TTL_MS 보다 김) 초과 시에만 회수 (#63-1). pid 가 살아있어 **SIGTERM 은 보내지 않고**
- *    디렉토리만 삭제 — ps 영구 불능 환경의 orphan 무한 잔존을 막되 무관 프로세스 kill 은 피한다.
+ * 회수 여부는 소유 mat·자식 신원을 결합한 **명확한 우선순위**로 결정한다 (#71 결함3 — child
+ * 'unknown' 이 bounded TTL 을 우회해 무한 보존되던 결함 해소):
+ *  (a) 소유 mat = 'owner'(서명 확인 생존) → 무조건 보존.
+ *  (b) 자식 = 'owner'(서명 확인 생존) → 무조건 보존.
+ *  (c) 그 외 — owner/child 중 'unknown'(확정 불가)이 하나라도 끼면 **UNKNOWN_TTL_MS(24h)** 기반
+ *      bounded 회수, 둘 다 'dead-or-reused' 면 **ORPHAN_TTL_MS(1h)** 기반 회수.
  *
- * 자식 가드: dead-or-reused/unknown 이라도 자식 subshell 이 살아있거나(또는 확정 불가) 하면
- * 라이브 세션이므로 회수하지 않는다 (소유 mat 만 보던 누락 보강, #63-2).
+ * 핵심 불변식: **확실히 살아있는(owner) 부모나 자식이 있으면 절대 회수하지 않는다.** unknown 은
+ * 무한 보존하지 않고 충분히 긴 TTL(24h)로 bounded 회수해, ps 영구 불능 환경의 orphan 무한 잔존을
+ * 막되 라이브 child 오삭제는 긴 TTL 로 방지한다. pid 가 살아있어도 **SIGTERM 은 보내지 않고**
+ * 디렉토리만 삭제한다 — 무관 프로세스 kill 회피. TTL 회수는 startedAt·디렉토리 mtime 이 둘 다
+ * 초과일 때만(교차검증, M-B).
  */
 export async function reapOrphans(): Promise<string[]> {
   const now = Date.now();
@@ -910,16 +959,18 @@ export async function reapOrphans(): Promise<string[]> {
   for (const id of await listSessionIds()) {
     const meta = await readSessionMeta(id);
     if (!meta) continue;
-    const status = await classifyOwner(meta);
-    if (status === 'owner') continue; // 소유 mat 생존 → 보존
-    // 자식 subshell 이 살아있으면(확정 불가 포함) 라이브 세션 — 소유 mat 사망과 무관하게 보존.
-    if ((await classifyChildOwner(meta)) !== 'dead-or-reused') continue;
-    const ttl = status === 'unknown' ? getUnknownTtlMs() : ORPHAN_TTL_MS;
+    const ownerStatus = await classifyOwner(meta);
+    if (ownerStatus === 'owner') continue; // (a) 소유 mat 생존 확인 → 보존
+    const childStatus = await classifyChildOwner(meta);
+    if (childStatus === 'owner') continue; // (b) 자식 생존 확인 → 라이브 세션 보존
+    // (c) owner/child 중 unknown 이 하나라도 있으면 24h, 둘 다 dead-or-reused 면 1h.
+    const isUnknown = ownerStatus === 'unknown' || childStatus === 'unknown';
+    const ttl = isUnknown ? getUnknownTtlMs() : ORPHAN_TTL_MS;
     if (!(await isReapableByTtl(id, meta, now, ttl))) continue; // startedAt·mtime 둘 다 초과만 회수
     await removeSessionDir(id).catch(() => {
       /* best-effort */
     });
-    writeReapWarning(id, status);
+    writeReapWarning(id, isUnknown ? 'unknown' : 'dead-or-reused');
     reaped.push(id);
   }
   return reaped;
