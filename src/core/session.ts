@@ -309,7 +309,7 @@ async function collectRecaptureItems(plan: SessionPlan): Promise<RecaptureItem[]
         newValue = await fs.readFile(cred.absInSession, 'utf8');
       } catch {
         process.stderr.write(
-          `[mat] 세션 격리본 부재 — 재캡처 skip: ${plan.cli}/${plan.profile}/${cred.saveAs}\n`
+          `[mat] 세션 격리본 부재 — 재캡처 skip: ${sanitizeForStderr(plan.cli)}/${sanitizeForStderr(plan.profile)}/${sanitizeForStderr(cred.saveAs)}\n`
         );
         continue;
       }
@@ -671,8 +671,8 @@ async function recaptureBestEffort(plan: SessionPlan): Promise<Error | undefined
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
     process.stderr.write(
-      `[mat] 세션 종료 재캡처 실패 (${plan.cli}/${plan.profile}): ${sanitizeForStderr(e.message)}. ` +
-        `'mat freshness ${plan.cli}' 로 확인하세요.\n`
+      `[mat] 세션 종료 재캡처 실패 (${sanitizeForStderr(plan.cli)}/${sanitizeForStderr(plan.profile)}): ${sanitizeForStderr(e.message)}. ` +
+        `'mat freshness ${sanitizeForStderr(plan.cli)}' 로 확인하세요.\n`
     );
     return e;
   }
