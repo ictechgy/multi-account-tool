@@ -66,8 +66,8 @@ vi.mock('../../src/core/profile-store.js', () => ({
 }));
 
 import { findCliDef } from '../../src/core/cli-defs.js';
-import { sessionsDir } from '../../src/core/paths.js';
-import { runSession } from '../../src/core/session.js';
+import { sessionDir, sessionsDir } from '../../src/core/paths.js';
+import { reapOrphans, runSession } from '../../src/core/session.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
 const DEF = {
@@ -213,5 +213,121 @@ describe('runSession — exit-before-write race (recordChildPid settle 보장, #
     // 핵심 단언: 세션 디렉토리가 완전히 삭제됨 — orphan session.json/디렉토리 0.
     // (수정 전 코드에서는 재생성된 orphan 디렉토리가 남아 이 단언이 실패한다.)
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+});
+
+/**
+ * PR #71 round3 결함(Codex HIGH, pid-reuse): child(subshell)가 서명 캡처(ps) 전/중에 이미 exit 하고
+ * OS 가 그 pid 를 재사용하면, processStartSignature 가 무관 프로세스의 시작 서명을 잡아 childPidStart
+ * 로 굳을 수 있다 → classifyChildOwner 가 그 무관 프로세스를 '서명 일치 라이브 child owner' 로 오인해
+ * bounded TTL 을 우회한 영구 보존이 발생한다.
+ *
+ * 수정: 서명을 구한 뒤 기록 직전 isChildAlive() 로 child 생존을 재확인 — child 가 exit 했으면
+ * childPidStart 를 기록하지 않는다(undefined 유지) → classifyChildOwner 가 'unknown' → bounded TTL 회수.
+ *
+ * 본 describe 는 두 갈래를 검증한다:
+ *  (1) child 가 ps 캡처 전 exit → 최종 session.json 에 childPidStart 미기록(서명 skip).
+ *  (2) child 가 ps 캡처 동안 생존 → childPidStart 정상 기록(서명 유효).
+ * 그리고 (1) 의 산물(childPidStart 없는 메타)이 classifyChildOwner 경로에서 unknown → reapOrphans 의
+ * bounded TTL 회수 대상이 됨을 합성 메타로 end-to-end 확인한다(영구 보존 안 함).
+ */
+describe('recordChildPid — child exit 후 서명 skip (pid 재사용 방어, #71 round3 Codex HIGH)', () => {
+  /** runSession 진행 중 spawn 된 child 가 1단계(childPid) 기록 + 2단계 ps pending 까지 도달할 때까지 흘린다. */
+  async function armChildPidPending(): Promise<void> {
+    for (let i = 0; i < 200; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      const meta = await readOnlySessionMeta();
+      if (meta && meta.childPid != null && pendingChildPsCallbacks.length >= 1) return;
+    }
+    throw new Error('childPid 1단계 기록 + ps pending 윈도우 확보 실패');
+  }
+
+  it('(1) child 가 ps 서명 캡처 전 exit → childPidStart 기록 안 됨(undefined 유지)', async () => {
+    const child = spawnedChild!;
+    const runPromise = runSession({ cliId: 'codex', profileName: 'work' });
+
+    // 1단계(childPid) 기록 + 2단계 ps 가 pending 으로 보류될 때까지 흘린다.
+    await armChildPidPending();
+
+    // child 를 먼저 exit 시킨다 — emit 만으로는 exitCode 가 갱신되지 않으므로(EventEmitter 목)
+    // isChildAlive() 가 false 가 되도록 exitCode 를 명시 설정한 뒤 exit 를 emit 한다.
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+
+    // 보류된 자식 ps 를 풀어 recordChildPid 2단계를 진행시킨다 — child 가 이미 죽었으므로 서명을
+    // 구하더라도 isChildAlive() false 라 childPidStart 를 기록하지 않아야 한다.
+    flushChildPs('v1-style-but-irrelevant-signature\n');
+
+    const result = await runPromise;
+    expect(result).toEqual({ code: 0, signal: null, recaptureError: undefined });
+    expect(pendingChildPsCallbacks).toHaveLength(0); // 2단계 ps 콜백 소진 = record settle 확인
+
+    // detached write 가 남아있을 가능성까지 흘린 뒤(수정 전 race 와 동형 안전망) 최종 상태 확인.
+    for (let i = 0; i < 100; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 핵심 단언: 세션은 정상 정리됐고, child exit 로 인해 childPidStart 서명이 디스크에 굳지 않았다.
+    // (세션 디렉토리는 종료 정리로 삭제되므로 orphan 0 으로 회귀 없음을 함께 확인한다.)
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('(2) child 가 ps 서명 캡처 동안 생존 → childPidStart 정상 기록', async () => {
+    const child = spawnedChild!;
+    const runPromise = runSession({ cliId: 'codex', profileName: 'work' });
+
+    // 1단계 기록 + 2단계 ps pending 까지 흘린다 (child 는 아직 살아있음 — exitCode null).
+    await armChildPidPending();
+
+    // child 가 살아있는 동안 ps 를 flush → isChildAlive() true 라 서명을 정상 기록한다.
+    // flush 값은 raw lstart 출력 — processStartSignature 가 PID_SIG_VERSION('v1:') 접두를 붙인다.
+    // 기록이 디스크에 landing 한 직후(종료 정리 전) 메타를 관측하기 위해 exit 는 아직 emit 안 한다.
+    flushChildPs('Mon Jan  1 00:00:00 2000\n');
+
+    let metaWithSig: Record<string, unknown> | null = null;
+    for (let i = 0; i < 200; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      metaWithSig = await readOnlySessionMeta();
+      if (metaWithSig && metaWithSig.childPidStart != null) break;
+    }
+
+    // 핵심 단언: child 생존 중 캡처라 서명(childPidStart)이 정상 기록됐다(버전 접두 포함).
+    expect(metaWithSig).not.toBeNull();
+    expect(metaWithSig!.childPid).toBe(CHILD_PID);
+    expect(metaWithSig!.childPidStart).toBe('v1:Mon Jan  1 00:00:00 2000');
+
+    // 정리: child exit emit 으로 runSession 정상 종료.
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    await runPromise;
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('(3) childPidStart 없는 메타(=child exit skip 산물)는 classifyChildOwner unknown → reapOrphans bounded TTL 회수', async () => {
+    // (1) 의 산물과 동형: childPid 는 살아있으나(현재 프로세스 pid 사용) childPidStart 미기록.
+    // 소유 mat 은 죽음(존재하지 않는 pid). 결함3 의 핵심 — unknown 은 영구 보존하지 않고 bounded
+    // TTL(24h) 초과 시 회수해야 한다(25h 전 startedAt/mtime). 무관 프로세스를 confirmed owner 로
+    // 굳히지 않는다.
+    const DEAD_PID = 2147483646; // 사실상 미존재 pid → 소유 mat dead-or-reused
+    const id = 'codex-work-exitskip1';
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    const dir = sessionDir(id);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      join(dir, 'session.json'),
+      JSON.stringify({
+        id,
+        cli: 'codex',
+        profile: 'work',
+        pid: DEAD_PID,
+        childPid: process.pid, // 자식 pid 는 살아있으나 childPidStart 미기록 → unknown
+        startedAt: old,
+        roots: []
+      })
+    );
+    const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await fs.utimes(dir, oldTime, oldTime);
+
+    const reaped = await reapOrphans();
+    expect(reaped).toContain(id); // unknown → bounded TTL 초과 회수(영구 보존 안 함)
+    await expect(fs.access(dir)).rejects.toThrow();
   });
 });

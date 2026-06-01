@@ -687,10 +687,11 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
     let spawnResult: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     let spawnError: unknown;
     try {
-      spawnResult = await spawnSessionShell(plan, childRef, (childPid) => {
+      spawnResult = await spawnSessionShell(plan, childRef, (childPid, isChildAlive) => {
         // recordChildPid 는 내부 try/catch 로 throw 하지 않지만, 방어적으로 .catch 를 달아
-        // settle 만 보장(unhandled rejection 봉인).
-        recordChildPidDone = recordChildPid(id, meta, childPid).catch(() => {
+        // settle 만 보장(unhandled rejection 봉인). isChildAlive 를 함께 넘겨 서명 캡처 전/중에
+        // child 가 exit 했는지 쓰기 직전 확인하게 한다 (#71 결함: pid 재사용 서명 오기록 차단).
+        recordChildPidDone = recordChildPid(id, meta, childPid, isChildAlive).catch(() => {
           /* best-effort — recordChildPid 내부에서 이미 흡수, settle 만 필요 */
         });
         return recordChildPidDone;
@@ -731,16 +732,37 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
  * undefined}(옛-메타 동형 liveness-only 가 아닌 unknown 으로 안전 처리됨, 결함2), 2단계 후
  * {childPid, childPidStart} 로 in-memory/on-disk 정합을 유지한다. 서명 조회 실패는 undefined
  * 폴백. 기록 실패는 경고만 남기고 라이프사이클을 막지 않는다 — 자식 추적은 보강이라 부재 시 안전 degrade.
+ *
+ * **pid 재사용 방어 (#71 결함, round3 Codex HIGH)**: 서명 캡처(`processStartSignature`)는 ps exec 라
+ * 최대 PS_SIGNATURE_TIMEOUT_MS 걸린다. 그 사이 child(subshell)가 exit 하고 OS 가 그 pid 를 **재사용**
+ * 하면, ps 가 무관 프로세스의 시작 서명을 잡아 childPidStart 로 굳을 수 있다 → classifyChildOwner 가
+ * 그 무관 프로세스를 '서명 일치 라이브 child owner' 로 오인해 bounded TTL 을 우회한 영구 보존이 발생한다.
+ * 이를 막기 위해 서명을 구한 **뒤 그 값을 기록하기 직전에 `isChildAlive()` 로 child 생존을 재확인**한다.
+ * child 가 이미 종료했으면(`!isChildAlive()`) 죽은 child 의 pid 서명은 재사용된 무관 서명일 수 있어
+ * **기록하지 않는다(childPidStart 미설정 → undefined 유지)** → classifyChildOwner 가 'unknown' 으로
+ * 처리해 bounded TTL(UNKNOWN_TTL_MS) 회수 경로를 타게 한다. child 가 살아있으면 서명(또는 ps 실패 시
+ * undefined)을 정상 기록한다. childPid(1단계)는 생존 여부와 무관하게 항상 먼저 기록한다(round1 수정 유지
+ * — reapOrphans 가 옛 메타로 라이브 세션을 오삭제하는 것을 방지).
  */
-async function recordChildPid(id: string, meta: SessionMeta, childPid: number): Promise<void> {
+async function recordChildPid(
+  id: string,
+  meta: SessionMeta,
+  childPid: number,
+  isChildAlive: () => boolean
+): Promise<void> {
   try {
     // 1단계: childPid 만 먼저 persist (ps 호출 전) — childPid 부재 보호 윈도우 제거.
     meta.childPid = childPid;
     await writeSessionMeta(id, meta);
-    // 2단계: 서명을 구해 childPidStart 후속 업데이트 (best-effort). ps 가 느려도 1단계로 이미
-    // childPid 는 디스크에 있어 reapOrphans 가 라이브 세션을 옛 메타로 오삭제하지 않는다.
-    meta.childPidStart = (await processStartSignature(childPid)) ?? undefined;
-    await writeSessionMeta(id, meta);
+    // 2단계: 서명을 구한다 (best-effort). ps 가 느려도 1단계로 이미 childPid 는 디스크에 있어
+    // reapOrphans 가 라이브 세션을 옛 메타로 오삭제하지 않는다.
+    const sig = (await processStartSignature(childPid)) ?? undefined;
+    // child 가 서명 캡처 전/중 종료했으면 재사용된 pid 의 무관 서명일 수 있어 기록하지 않는다 →
+    // classifyChildOwner 가 unknown(bounded TTL)으로 처리. 살아있을 때만 서명을 persist 한다.
+    if (isChildAlive()) {
+      meta.childPidStart = sig;
+      await writeSessionMeta(id, meta);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[mat] 자식 pid 기록 실패 (계속 진행): ${sanitizeForStderr(message)}\n`);
@@ -766,11 +788,16 @@ function makeSessionId(cliId: string, profileName: string): string {
  * 빨리 exit 한 child 의 cleanup 이 진행 중인 콜백의 write 보다 앞서 디렉토리를 지워 orphan session.json
  * 을 남기는 race 차단). 콜백 throw/실패는 spawn 라이프사이클을 막지 않게 호출자가 best-effort 로
  * 흡수해야 한다. spawn 실패로 child.pid 가 undefined 면 호출 안 함.
+ *
+ * 콜백에는 `isChildAlive` 도 함께 넘긴다 (#71 round3 결함): child 객체로 `exitCode == null &&
+ * signalCode == null` 을 평가해 호출 시점의 child 생존을 알려준다. recordChildPid 가 서명 캡처(ps)
+ * 후 그 값을 기록하기 직전 이 함수로 child 가 이미 exit 했는지 확인해, 재사용된 pid 의 무관 서명을
+ * childPidStart 로 굳히지 않게 한다.
  */
 function spawnSessionShell(
   plan: SessionPlan,
   childRef: { current: ChildProcess | null },
-  onSpawned?: (childPid: number) => Promise<void>
+  onSpawned?: (childPid: number, isChildAlive: () => boolean) => Promise<void>
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve, reject) => {
     const shell = process.env.SHELL || '/bin/sh';
@@ -779,9 +806,13 @@ function spawnSessionShell(
     const child = spawn(shell, [], { stdio: 'inherit', env });
     childRef.current = child;
 
+    // child 생존 확인 함수 — exit/signal 로 종료하면 exitCode/signalCode 중 하나가 non-null 이 된다.
+    // recordChildPid 가 서명 기록 직전 호출해 죽은 child 의 재사용 pid 서명 오기록을 막는다 (#71 round3).
+    const isChildAlive = (): boolean => child.exitCode == null && child.signalCode == null;
+
     // 자식 pid 가 유효하면 추적 콜백 호출 (best-effort — 콜백 실패가 spawn 을 막지 않게 호출자 책임).
     if (onSpawned && Number.isInteger(child.pid) && (child.pid as number) > 0) {
-      void onSpawned(child.pid as number);
+      void onSpawned(child.pid as number, isChildAlive);
     }
 
     let settled = false;
