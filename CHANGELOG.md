@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-02
+
+세션별 자격증명 격리(`mat session`) 출시 + macOS 전용 keychain 을 3-OS keyring
+추상화로 확장(Linux Secret Service `secret-tool`, Goose Linux 재진입) + freshness/
+세션 동시성·공급망 보안 하드닝 사이클. v0.4.1 이후 25 PR (#46~#75) 머지.
+
+### Added
+
+- **`mat session` — 세션별 자격증명 격리 (#61)** — 터미널마다 다른 AI CLI 계정을
+  동시에 쓰는 신규 서브커맨드. `mat session start/list/stop`. env 주입(`CODEX_HOME`
+  등) + **copy-isolate**(자격증명 0600 복사, symlink 아님) + 종료 시 재캡처. 전역
+  swap/lock 미사용 → 동시 다계정. 지원: codex/qwen/kimi/crush. 재캡처 **2-phase
+  commit**(stage→commit, late-land split 차단) · **tri-state `classifyOwner`**
+  (owner/dead-or-reused/unknown — unknown 이면 삭제 안 함, wrong-kill 방지) · `ps -o
+  lstart` 시작서명(`v1:` 버전화, pid 재사용 방어). 스펙
+  `docs/superpowers/specs/2026-05-30-session-isolation-design.md`.
+- **OS keyring source type — Linux Secret Service 지원 (#53/#54/#55/#57/#58)** —
+  macOS 전용 `keychain` source 를 `os-keyring` 추상화로 확장. `OsKeyringSource`
+  타입 + exhaustiveness 가드(PR-1) · `parseSource` 의 service/account/backend enum
+  검증(PR-2) · `runCommand` stdin 주입 경로(secret 을 argv 아닌 stdin 으로, PR-3a)
+  · `secret-tool` search/clear/store 실제 구현(`src/core/os-keyring.ts` 신규, PR-3b)
+  · **Goose Linux 를 os-keyring source 로 swap**(PR-4, #58). PR #29(Goose)/#30
+  (Copilot) Linux 재진입 기반 확보.
+- **`mat freshness --check-only` 플래그 (#46)** — stale/low-conf rotated/inflight
+  감지해도 exit 0 반환(stdout 표·JSON 출력은 유지). status line widget / dashboard
+  등 read-only 모니터링 케이스가 정보는 받되 CI chain 의 exit 1 차단은 안 받게 함.
+  `UnknownCliError`(exit 2)/fs 에러(exit 74)는 우회하지 않음.
+- **프로필 단위 재캡처 advisory 락 (#62, #69)** — 동시 같은-프로필 multi-cred
+  (Qwen/Crush) split(cred 별 토큰 세대 혼합) 차단. `locks/recapture/<cli>/<profile>`
+  중첩 네임스페이스(exec cli-lock 과 별도) + bounded-wait(`RECAPTURE_LOCK_WAIT_MS`
+  =5000) + best-effort lock-free degrade. backup-read 를 락 안으로(TOCTOU 차단).
+- **세션 격리 잔여 개선 — unknown TTL + child-pid 추적 + codex config 공유 (#63,
+  #71)** — unknown 세션 bounded TTL 정리(`UNKNOWN_TTL_MS`=24h, env override) ·
+  서브셸 child-pid 추적(`classifyChildOwner` 가드로 자식 생존 시 보존) · codex
+  `config.toml` allow-list 공유.
+- **adapter 분류 contract test 인프라 + Docker Linux 개발 환경 (#50/#56)** —
+  fixture-based 분류 회귀 가드(`tests/contract/adapters.test.ts` + 20 fixture,
+  `test:contract` script) · `docker/`(ubuntu+libsecret-tools/gnome-keyring/dbus)
+  Linux Secret Service 개발/테스트 환경(`scripts/secret-tool-e2e.sh`).
+- **README 문서 사이트 — GitHub Pages, EN/KO (#64/#65/#66)** — README→HTML 빌드
+  (`scripts/build-docs.mjs`) + GitHub Actions Pages 배포. "clean modern docs"
+  디자인(IBM Plex, 라이트/다크 토글, TOC scroll-spy, 반응형).
+  https://ictechgy.github.io/multi-account-tool/
+
+### Changed
+
+- **inflight cross-source aggregation 실제 구현 (#52)** — 옛엔 inflight 분류
+  코드만 있고 발생 path 부재 → `aggregateInflight` 로 cross-source 집계 실제화.
+- **`maskIdentifier` 8 → 12 hex + `MASKING_RULES.md` 정식 문서화 (#51)** —
+  fingerprint 32-bit → 48-bit(~65K → ~16M birthday bound, fleet/audit 안전).
+  fixture 마스킹 규칙·금지 패턴·정적 분석 우회 가이드 매트릭스 문서화.
+- **`app.tsx` 순수 helper 4 모듈 분리 + `keychainSet` 3 helper 분해 (#47/#49)** —
+  `app.tsx` 1190→960 lines(`src/app/{state,formatters,validators,log}.ts` 추출) ·
+  `keychainSet` 4 책임(backup/delete/add/rollback)을 helper 3개로(CLAUDE.md ≤10
+  lines, `KeychainBackup.account` 타입으로 invariant 강제). 동작 동일.
+- **CI: GitHub Actions 를 node24 런타임으로 범프 (#67)** — checkout/setup-node/
+  configure-pages/upload-pages-artifact/deploy-pages 메이저 업데이트(node20
+  deprecation 대응). `git ls-remote`/raw `action.yml` 로 권위 확인.
+
+### Fixed
+
+- **codex `config.toml` 공유 symlink → copy-isolate 전환 — write-back 차단 (#72,
+  #74)** — codex 가 `config.toml` 에 실제로 씀(mcp add 시 `[mcp_servers.*]`)을
+  실측 → symlink 공유 시 base `~/.codex/config.toml` 오염(write-back)·동시 세션
+  간섭. `materializeShareLink`→`materializeShareCopy`(`O_NOFOLLOW` 읽기 + atomic
+  격리본 복사)로 write-back 구조적 제거. 기존 보안 봉쇄 전부 보존.
+- **Goose Linux `secret-tool` 미설치(ENOENT) 읽기 soft-fail (#59, #73)** —
+  libsecret-tools 미설치 회귀 해소. 읽기에서 spawn ENOENT 만 soft-fail(→secrets.yaml
+  fallback)+강한 stderr 경고. EACCES 등 다른 실패·daemon-down·쓰기는 fail-closed
+  throw 유지(`spawnErrno` 로 ENOENT 정확 구분).
+- **Goose Linux file-backend gating — `GOOSE_DISABLE_KEYRING` (#59, #60)** — 양성
+  증거가 있을 때만 os-keyring 생략하고 file backend 사용.
+- **persist 실패 안내 stderr → `app.log` 전환 (#48)** — Ink alternate-buffer
+  모드에서 stderr 가 화면 렌더와 충돌하던 문제를 `~/.multi-account-tool/app.log`
+  append(0600)로 회피. 디버그 audit trail 보존.
+
+### Security
+
+- **GitHub Actions 를 commit SHA 로 핀 + Dependabot 도입 (#68, #70)** — 가변 태그
+  (@v6) → 40-hex commit SHA 핀(공급망 강화) + `.github/dependabot.yml`(github-actions
+  weekly) + publish 워크플로 node 22 + `npm@11.16.0` 정확 핀. SHA 는 `git ls-remote`
+  로 권위 확정.
+
 ## [0.4.1] - 2026-05-29
 
 v0.4.0 publish 후 사용자 가시 docs 정확화 + freshness adapter 보안·DRY 강화 +
@@ -224,7 +307,8 @@ Manager source type 도입 후 재PR 예정으로 보류.
 - **Homebrew**: `ictechgy/homebrew-mat` tap (mat.rb @ 0.2.0) — `brew tap ictechgy/mat && brew install mat`.
 - **GitHub**: https://github.com/ictechgy/multi-account-tool
 
-[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.0...v0.3.1
