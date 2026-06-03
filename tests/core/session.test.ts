@@ -281,6 +281,37 @@ describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
   });
 });
 
+describe('planSession / gemini — 실제 빌트인 def 의 envSubdir 매핑 (PR-3)', () => {
+  // PR-0 은 fixture def 로 envSubdir 동작을 검증했다. 여기선 **실제 BUILTIN_CLI_DEFS 의 gemini**
+  // 를 가져와(cli-defs mock 우회 — vi.importActual) 배포되는 def 가 두 cred 를
+  // join(dir, '.gemini', rel) 로 매핑함을 고정한다(설정 회귀 가드).
+
+  /** mock 된 cli-defs 를 우회해 실제 빌트인 gemini def 를 읽는다. */
+  async function realGeminiDef(): Promise<CliDef> {
+    const actual = await vi.importActual<typeof import('../../src/core/cli-defs.js')>(
+      '../../src/core/cli-defs.js'
+    );
+    return actual.BUILTIN_CLI_DEFS.find((c) => c.id === 'gemini')!;
+  }
+
+  it('실제 빌트인 gemini def 의 두 cred 가 <주입dir>/.gemini/<rel> 로 매핑된다', async () => {
+    const def = await realGeminiDef();
+    const id = 'gemini-work-1234abcd';
+    const plan = planSession(def, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    expect(root.dir).toBe(dir); // env 주입값 = 부모(세션 디렉토리)
+    for (const cred of root.creds) {
+      expect(cred.absInSession).toBe(join(dir, '.gemini', cred.rel));
+    }
+    expect(root.creds.map((c) => c.rel).sort()).toEqual([
+      'google_accounts.json',
+      'oauth_creds.json'
+    ]);
+    expect(root.share).toEqual([]); // share=∅ (settings.json write-back 가능성)
+  });
+});
+
 describe('planSession / claude — keychain 미지원 + linux file 격리 (PR-2)', () => {
   // claude 는 platform-split: linux=file(~/.claude/.credentials.json), macOS=keychain.
   // session 정의는 unconditional 이나, planSession 은 file source 만 격리한다.

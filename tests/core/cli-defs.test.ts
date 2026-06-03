@@ -337,7 +337,16 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     });
   });
 
-  it.each(['gemini', 'aider', 'opencode', 'goose'])(
+  it('gemini: session.roots 1개 (GEMINI_CLI_HOME / ~/.gemini, envSubdir=.gemini), share 없음 (PR-3)', () => {
+    // GEMINI_CLI_HOME 은 .gemini 의 부모를 가리킨다(소스 실측) → envSubdir 로 cred 루트를 한 단계
+    // 내린다. settings.json write-back 가능성 → share=∅(통째 ephemeral). 2-cred(oauth_creds +
+    // google_accounts)는 기존 runRecaptureLocked 가 원자 그룹 처리.
+    expect(find('gemini').session).toEqual({
+      roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }]
+    });
+  });
+
+  it.each(['aider', 'opencode', 'goose'])(
     '%s: session 미지정(세션 격리 미지원)',
     (id) => {
       expect(find(id).session).toBeUndefined();

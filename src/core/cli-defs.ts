@@ -177,7 +177,15 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     sources: [
       { type: 'file', path: '~/.gemini/oauth_creds.json', saveAs: 'oauth_creds.json' },
       { type: 'file', path: '~/.gemini/google_accounts.json', saveAs: 'google_accounts.json' }
-    ]
+    ],
+    // GEMINI_CLI_HOME 으로 ~/.gemini 재배치 가능. 단, 이 env 는 `.gemini` 의 **부모**를 가리킨다
+    // (소스 실측: homedir()=GEMINI_CLI_HOME, getGlobalGeminiDir()=join(homedir(),'.gemini') —
+    // .omc/research/pr-g0-gemini-cli-home-gate.md) → envSubdir='.gemini' 로 cred 루트를 한 단계 내림.
+    // sources 불변(oauth_creds.json + google_accounts.json 2개). 2-cred 는 기존 runRecaptureLocked
+    // 가 원자 그룹으로 처리하므로 신규 인프라 불필요. share=∅ — settings.json write-back 가능성이
+    // 있어 미공유(통째 ephemeral). antigravity(agy)는 별도(~/.gemini/antigravity*, macOS keychain
+    // 가능성)라 이번 범위 밖.
+    session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] }
   },
   {
     // Aider 는 `~/.aider.conf.yml` 에 모델 + API key 를 텍스트로 보관 (env var 사용자는 별도 워크플로 필요).
