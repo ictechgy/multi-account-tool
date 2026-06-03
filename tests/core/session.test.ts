@@ -57,7 +57,6 @@ import {
 import {
   listSessions,
   materializeSession,
-  mkdirContainedNoSymlink,
   planSession,
   recaptureSession,
   reapOrphans,
@@ -308,52 +307,23 @@ describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
     await removeSessionDir(id);
   });
 
-  // quad-review agy HIGH(Issue 1) fix 회귀: nested shareRel('sub/app.json')도 credRoot 하위에 정상
-  // 복사되고, materializeShareCopy 의 새 assertContainedRealpath(credRoot, copyParent) 봉쇄가 정상
-  // 중간 디렉토리(real dir)는 통과시킨다(중간 컴포넌트 symlink escape 만 차단). 단일 세그먼트 share 와
-  // 달리 share 는 다중 세그먼트가 허용된다(validateShareRel).
-  it('nested share(sub/app.json)도 credRoot 하위에 복사 — realpath 봉쇄가 정상 경로는 통과', async () => {
-    const id = 'gemini-work-beef1234';
-    const baseGemini = join(tmp.home, '.gemini');
-    await fs.mkdir(join(baseGemini, 'sub'), { recursive: true });
-    await fs.writeFile(join(baseGemini, 'sub', 'app.json'), '{"nested":1}');
-    const def = {
-      ...GEMINI_DEF,
-      session: {
-        roots: [
-          { env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini', share: ['sub/app.json'] }
-        ]
-      }
-    } satisfies CliDef;
-    await materializeSession(planSession(def, 'work', id));
-    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
-    await expect(fs.readFile(join(dir, '.gemini', 'sub', 'app.json'), 'utf8')).resolves.toBe(
-      '{"nested":1}'
-    );
-    await removeSessionDir(id);
-  });
-
-  // quad-review round 2 (Codex MEDIUM) — 음성 회귀: nested share 의 중간 컴포넌트가 symlink 면
-  // mkdirContainedNoSymlink 가 추종 전에 throw 하고, escape 대상에 디렉토리를 만들지 않는다.
-  it('mkdirContainedNoSymlink: 중간 컴포넌트 symlink 거부 + escape 대상 미생성', async () => {
-    const root = join(tmp.home, 'croot');
-    const outside = join(tmp.home, 'outside');
-    await fs.mkdir(root, { recursive: true });
-    await fs.mkdir(outside, { recursive: true });
-    await fs.symlink(outside, join(root, 'sub')); // 중간 컴포넌트 'sub' 를 외부로 향하는 symlink 로 사전 배치
-    await expect(mkdirContainedNoSymlink(root, join(root, 'sub', 'deep'))).rejects.toThrow();
-    // escape 차단 — symlink 를 추종해 outside/deep 을 만들지 않았다.
-    await expect(fs.readdir(outside)).resolves.toEqual([]);
-  });
-
-  it('mkdirContainedNoSymlink: 정상 nested 경로는 컴포넌트별 생성', async () => {
-    const root = join(tmp.home, 'croot2');
-    await fs.mkdir(root, { recursive: true });
-    await mkdirContainedNoSymlink(root, join(root, 'a', 'b'));
-    expect((await fs.lstat(join(root, 'a', 'b'))).isDirectory()).toBe(true);
-    // 단일 세그먼트(=rootDir 자체)는 no-op.
-    await expect(mkdirContainedNoSymlink(root, root)).resolves.toBeUndefined();
-  });
+  // quad-review round 3 (Codex MEDIUM) 최종 해소: nested(다중 세그먼트) share 는 planSession 에서
+  // 거부한다 — 세션측 중간 디렉토리 생성이 path-based TOCTOU race 표면을 만들기 때문(현 빌트인은
+  // nested share 미사용이라 기능 손실 0). 단일 세그먼트 share 는 copyParent===credRoot 라 중간
+  // 컴포넌트 자체가 없어 그 클래스가 구조적으로 존재하지 않는다.
+  it.each(['sub/app.json', 'a/b/c.json'])(
+    'nested share(%s)는 planSession 에서 거부 (단일 세그먼트만 허용)',
+    (nested) => {
+      const def = {
+        ...GEMINI_DEF,
+        session: {
+          roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini', share: [nested] }]
+        }
+      } satisfies CliDef;
+      expect(() => planSession(def, 'work', 'gemini-work-beef1234')).toThrow(/단일 세그먼트/);
+    }
+  );
+  // 단일 세그먼트 share 정상 동작은 위 'envSubdir + share 조합' 테스트가 커버.
 });
 
 describe('planSession / gemini — 실제 빌트인 def 의 envSubdir 매핑 (PR-3)', () => {

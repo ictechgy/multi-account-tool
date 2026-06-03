@@ -123,6 +123,10 @@ export interface SessionRoot {
    *
    * 미지정/미포함 항목은 복사하지 않는다(fail-closed, 세션 내 ephemeral). 빌트인 메타에선
    * Codex `config.toml`(OAuth 토큰은 auth.json 에 분리 — secret-free 검증 완료)만 share 한다.
+   *
+   * 각 항목은 **단일 세그먼트**여야 한다(`'config.toml'` O, `'a/b.json'` X). nested 경로는 세션측
+   * 중간 디렉토리 생성이 path-based TOCTOU race 표면을 만들어 미지원(planSession 거부) — 단일
+   * 세그먼트면 복사 대상 부모가 항상 credRoot(이미 생성·검증)라 중간 컴포넌트가 없다.
    */
   share?: string[];
 }

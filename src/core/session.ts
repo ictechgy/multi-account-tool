@@ -174,7 +174,20 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
     const credRoot = rd.root.envSubdir != null ? join(dir, validateEnvSubdir(rd.root.envSubdir)) : dir;
     assertLexicallyContained(dir, credRoot);
     // share 항목 traversal-safe 검증 (절대/`..`/구분자 거부) — 정규화된 rel 로 통일 (Codex/Claude MED).
-    const share = (rd.root.share ?? []).map((s) => validateShareRel(s));
+    // share 는 **단일 세그먼트**만 허용한다 (nested 'a/b.json' 거부). nested share 는 세션측 중간
+    // 디렉토리 생성이 필요해 path-based traversal 의 TOCTOU race(lstat↔mkdir/write 사이 컴포넌트
+    // symlink 교체)를 구조적으로 안고 가는데(quad-review Codex), 현 빌트인은 nested share 를 쓰지
+    // 않으므로(codex='config.toml' 단일, gemini=∅) 미지원으로 봉쇄한다. 단일 세그먼트면 copyParent
+    // 가 항상 credRoot(materializeSession 이 이미 생성·non-symlink 검증)라 중간 컴포넌트 자체가 없다.
+    const share = (rd.root.share ?? []).map((s) => {
+      const seg = validateShareRel(s);
+      if (seg.includes('/')) {
+        throw new UsageError(
+          `share 항목은 단일 세그먼트여야 합니다 (nested 디렉토리 symlink TOCTOU 방지): ${s}`
+        );
+      }
+      return seg;
+    });
     const credRels = new Set(rd.creds.map((c) => c.rel));
     for (const s of share) {
       if (credRels.has(s)) {
@@ -307,17 +320,21 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
   // 미러되도록 cred 와 동일 루트에 둔다(gemini 등). envSubdir 없으면 credRoot===dir.
   const copyPath = join(root.credRoot, shareRel);
   const copyParent = dirname(copyPath);
-  // copyParent 를 credRoot 아래로 **컴포넌트별 비재귀** 생성한다 — recursive mkdir 은 nested shareRel
-  // ('a/b.json')의 중간 컴포넌트('a')가 symlink 면 추종해 세션 밖에 디렉토리를 만든 뒤에야(=쓰기 부작용
-  // 발생 후) 검증되는 잔여 TOCTOU 가 있었다 (quad-review agy HIGH→Codex MEDIUM). mkdirContainedNoSymlink
-  // 는 각 컴포넌트를 비재귀 생성하며 lstat 으로 non-symlink 디렉토리를 확인하므로, 중간 symlink 를
-  // **추종하기 전에** throw 한다 → 세션 밖 생성/escape 가 구조적으로 불가능. 단일 세그먼트 share 면
-  // copyParent===credRoot 라 즉시 통과(credRoot 는 materializeSession 이 이미 안전 생성).
-  await mkdirContainedNoSymlink(root.credRoot, copyParent);
+  // share 는 planSession 에서 **단일 세그먼트**로 강제되므로 copyParent 는 항상 credRoot 다 — 세션측에
+  // 새 중간 디렉토리를 만들지 않는다(nested share path-traversal TOCTOU 원천 제거, quad-review Codex).
+  // credRoot 는 materializeSession 이 이미 생성·non-symlink 검증했으나, 방어적으로 등식·non-symlink 를
+  // 재확인한다(불변식이 깨지면 fail-closed).
+  if (copyParent !== root.credRoot) {
+    throw new Error(`allow-list share 가 credRoot 직속이 아닙니다(단일 세그먼트 위반): ${copyPath}`);
+  }
+  const pst2 = await fs.lstat(copyParent);
+  if (!pst2.isDirectory() || pst2.isSymbolicLink()) {
+    throw new Error(`allow-list 세션측 부모(credRoot)가 정상 디렉토리가 아닙니다: ${copyParent}`);
+  }
   // base 원본을 O_NOFOLLOW 로 읽어(마지막 컴포넌트 symlink swap 차단) 격리본으로 0600 atomic 복사.
-  // 세션측 부모 디렉토리 escape 는 위 mkdirContainedNoSymlink(컴포넌트별 비재귀+lstat)가, fresh
-  // non-symlink 쓰기는 writeFileAtomic(O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와
-  // 동일 보안 모델. nested share 의 중간 디렉토리 symlink 도 추종 전 차단되므로 escape/외부 생성이 없다.
+  // 세션측은 copyParent===credRoot(단일 세그먼트 share, 위에서 non-symlink 검증)이고 fresh non-symlink
+  // 쓰기는 writeFileAtomic(O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와 동일 보안 모델.
+  // 중간 디렉토리를 만들지 않으므로 nested-path symlink TOCTOU 가 구조적으로 없다.
   // share 대상은 **UTF-8 텍스트 전제**(codex config.toml=TOML=UTF-8). 비-UTF-8 바이너리 config 를
   // share 에 추가하면 utf8 round-trip 으로 손상될 수 있어 미지원 — 그런 대상은 share 에 넣지 않는다.
   const handle = await fs.open(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -350,38 +367,6 @@ async function assertContainedRealpath(baseAbs: string, childAbs: string): Promi
   const rel = relative(baseReal, childReal);
   if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
     throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${childAbs}`);
-  }
-}
-
-/**
- * targetDir 를 rootDir 아래로 **컴포넌트별 비재귀** 생성한다 (nested share 의 중간 symlink 추종
- * 차단 — quad-review agy HIGH→Codex MEDIUM, round 2). recursive mkdir 은 중간 컴포넌트가 symlink 면
- * 추종해 세션 밖에 디렉토리를 만든 뒤에야 검증되는 잔여 TOCTOU 가 있다. 여기서는 rootDir 부터 한
- * 세그먼트씩 **비재귀** mkdir(이미 있으면 EEXIST 흡수) 후 lstat 으로 일반 디렉토리(non-symlink)임을
- * 확인하며 내려가므로, 어느 컴포넌트가 symlink 면 **추종하기 전에** throw → 세션 밖 생성/escape 가
- * 구조적으로 불가능하다. rootDir 자체는 호출 전 안전 생성·검증돼 있어야 한다(credRoot).
- * targetDir===rootDir(단일 세그먼트 share) 이면 no-op.
- *
- * 음성 회귀 테스트(중간 symlink 거부)를 위해 export 한다(다른 부작용 코어와 동일 정책).
- */
-export async function mkdirContainedNoSymlink(rootDir: string, targetDir: string): Promise<void> {
-  const rel = relative(rootDir, targetDir);
-  if (rel === '') return; // targetDir === rootDir — 이미 안전 생성됨
-  if (rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error(`세션측 share 경로가 credRoot 밖을 가리킵니다: ${targetDir}`);
-  }
-  let cur = rootDir;
-  for (const seg of rel.split(sep)) {
-    cur = join(cur, seg);
-    try {
-      await fs.mkdir(cur, { mode: 0o700 }); // 비재귀 — 부모는 직전 반복에서 생성/검증됨
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    }
-    const st = await fs.lstat(cur);
-    if (!st.isDirectory() || st.isSymbolicLink()) {
-      throw new Error(`세션측 share 경로 컴포넌트가 정상 디렉토리가 아닙니다: ${cur}`);
-    }
   }
 }
 
