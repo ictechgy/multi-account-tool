@@ -57,6 +57,7 @@ import {
 import {
   listSessions,
   materializeSession,
+  mkdirContainedNoSymlink,
   planSession,
   recaptureSession,
   reapOrphans,
@@ -330,6 +331,28 @@ describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
       '{"nested":1}'
     );
     await removeSessionDir(id);
+  });
+
+  // quad-review round 2 (Codex MEDIUM) — 음성 회귀: nested share 의 중간 컴포넌트가 symlink 면
+  // mkdirContainedNoSymlink 가 추종 전에 throw 하고, escape 대상에 디렉토리를 만들지 않는다.
+  it('mkdirContainedNoSymlink: 중간 컴포넌트 symlink 거부 + escape 대상 미생성', async () => {
+    const root = join(tmp.home, 'croot');
+    const outside = join(tmp.home, 'outside');
+    await fs.mkdir(root, { recursive: true });
+    await fs.mkdir(outside, { recursive: true });
+    await fs.symlink(outside, join(root, 'sub')); // 중간 컴포넌트 'sub' 를 외부로 향하는 symlink 로 사전 배치
+    await expect(mkdirContainedNoSymlink(root, join(root, 'sub', 'deep'))).rejects.toThrow();
+    // escape 차단 — symlink 를 추종해 outside/deep 을 만들지 않았다.
+    await expect(fs.readdir(outside)).resolves.toEqual([]);
+  });
+
+  it('mkdirContainedNoSymlink: 정상 nested 경로는 컴포넌트별 생성', async () => {
+    const root = join(tmp.home, 'croot2');
+    await fs.mkdir(root, { recursive: true });
+    await mkdirContainedNoSymlink(root, join(root, 'a', 'b'));
+    expect((await fs.lstat(join(root, 'a', 'b'))).isDirectory()).toBe(true);
+    // 단일 세그먼트(=rootDir 자체)는 no-op.
+    await expect(mkdirContainedNoSymlink(root, root)).resolves.toBeUndefined();
   });
 });
 
