@@ -257,8 +257,10 @@ describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
     expect(root.creds[0].absInSession).toBe(join(dir, 'auth.json')); // .gemini 같은 하위 세그먼트 없음
   });
 
-  it.each(['../escape', '/abs', 'a/../b', ''])(
-    'envSubdir traversal/절대/빈 값(%s) 거부 (validateShareRel 동급)',
+  // traversal/절대/빈값 + 다중 세그먼트('a/b') 거부 — validateEnvSubdir 가 단일 세그먼트 강제(중간
+  // 디렉토리 symlink TOCTOU 회피, security 리뷰 L1). 'a/../b' 는 validateShareRel '..' 세그먼트 거부.
+  it.each(['../escape', '/abs', 'a/../b', '', 'a/b', 'sub/.gemini'])(
+    'envSubdir traversal/절대/빈값/다중세그먼트(%s) 거부 (validateEnvSubdir)',
     (bad) => {
       const badDef = {
         ...GEMINI_DEF,
@@ -277,6 +279,31 @@ describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
     await expect(fs.readFile(join(dir, '.gemini', 'google_accounts.json'), 'utf8')).resolves.toBe(
       'TOK'
     );
+    await removeSessionDir(id);
+  });
+
+  // code 리뷰 MEDIUM-2: envSubdir + share 조합 branch 커버. 현 빌트인엔 둘을 함께 쓰는 CLI 가 없어
+  // (gemini=envSubdir·share∅, codex=share·envSubdir 없음) credRoot 기준 share 복사가 미검증이었다.
+  // share 격리본도 cred 와 같은 credRoot(<dir>/envSubdir) 하위에 떨어져야 base 와 1:1 미러된다.
+  it('envSubdir + share 조합: share 복사도 credRoot 하위에 떨어진다 (실제 fs)', async () => {
+    const id = 'gemini-work-cafe0000';
+    // base 에 share 대상 원본을 만들어 둔다(materializeShareCopy 가 base 에서 0600 복사).
+    const baseGemini = join(tmp.home, '.gemini');
+    await fs.mkdir(baseGemini, { recursive: true });
+    await fs.writeFile(join(baseGemini, 'config.json'), '{"cfg":true}');
+    const def = {
+      ...GEMINI_DEF,
+      session: {
+        roots: [
+          { env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini', share: ['config.json'] }
+        ]
+      }
+    } satisfies CliDef;
+    const plan = planSession(def, 'work', id);
+    await materializeSession(plan);
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    // share 복사본이 credRoot(.gemini) 하위에 위치 (root.dir 직속이 아님).
+    await expect(fs.readFile(join(dir, '.gemini', 'config.json'), 'utf8')).resolves.toBe('{"cfg":true}');
     await removeSessionDir(id);
   });
 });

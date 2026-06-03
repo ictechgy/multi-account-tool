@@ -379,13 +379,21 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
       const f = expandTilde(p);
       return f.startsWith(b) ? f.slice(b.length) : null;
     };
+    // 명시적 면제(code 리뷰 MEDIUM-1): session 정의가 있는데 현 platform 에서 file source 가 0개인
+    // def 는 keychain/os-keyring 전용(claude macOS)이라 의도된 미지원이다(planSession 런타임 throw).
+    // 그 외 def 가 file source 0개로 이 invariant 를 vacuous 통과하는 것을 막기 위해, 면제 목록에
+    // 없으면 file source ≥1 을 명시 강제한다 — 향후 session 정의를 추가하는 def 의 회귀 가드.
+    const KEYCHAIN_ONLY_CAPABLE = new Set(['claude']); // platform 에 따라 keychain-only 가능
     for (const def of BUILTIN_CLI_DEFS) {
       if (!def.session) continue;
-      for (const src of def.sources) {
-        if (src.type !== 'file') continue; // keychain/os-keyring 은 격리 대상 아님(planSession 거부)
-        const path = src.path;
+      const fileSources = def.sources.filter((s): s is Extract<typeof s, { type: 'file' }> => s.type === 'file');
+      if (fileSources.length === 0) {
+        expect(KEYCHAIN_ONLY_CAPABLE.has(def.id)).toBe(true); // 의도된 keychain-only 미지원만 허용
+        continue;
+      }
+      for (const src of fileSources) {
         const matches = def.session.roots.filter((r) => {
-          const r2 = rel(r.base, path);
+          const r2 = rel(r.base, src.path);
           return r2 !== null && !r2.includes('/');
         });
         expect(matches).toHaveLength(1); // 정확히 1 root, 직속

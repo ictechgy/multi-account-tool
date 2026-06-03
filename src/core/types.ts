@@ -109,8 +109,9 @@ export interface SessionRoot {
    * 어야 한다 → `envSubdir = '.gemini'`.
    *
    * 미지정이면 env 가 곧 base 자체다 (예: `CODEX_HOME` = `~/.codex`). 기존 빌트인
-   * (codex/kimi/qwen/crush)은 모두 base 직속이라 미지정. 지정 시 `validateShareRel` 과 동일한
-   * traversal-safe 검증(절대/`..`/구분자 거부)을 거치고, 적용 후 주입 dir 안에 lexical 봉쇄된다.
+   * (codex/kimi/qwen/crush)은 모두 base 직속이라 미지정. 지정 시 traversal-safe 검증(절대/`..`/
+   * 구분자/빈값 거부) + **단일 세그먼트** 강제(중간 디렉토리 symlink TOCTOU 회피)를 거치고, 적용 후
+   * 주입 dir 안에 lexical 봉쇄된다.
    */
   envSubdir?: string;
   /**

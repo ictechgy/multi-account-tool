@@ -104,6 +104,21 @@ function directChildRel(baseAbs: string, fileAbs: string): string | null {
 }
 
 /**
+ * SessionRoot.envSubdir 검증 — validateShareRel(traversal-safe: 절대/`..`/구분자/빈값/NUL 거부)에
+ * **단일 세그먼트** 제약을 더한다. 다중 세그먼트(`a/b`)를 막아, credRoot 의 중간 디렉토리 생성
+ * 단계에서 생길 수 있는 symlink TOCTOU(materializeSession 은 마지막 컴포넌트만 symlink 검증)를
+ * 원천 차단한다 (security 리뷰 L1, fail-closed). 현재 빌트인은 gemini `.gemini` 단일 세그먼트뿐 —
+ * 다중 세그먼트가 필요해지면 컴포넌트별 검증을 별도 도입한다.
+ */
+function validateEnvSubdir(rawSubdir: string): string {
+  const sub = validateShareRel(rawSubdir);
+  if (sub.includes('/')) {
+    throw new UsageError(`envSubdir 는 단일 세그먼트여야 합니다 (중간 디렉토리 symlink 회피): ${rawSubdir}`);
+  }
+  return sub;
+}
+
+/**
  * CliDef.session + def.sources → SessionPlan (시작 시점 매핑 고정).
  * 검증 실패는 UsageError throw (세션 생성 전 중단):
  *  - session 미지정 → 세션 격리 미지원
@@ -152,13 +167,11 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
   const roots: MaterializedRoot[] = rootData.map((rd) => {
     const dir = join(sessionDir(id), rd.root.env);
     // env 가 base 의 부모를 가리키는 CLI(예: gemini `GEMINI_CLI_HOME` → `<dir>/.gemini`)는
-    // envSubdir 로 자격증명 루트를 한 단계 내린다. validateShareRel 동급 검증(절대/`..`/구분자
-    // 거부) 후 credRoot 가 주입 dir 안에 lexical 봉쇄됨을 재확인 — credRoot 가 dir 밖을 가리키지
-    // 못한다. 미지정(undefined)이면 env 가 곧 base 라 credRoot = dir (기존 codex/kimi/qwen/crush
-    // 동작 불변). nullish 체크라 빈 문자열('')은 미지정으로 폴백하지 않고 validateShareRel 이 거부 —
-    // 빌트인 envSubdir 오설정(빈 값)을 silent 통과시키지 않고 plan 단계에서 명시 throw.
-    const credRoot =
-      rd.root.envSubdir != null ? join(dir, validateShareRel(rd.root.envSubdir)) : dir;
+    // envSubdir 로 자격증명 루트를 한 단계 내린다. validateEnvSubdir 가 traversal-safe + **단일
+    // 세그먼트** 를 강제하고, credRoot 가 주입 dir 안에 lexical 봉쇄됨을 재확인 — credRoot 가 dir
+    // 밖을 가리키지 못한다. 미지정(undefined)이면 env 가 곧 base 라 credRoot = dir (기존
+    // codex/kimi/qwen/crush 동작 불변).
+    const credRoot = rd.root.envSubdir != null ? join(dir, validateEnvSubdir(rd.root.envSubdir)) : dir;
     assertLexicallyContained(dir, credRoot);
     // share 항목 traversal-safe 검증 (절대/`..`/구분자 거부) — 정규화된 rel 로 통일 (Codex/Claude MED).
     const share = (rd.root.share ?? []).map((s) => validateShareRel(s));
