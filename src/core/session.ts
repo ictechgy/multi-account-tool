@@ -73,8 +73,13 @@ interface SessionCred {
 interface MaterializedRoot {
   /** 주입할 env var 이름. */
   env: string;
-  /** 세션 디렉토리 내 이 root 의 디렉토리 (env 값으로 주입). */
+  /** 세션 디렉토리 내 이 root 의 디렉토리 (env 값으로 주입 — base 의 부모일 수 있음, envSubdir 참고). */
   dir: string;
+  /**
+   * 자격증명/share 격리본의 실제 루트. envSubdir 가 있으면 `join(dir, envSubdir)`(예: gemini
+   * `<dir>/.gemini`), 없으면 `dir` 과 동일. base 내용과 1:1 미러 — cred/share 경로 합성의 기준.
+   */
+  credRoot: string;
   /** 실제 base 절대경로 (allow-list 복사 대상 계산용). */
   baseAbs: string;
   /** 이 root 의 자격증명 격리본 목록. */
@@ -96,6 +101,21 @@ function directChildRel(baseAbs: string, fileAbs: string): string | null {
   const rel = relative(baseAbs, fileAbs);
   if (rel === '' || rel.startsWith('..') || rel.includes(sep)) return null;
   return rel;
+}
+
+/**
+ * SessionRoot.envSubdir 검증 — validateShareRel(traversal-safe: 절대/`..`/구분자/빈값/NUL 거부)에
+ * **단일 세그먼트** 제약을 더한다. 다중 세그먼트(`a/b`)를 막아, credRoot 의 중간 디렉토리 생성
+ * 단계에서 생길 수 있는 symlink TOCTOU(materializeSession 은 마지막 컴포넌트만 symlink 검증)를
+ * 원천 차단한다 (security 리뷰 L1, fail-closed). 현재 빌트인은 gemini `.gemini` 단일 세그먼트뿐 —
+ * 다중 세그먼트가 필요해지면 컴포넌트별 검증을 별도 도입한다.
+ */
+function validateEnvSubdir(rawSubdir: string): string {
+  const sub = validateShareRel(rawSubdir);
+  if (sub.includes('/')) {
+    throw new UsageError(`envSubdir 는 단일 세그먼트여야 합니다 (중간 디렉토리 symlink 회피): ${rawSubdir}`);
+  }
+  return sub;
 }
 
 /**
@@ -121,8 +141,12 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
 
   for (const src of def.sources) {
     if (src.type !== 'file') {
+      // keychain(macOS claude)/os-keyring(linux goose) 자격증명은 파일이 아니라 OS 보안 저장소에
+      // 있어, env 디렉토리 리다이렉트(예: CLAUDE_CONFIG_DIR)로는 격리할 수 없다 — 그 env 는 파일
+      // 경로만 옮길 뿐 keychain/keyring entry 는 그대로다. 따라서 file source 만 세션 격리한다.
       throw new UsageError(
-        `세션 격리는 file source 만 지원합니다 (${def.id}: '${src.type}' source).`
+        `세션 격리는 file source 만 지원합니다 (${def.id}: '${src.type}' source). ` +
+          `keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트로 격리할 수 없습니다.`
       );
     }
     const fileAbs = expandTilde(src.path);
@@ -142,8 +166,28 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
 
   const roots: MaterializedRoot[] = rootData.map((rd) => {
     const dir = join(sessionDir(id), rd.root.env);
+    // env 가 base 의 부모를 가리키는 CLI(예: gemini `GEMINI_CLI_HOME` → `<dir>/.gemini`)는
+    // envSubdir 로 자격증명 루트를 한 단계 내린다. validateEnvSubdir 가 traversal-safe + **단일
+    // 세그먼트** 를 강제하고, credRoot 가 주입 dir 안에 lexical 봉쇄됨을 재확인 — credRoot 가 dir
+    // 밖을 가리키지 못한다. 미지정(undefined)이면 env 가 곧 base 라 credRoot = dir (기존
+    // codex/kimi/qwen/crush 동작 불변).
+    const credRoot = rd.root.envSubdir != null ? join(dir, validateEnvSubdir(rd.root.envSubdir)) : dir;
+    assertLexicallyContained(dir, credRoot);
     // share 항목 traversal-safe 검증 (절대/`..`/구분자 거부) — 정규화된 rel 로 통일 (Codex/Claude MED).
-    const share = (rd.root.share ?? []).map((s) => validateShareRel(s));
+    // share 는 **단일 세그먼트**만 허용한다 (nested 'a/b.json' 거부). nested share 는 세션측 중간
+    // 디렉토리 생성이 필요해 path-based traversal 의 TOCTOU race(lstat↔mkdir/write 사이 컴포넌트
+    // symlink 교체)를 구조적으로 안고 가는데(quad-review Codex), 현 빌트인은 nested share 를 쓰지
+    // 않으므로(codex='config.toml' 단일, gemini=∅) 미지원으로 봉쇄한다. 단일 세그먼트면 copyParent
+    // 가 항상 credRoot(materializeSession 이 이미 생성·non-symlink 검증)라 중간 컴포넌트 자체가 없다.
+    const share = (rd.root.share ?? []).map((s) => {
+      const seg = validateShareRel(s);
+      if (seg.includes('/')) {
+        throw new UsageError(
+          `share 항목은 단일 세그먼트여야 합니다 (nested 디렉토리 symlink TOCTOU 방지): ${s}`
+        );
+      }
+      return seg;
+    });
     const credRels = new Set(rd.creds.map((c) => c.rel));
     for (const s of share) {
       if (credRels.has(s)) {
@@ -153,9 +197,10 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
     return {
       env: rd.root.env,
       dir,
+      credRoot,
       baseAbs: rd.baseAbs,
       share,
-      creds: rd.creds.map((c) => ({ ...c, absInSession: join(dir, c.rel) }))
+      creds: rd.creds.map((c) => ({ ...c, absInSession: join(credRoot, c.rel) }))
     };
   });
 
@@ -189,6 +234,17 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
       await fs.mkdir(root.dir, { recursive: true, mode: 0o700 });
       if ((await fs.lstat(root.dir)).isSymbolicLink()) {
         throw new Error(`세션 root 가 symlink 입니다: ${root.dir}`);
+      }
+      // envSubdir(예: gemini `.gemini`)로 cred 루트가 dir 하위면 명시 생성 + symlink 검증 —
+      // root.dir 와 동형 방어(fresh non-symlink 경로 보장). credRoot===dir 면 위에서 이미 처리됨.
+      if (root.credRoot !== root.dir) {
+        // 단일 세그먼트 envSubdir(validateEnvSubdir 강제)라 credRoot 는 방금 만든 non-symlink root.dir 의
+        // **직속 자식**이다 → 비재귀 mkdir. 이미 존재하면(특히 symlink) EEXIST 로 즉시 실패해(fail-closed),
+        // recursive mkdir 이 기존 symlink 를 silent 추종하는 TOCTOU 를 차단한다 (quad-review agy MEDIUM).
+        await fs.mkdir(root.credRoot, { mode: 0o700 });
+        if ((await fs.lstat(root.credRoot)).isSymbolicLink()) {
+          throw new Error(`세션 cred 루트가 symlink 입니다: ${root.credRoot}`);
+        }
       }
       // (먼저) 자격증명 격리본 복사 — fresh non-symlink 경로라 io-atomic 안전.
       for (const cred of root.creds) {
@@ -260,18 +316,25 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
   }
   await assertContainedRealpath(root.baseAbs, dirname(target));
 
-  const copyPath = join(root.dir, shareRel);
+  // 세션측 복사 위치는 자격증명 루트(credRoot) 기준 — envSubdir 가 있으면 base 내용과 1:1
+  // 미러되도록 cred 와 동일 루트에 둔다(gemini 등). envSubdir 없으면 credRoot===dir.
+  const copyPath = join(root.credRoot, shareRel);
   const copyParent = dirname(copyPath);
-  await fs.mkdir(copyParent, { recursive: true, mode: 0o700 });
-  const pst = await fs.lstat(copyParent);
-  if (!pst.isDirectory() || pst.isSymbolicLink()) {
-    throw new Error(`allow-list 세션측 부모가 정상 디렉토리가 아닙니다: ${copyParent}`);
+  // share 는 planSession 에서 **단일 세그먼트**로 강제되므로 copyParent 는 항상 credRoot 다 — 세션측에
+  // 새 중간 디렉토리를 만들지 않는다(nested share path-traversal TOCTOU 원천 제거, quad-review Codex).
+  // credRoot 는 materializeSession 이 이미 생성·non-symlink 검증했으나, 방어적으로 등식·non-symlink 를
+  // 재확인한다(불변식이 깨지면 fail-closed).
+  if (copyParent !== root.credRoot) {
+    throw new Error(`allow-list share 가 credRoot 직속이 아닙니다(단일 세그먼트 위반): ${copyPath}`);
+  }
+  const pst2 = await fs.lstat(copyParent);
+  if (!pst2.isDirectory() || pst2.isSymbolicLink()) {
+    throw new Error(`allow-list 세션측 부모(credRoot)가 정상 디렉토리가 아닙니다: ${copyParent}`);
   }
   // base 원본을 O_NOFOLLOW 로 읽어(마지막 컴포넌트 symlink swap 차단) 격리본으로 0600 atomic 복사.
-  // 부모 디렉토리 escape 는 위 assertContainedRealpath 가, fresh non-symlink 쓰기는 writeFileAtomic
-  // (O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와 동일 보안 모델. 부모 컴포넌트는
-  // realpath 검증이 point-in-time 이라 nested share 의 중간 디렉토리 TOCTOU 는 이론상 잔존하나,
-  // 단일 사용자 홈 위협 모델(공격자가 이미 base 원본 접근 가능)에서 권한 상승이 없어 수용한다.
+  // 세션측은 copyParent===credRoot(단일 세그먼트 share, 위에서 non-symlink 검증)이고 fresh non-symlink
+  // 쓰기는 writeFileAtomic(O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와 동일 보안 모델.
+  // 중간 디렉토리를 만들지 않으므로 nested-path symlink TOCTOU 가 구조적으로 없다.
   // share 대상은 **UTF-8 텍스트 전제**(codex config.toml=TOML=UTF-8). 비-UTF-8 바이너리 config 를
   // share 에 추가하면 utf8 round-trip 으로 손상될 수 있어 미지원 — 그런 대상은 share 에 넣지 않는다.
   const handle = await fs.open(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);

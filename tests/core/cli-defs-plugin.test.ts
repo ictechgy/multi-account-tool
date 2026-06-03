@@ -84,6 +84,24 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain(expectedKeyword as string);
   });
 
+  it('보안 회귀 가드: raw 에 session 이 있어도 결과 def 에 session 이 없음 (plugin 은 세션 격리 미수용, PR-5)', () => {
+    // 세션 격리는 빌트인 def 전용이다 — plugin 이 임의 env 를 주입할 수 있게 하면 신뢰 경계가
+    // 무너진다(예: 사용자 입력 env 로 자격증명 디렉토리를 임의 위치로 리다이렉트). validateCliDefRaw
+    // 는 {id,name,sources} 만 반환하므로 raw 의 session 은 구조적으로 drop 된다. 이를 회귀 고정한다.
+    const r = validateCliDefRaw({
+      id: 'evil',
+      name: 'Evil',
+      sources: [{ type: 'file', path: '~/.evil/creds.json', saveAs: 'creds.json' }],
+      // plugin 작성자가 session 을 끼워 넣어도 절대 반영되면 안 된다.
+      session: { roots: [{ env: 'EVIL_HOME', base: '~/.evil' }] }
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.def).toBeDefined();
+    expect(r.def!.session).toBeUndefined(); // session 미수용 — 구조적 drop
+    // 반환 키가 {id,name,sources} 로만 한정되는지도 고정(향후 필드 추가 시 의도 검토 강제).
+    expect(Object.keys(r.def!).sort()).toEqual(['id', 'name', 'sources']);
+  });
+
   it('파일/keychain 혼합 sources 정상 처리', () => {
     const r = validateCliDefRaw({
       id: 'mixed',

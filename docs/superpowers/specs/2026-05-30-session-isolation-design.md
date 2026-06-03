@@ -35,18 +35,27 @@ mat session start codex personal   # CODEX_HOME=<세션B>/codex — A 와 독립
 
 ## 2. 가능성 매트릭스 (조사 결과, document-specialist 2026-05-30)
 
+> **개정 이력 3 (2026-06-03)**: Gemini/Claude 확대. **Gemini** = 소스 실측(gemini-cli 0.41
+> `homedir()`=`GEMINI_CLI_HOME`, `getGlobalGeminiDir()`=`join(homedir(),'.gemini')`)로 `GEMINI_CLI_HOME`
+> 이 `.gemini` 의 **부모**임을 PR-G0 게이트로 확정 → `SessionRoot.envSubdir='.gemini'` 도입(env 가
+> base 부모를 가리키는 CLI 지원, 단일 세그먼트 강제). **Claude** = platform-split: Linux 는
+> `~/.claude/.credentials.json`(file, base 직속)을 `CLAUDE_CONFIG_DIR` 로 격리(✅), macOS 는 keychain
+> 이라 env 디렉토리 리다이렉트로 격리 불가(planSession 명시 throw, ❌). settings.json 은 자격증명+config
+> 혼재라 share 제외(세션 ephemeral). Aider/OpenCode 는 이번 범위 밖(아래 표 ⚠️ 유지). 근거:
+> `.omc/research/pr-g0-gemini-cli-home-gate.md`.
+
 | CLI | 격리 | env var | credential 포함 |
 |---|---|---|---|
 | Codex | ✅ | `CODEX_HOME` (기본 `~/.codex`) | ✅ auth.json (config.toml 은 별도) |
 | Qwen | ✅ | `QWEN_HOME` (기본 `~/.qwen`) | ✅ settings.json + .env (config 혼재) |
 | Kimi | ✅ | `KIMI_SHARE_DIR` (기본 `~/.kimi`) | ✅ config.toml (config 혼재) |
 | Crush | ✅ | `CRUSH_GLOBAL_CONFIG` + `CRUSH_GLOBAL_DATA` | ✅ crush.json ×2 |
+| Gemini | ✅ | `GEMINI_CLI_HOME` (envSubdir `.gemini`) | ✅ oauth_creds.json + google_accounts.json |
+| Claude | ⚠️ linux | `CLAUDE_CONFIG_DIR` (기본 `~/.claude`) | ✅ .credentials.json (macOS=keychain ❌) |
 | Aider | ⚠️ | `AIDER_CONFIG` (config 만) | ❌ (key=provider env) |
 | OpenCode | ⚠️ | `XDG_DATA_HOME` (비공식) | 추측 |
-| Gemini | ❌ | 없음 (Issue #2815) | — |
-| Claude | ❌ | keychain service env override 없음 | — |
 
-**1차 구현 대상**: ✅ 4개 — **Codex / Qwen / Kimi / Crush**.
+**1차 구현 대상**: ✅ 4개 — **Codex / Qwen / Kimi / Crush**. **개정 3**: + **Gemini**(envSubdir) / **Claude linux**(file). macOS Claude·Aider·OpenCode 는 미지원/범위 밖.
 
 ---
 

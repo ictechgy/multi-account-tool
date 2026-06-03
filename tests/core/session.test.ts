@@ -56,8 +56,11 @@ import {
 } from '../../src/core/profile-store.js';
 import {
   listSessions,
+  materializeSession,
+  planSession,
   recaptureSession,
   reapOrphans,
+  removeSessionDir,
   runSession,
   stopSession
 } from '../../src/core/session.js';
@@ -214,6 +217,179 @@ describe('runSession', () => {
     await runSession({ cliId: 'codex', profileName: 'work' });
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(mockAcquire).not.toHaveBeenCalled();
+  });
+});
+
+describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
+  // gemini 는 GEMINI_CLI_HOME 이 `.gemini` 의 부모를 가리킨다 → envSubdir 로 cred 루트를 한 단계 내림.
+  const GEMINI_DEF = {
+    id: 'gemini',
+    name: 'Gemini (fixture)',
+    sources: [
+      { type: 'file', path: '~/.gemini/oauth_creds.json', saveAs: 'oauth_creds.json' },
+      { type: 'file', path: '~/.gemini/google_accounts.json', saveAs: 'google_accounts.json' }
+    ],
+    session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] }
+  } satisfies CliDef;
+
+  it('envSubdir 가 cred 격리본 루트를 한 단계 내린다 (<주입dir>/.gemini/<rel>)', () => {
+    const id = 'gemini-work-abcd1234';
+    const plan = planSession(GEMINI_DEF, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    expect(root.dir).toBe(dir); // env 주입값 = 부모(세션 디렉토리)
+    for (const cred of root.creds) {
+      // 격리본은 주입 dir 의 .gemini 하위 — gemini 의 getGlobalGeminiDir()=join(homedir,'.gemini') 와 정렬.
+      expect(cred.absInSession).toBe(join(dir, '.gemini', cred.rel));
+    }
+    expect(root.creds.map((c) => c.rel).sort()).toEqual([
+      'google_accounts.json',
+      'oauth_creds.json'
+    ]);
+  });
+
+  it('envSubdir 미지정(codex)은 cred 가 주입 dir 직속 — 기존 동작 불변(회귀 가드)', () => {
+    const id = 'codex-work-abcd1234';
+    const plan = planSession(DEF, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'CODEX_HOME');
+    expect(root.dir).toBe(dir);
+    expect(root.creds[0].absInSession).toBe(join(dir, 'auth.json')); // .gemini 같은 하위 세그먼트 없음
+  });
+
+  // traversal/절대/빈값 + 다중 세그먼트('a/b') 거부 — validateEnvSubdir 가 단일 세그먼트 강제(중간
+  // 디렉토리 symlink TOCTOU 회피, security 리뷰 L1). 'a/../b' 는 validateShareRel '..' 세그먼트 거부.
+  it.each(['../escape', '/abs', 'a/../b', '', 'a/b', 'sub/.gemini'])(
+    'envSubdir traversal/절대/빈값/다중세그먼트(%s) 거부 (validateEnvSubdir)',
+    (bad) => {
+      const badDef = {
+        ...GEMINI_DEF,
+        session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: bad }] }
+      } satisfies CliDef;
+      expect(() => planSession(badDef, 'work', 'gemini-work-abcd1234')).toThrow();
+    }
+  );
+
+  it('materializeSession 이 envSubdir 하위에 격리본을 쓴다 (실제 fs)', async () => {
+    const id = 'gemini-work-deadbeef';
+    const plan = planSession(GEMINI_DEF, 'work', id);
+    await materializeSession(plan); // readProfileFile mock = 'TOK'
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    await expect(fs.readFile(join(dir, '.gemini', 'oauth_creds.json'), 'utf8')).resolves.toBe('TOK');
+    await expect(fs.readFile(join(dir, '.gemini', 'google_accounts.json'), 'utf8')).resolves.toBe(
+      'TOK'
+    );
+    await removeSessionDir(id);
+  });
+
+  // code 리뷰 MEDIUM-2: envSubdir + share 조합 branch 커버. 현 빌트인엔 둘을 함께 쓰는 CLI 가 없어
+  // (gemini=envSubdir·share∅, codex=share·envSubdir 없음) credRoot 기준 share 복사가 미검증이었다.
+  // share 격리본도 cred 와 같은 credRoot(<dir>/envSubdir) 하위에 떨어져야 base 와 1:1 미러된다.
+  it('envSubdir + share 조합: share 복사도 credRoot 하위에 떨어진다 (실제 fs)', async () => {
+    const id = 'gemini-work-cafe0000';
+    // base 에 share 대상 원본을 만들어 둔다(materializeShareCopy 가 base 에서 0600 복사).
+    const baseGemini = join(tmp.home, '.gemini');
+    await fs.mkdir(baseGemini, { recursive: true });
+    await fs.writeFile(join(baseGemini, 'config.json'), '{"cfg":true}');
+    const def = {
+      ...GEMINI_DEF,
+      session: {
+        roots: [
+          { env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini', share: ['config.json'] }
+        ]
+      }
+    } satisfies CliDef;
+    const plan = planSession(def, 'work', id);
+    await materializeSession(plan);
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    // share 복사본이 credRoot(.gemini) 하위에 위치 (root.dir 직속이 아님).
+    await expect(fs.readFile(join(dir, '.gemini', 'config.json'), 'utf8')).resolves.toBe('{"cfg":true}');
+    await removeSessionDir(id);
+  });
+
+  // quad-review round 3 (Codex MEDIUM) 최종 해소: nested(다중 세그먼트) share 는 planSession 에서
+  // 거부한다 — 세션측 중간 디렉토리 생성이 path-based TOCTOU race 표면을 만들기 때문(현 빌트인은
+  // nested share 미사용이라 기능 손실 0). 단일 세그먼트 share 는 copyParent===credRoot 라 중간
+  // 컴포넌트 자체가 없어 그 클래스가 구조적으로 존재하지 않는다.
+  it.each(['sub/app.json', 'a/b/c.json'])(
+    'nested share(%s)는 planSession 에서 거부 (단일 세그먼트만 허용)',
+    (nested) => {
+      const def = {
+        ...GEMINI_DEF,
+        session: {
+          roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini', share: [nested] }]
+        }
+      } satisfies CliDef;
+      expect(() => planSession(def, 'work', 'gemini-work-beef1234')).toThrow(/단일 세그먼트/);
+    }
+  );
+  // 단일 세그먼트 share 정상 동작은 위 'envSubdir + share 조합' 테스트가 커버.
+});
+
+describe('planSession / gemini — 실제 빌트인 def 의 envSubdir 매핑 (PR-3)', () => {
+  // PR-0 은 fixture def 로 envSubdir 동작을 검증했다. 여기선 **실제 BUILTIN_CLI_DEFS 의 gemini**
+  // 를 가져와(cli-defs mock 우회 — vi.importActual) 배포되는 def 가 두 cred 를
+  // join(dir, '.gemini', rel) 로 매핑함을 고정한다(설정 회귀 가드).
+
+  /** mock 된 cli-defs 를 우회해 실제 빌트인 gemini def 를 읽는다. */
+  async function realGeminiDef(): Promise<CliDef> {
+    const actual = await vi.importActual<typeof import('../../src/core/cli-defs.js')>(
+      '../../src/core/cli-defs.js'
+    );
+    return actual.BUILTIN_CLI_DEFS.find((c) => c.id === 'gemini')!;
+  }
+
+  it('실제 빌트인 gemini def 의 두 cred 가 <주입dir>/.gemini/<rel> 로 매핑된다', async () => {
+    const def = await realGeminiDef();
+    const id = 'gemini-work-1234abcd';
+    const plan = planSession(def, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    expect(root.dir).toBe(dir); // env 주입값 = 부모(세션 디렉토리)
+    for (const cred of root.creds) {
+      expect(cred.absInSession).toBe(join(dir, '.gemini', cred.rel));
+    }
+    expect(root.creds.map((c) => c.rel).sort()).toEqual([
+      'google_accounts.json',
+      'oauth_creds.json'
+    ]);
+    expect(root.share).toEqual([]); // share=∅ (settings.json write-back 가능성)
+  });
+});
+
+describe('planSession / claude — keychain 미지원 + linux file 격리 (PR-2)', () => {
+  // claude 는 platform-split: linux=file(~/.claude/.credentials.json), macOS=keychain.
+  // session 정의는 unconditional 이나, planSession 은 file source 만 격리한다.
+
+  it('keychain source(macOS claude) + session → planSession 이 보강된 메시지로 throw', () => {
+    const claudeKeychainDef = {
+      id: 'claude',
+      name: 'Claude Code (keychain fixture)',
+      sources: [{ type: 'keychain', service: 'Claude Code-credentials', saveAs: 'credentials.json' }],
+      session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] }
+    } satisfies CliDef;
+    // 비-file source 거부 + keychain/OS-keyring 은 env 리다이렉트로 격리 불가 안내(메시지 보강).
+    expect(() => planSession(claudeKeychainDef, 'work', 'claude-work-abcd1234')).toThrow(
+      /file source 만 지원|keychain\/OS-keyring/
+    );
+  });
+
+  it('file source(linux claude) + session → planSession 정상 (base 직속, envSubdir 없음)', () => {
+    const claudeFileDef = {
+      id: 'claude',
+      name: 'Claude Code (file fixture)',
+      sources: [{ type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' }],
+      session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] }
+    } satisfies CliDef;
+    const id = 'claude-work-abcd1234';
+    const plan = planSession(claudeFileDef, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'CLAUDE_CONFIG_DIR');
+    expect(root.dir).toBe(dir);
+    // base 직속(envSubdir 없음) → credRoot=dir, 격리본은 dir 직속 credentials.json.
+    expect(root.creds).toHaveLength(1);
+    expect(root.creds[0].rel).toBe('.credentials.json'); // base 기준 상대경로
+    expect(root.creds[0].absInSession).toBe(join(dir, '.credentials.json'));
   });
 });
 

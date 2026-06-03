@@ -329,7 +329,24 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     });
   });
 
-  it.each(['claude', 'gemini', 'aider', 'opencode', 'goose'])(
+  it('claude: session.roots 1개 (CLAUDE_CONFIG_DIR / ~/.claude), share 없음 (PR-2)', () => {
+    // base 직속 자격증명(linux file source)이라 envSubdir 불필요. settings.json 은 자격증명+config
+    // 혼재라 share 금지(세션 ephemeral). platform 무관 — session 은 unconditional 정의.
+    expect(find('claude').session).toEqual({
+      roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }]
+    });
+  });
+
+  it('gemini: session.roots 1개 (GEMINI_CLI_HOME / ~/.gemini, envSubdir=.gemini), share 없음 (PR-3)', () => {
+    // GEMINI_CLI_HOME 은 .gemini 의 부모를 가리킨다(소스 실측) → envSubdir 로 cred 루트를 한 단계
+    // 내린다. settings.json write-back 가능성 → share=∅(통째 ephemeral). 2-cred(oauth_creds +
+    // google_accounts)는 기존 runRecaptureLocked 가 원자 그룹 처리.
+    expect(find('gemini').session).toEqual({
+      roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }]
+    });
+  });
+
+  it.each(['aider', 'opencode', 'goose'])(
     '%s: session 미지정(세션 격리 미지원)',
     (id) => {
       expect(find(id).session).toBeUndefined();
@@ -350,21 +367,33 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     }
   });
 
-  it('정적 invariant: 모든 자격증명 source 는 정확히 1개 root 의 base 직속(rel 에 path 구분자 없음)', () => {
+  it('정적 invariant: 모든 file 자격증명 source 는 정확히 1개 root 의 base 직속(rel 에 path 구분자 없음)', () => {
     // 각 session-capable CLI 의 file source path 가 어느 root base 의 직속 자식인지.
     // crush 2-root 가 서로 prefix 가 아니라 각 crush.json 이 정확히 1 root 에 귀속됨도 함께 검증.
+    //
+    // 비-file source(claude macOS=keychain 등)는 platform-split 으로 session 정의는 있으나 격리
+    // 불가다 — planSession 이 런타임에 명시 throw 한다(아래 'planSession / claude' describe). 따라서
+    // 본 정적 invariant 는 **file source 만** base 직속을 검증하고, 비-file source 는 건너뛴다.
     const rel = (base: string, p: string) => {
       const b = expandTilde(base).replace(/\/+$/, '') + '/';
       const f = expandTilde(p);
       return f.startsWith(b) ? f.slice(b.length) : null;
     };
+    // 명시적 면제(code 리뷰 MEDIUM-1): session 정의가 있는데 현 platform 에서 file source 가 0개인
+    // def 는 keychain/os-keyring 전용(claude macOS)이라 의도된 미지원이다(planSession 런타임 throw).
+    // 그 외 def 가 file source 0개로 이 invariant 를 vacuous 통과하는 것을 막기 위해, 면제 목록에
+    // 없으면 file source ≥1 을 명시 강제한다 — 향후 session 정의를 추가하는 def 의 회귀 가드.
+    const KEYCHAIN_ONLY_CAPABLE = new Set(['claude']); // platform 에 따라 keychain-only 가능
     for (const def of BUILTIN_CLI_DEFS) {
       if (!def.session) continue;
-      for (const src of def.sources) {
-        expect(src.type).toBe('file');
-        const path = (src as { path: string }).path;
+      const fileSources = def.sources.filter((s): s is Extract<typeof s, { type: 'file' }> => s.type === 'file');
+      if (fileSources.length === 0) {
+        expect(KEYCHAIN_ONLY_CAPABLE.has(def.id)).toBe(true); // 의도된 keychain-only 미지원만 허용
+        continue;
+      }
+      for (const src of fileSources) {
         const matches = def.session.roots.filter((r) => {
-          const r2 = rel(r.base, path);
+          const r2 = rel(r.base, src.path);
           return r2 !== null && !r2.includes('/');
         });
         expect(matches).toHaveLength(1); // 정확히 1 root, 직속

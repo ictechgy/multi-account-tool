@@ -24,6 +24,7 @@ import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const FAKE_CLI = join(FIXTURES, 'fake-cli.mjs');
 const FAKE_CLI_MULTICRED = join(FIXTURES, 'fake-cli-multicred.mjs');
+const FAKE_CLI_GEMINI = join(FIXTURES, 'fake-cli-gemini.mjs');
 
 let tmp: TmpHome;
 let originalShell: string | undefined;
@@ -134,5 +135,54 @@ describe('session 통합 — 동시 같은-프로필 multi-cred 직렬화 (Qwen,
     expect(envWinner).toBe(settingsWinner);
     // 모든 세션 디렉토리 정리됨.
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+});
+
+/**
+ * PR-3: gemini 2-cred 세션 격리 라운드트립. gemini 는 GEMINI_CLI_HOME 이 `.gemini` 의 부모를
+ * 가리켜 envSubdir='.gemini' 로 cred 루트를 한 단계 내린다(소스 실측). 실제 빌트인 gemini def
+ * (findCliDef 미mock — 통합)로 runSession 을 돌려, 격리본이 `<주입dir>/.gemini/<rel>` 에 만들어지고
+ * 두 cred(oauth_creds + google_accounts)가 종료 재캡처로 프로필에 함께 반영되는지 검증한다.
+ */
+describe('session 통합 — gemini 2-cred 라운드트립 (envSubdir, PR-3)', () => {
+  beforeEach(async () => {
+    await fs.chmod(FAKE_CLI_GEMINI, 0o755); // git +x 미보존 환경 대비
+    process.env.SHELL = FAKE_CLI_GEMINI; // gemini fake-cli 로 교체
+  });
+  // afterEach 는 상위 describe 밖 전역 afterEach 가 SHELL 복원 + tmp cleanup 수행.
+
+  it('라운드트립: 격리본 .gemini/ 하위 rewrite → 두 cred 모두 프로필에 재캡처', async () => {
+    await writeProfileFile('gemini', 'work', 'oauth_creds.json', 'OAUTH');
+    await writeProfileFile('gemini', 'work', 'google_accounts.json', 'ACCTS');
+
+    const result = await runSession({ cliId: 'gemini', profileName: 'work' });
+    expect(result.code).toBe(0);
+    expect(result.recaptureError).toBeUndefined();
+
+    const oauth = await readProfileFile('gemini', 'work', 'oauth_creds.json');
+    const accts = await readProfileFile('gemini', 'work', 'google_accounts.json');
+    // 두 cred 모두 동일 세션 ROT 마커로 재캡처 — 2-cred 원자 그룹 반영.
+    expect(oauth).toMatch(/^OAUTH\+ROT:gemini-work-[0-9a-f]{8}$/);
+    expect(accts).toMatch(/^ACCTS\+ROT:gemini-work-[0-9a-f]{8}$/);
+    // 세션 디렉토리 정리됨.
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('base ~/.gemini 자격증명 무손상 (copy-isolate — 세션은 격리본만 수정)', async () => {
+    await writeProfileFile('gemini', 'work', 'oauth_creds.json', 'OAUTH');
+    await writeProfileFile('gemini', 'work', 'google_accounts.json', 'ACCTS');
+    // 실제 base ~/.gemini 에 자격증명 미리 생성.
+    const baseDir = join(tmp.home, '.gemini');
+    await fs.mkdir(baseDir, { recursive: true });
+    await fs.writeFile(join(baseDir, 'oauth_creds.json'), 'BASE-OAUTH');
+    await fs.writeFile(join(baseDir, 'google_accounts.json'), 'BASE-ACCTS');
+
+    await runSession({ cliId: 'gemini', profileName: 'work' });
+
+    // 세션은 격리 복사본만 수정 → 실제 base 무손상.
+    expect(await fs.readFile(join(baseDir, 'oauth_creds.json'), 'utf8')).toBe('BASE-OAUTH');
+    expect(await fs.readFile(join(baseDir, 'google_accounts.json'), 'utf8')).toBe('BASE-ACCTS');
+    // 프로필만 재캡처됨.
+    expect(await readProfileFile('gemini', 'work', 'oauth_creds.json')).toMatch(/^OAUTH\+ROT:/);
   });
 });
