@@ -56,8 +56,11 @@ import {
 } from '../../src/core/profile-store.js';
 import {
   listSessions,
+  materializeSession,
+  planSession,
   recaptureSession,
   reapOrphans,
+  removeSessionDir,
   runSession,
   stopSession
 } from '../../src/core/session.js';
@@ -214,6 +217,67 @@ describe('runSession', () => {
     await runSession({ cliId: 'codex', profileName: 'work' });
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(mockAcquire).not.toHaveBeenCalled();
+  });
+});
+
+describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
+  // gemini 는 GEMINI_CLI_HOME 이 `.gemini` 의 부모를 가리킨다 → envSubdir 로 cred 루트를 한 단계 내림.
+  const GEMINI_DEF = {
+    id: 'gemini',
+    name: 'Gemini (fixture)',
+    sources: [
+      { type: 'file', path: '~/.gemini/oauth_creds.json', saveAs: 'oauth_creds.json' },
+      { type: 'file', path: '~/.gemini/google_accounts.json', saveAs: 'google_accounts.json' }
+    ],
+    session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] }
+  } satisfies CliDef;
+
+  it('envSubdir 가 cred 격리본 루트를 한 단계 내린다 (<주입dir>/.gemini/<rel>)', () => {
+    const id = 'gemini-work-abcd1234';
+    const plan = planSession(GEMINI_DEF, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    expect(root.dir).toBe(dir); // env 주입값 = 부모(세션 디렉토리)
+    for (const cred of root.creds) {
+      // 격리본은 주입 dir 의 .gemini 하위 — gemini 의 getGlobalGeminiDir()=join(homedir,'.gemini') 와 정렬.
+      expect(cred.absInSession).toBe(join(dir, '.gemini', cred.rel));
+    }
+    expect(root.creds.map((c) => c.rel).sort()).toEqual([
+      'google_accounts.json',
+      'oauth_creds.json'
+    ]);
+  });
+
+  it('envSubdir 미지정(codex)은 cred 가 주입 dir 직속 — 기존 동작 불변(회귀 가드)', () => {
+    const id = 'codex-work-abcd1234';
+    const plan = planSession(DEF, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'CODEX_HOME');
+    expect(root.dir).toBe(dir);
+    expect(root.creds[0].absInSession).toBe(join(dir, 'auth.json')); // .gemini 같은 하위 세그먼트 없음
+  });
+
+  it.each(['../escape', '/abs', 'a/../b', ''])(
+    'envSubdir traversal/절대/빈 값(%s) 거부 (validateShareRel 동급)',
+    (bad) => {
+      const badDef = {
+        ...GEMINI_DEF,
+        session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: bad }] }
+      } satisfies CliDef;
+      expect(() => planSession(badDef, 'work', 'gemini-work-abcd1234')).toThrow();
+    }
+  );
+
+  it('materializeSession 이 envSubdir 하위에 격리본을 쓴다 (실제 fs)', async () => {
+    const id = 'gemini-work-deadbeef';
+    const plan = planSession(GEMINI_DEF, 'work', id);
+    await materializeSession(plan); // readProfileFile mock = 'TOK'
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    await expect(fs.readFile(join(dir, '.gemini', 'oauth_creds.json'), 'utf8')).resolves.toBe('TOK');
+    await expect(fs.readFile(join(dir, '.gemini', 'google_accounts.json'), 'utf8')).resolves.toBe(
+      'TOK'
+    );
+    await removeSessionDir(id);
   });
 });
 

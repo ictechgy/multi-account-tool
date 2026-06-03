@@ -100,6 +100,20 @@ export interface SessionRoot {
   /** 이 env 가 재배치하는 CLI 의 기본 base 디렉토리 (예: '~/.codex'). 선행 `~/` 는 확장된다. */
   base: string;
   /**
+   * 선택. env 가 가리키는 디렉토리와 실제 자격증명/`base` 내용 루트 사이의 상대 하위경로.
+   *
+   * 일부 CLI 는 redirect env 가 base 의 **부모**를 가리킨다. 예: Gemini CLI 의 `GEMINI_CLI_HOME`
+   * 은 그 값 아래 `.gemini/` 를 자격증명 루트로 쓴다 (소스 실측: `homedir()` = `GEMINI_CLI_HOME`,
+   * `getGlobalGeminiDir()` = `join(homedir(), '.gemini')`). 이때 `env` 주입값은 부모(세션
+   * 디렉토리)이고, 자격증명/`share` 의 격리 복사·base 봉쇄 검증은 `<주입dir>/<envSubdir>` 기준이
+   * 어야 한다 → `envSubdir = '.gemini'`.
+   *
+   * 미지정이면 env 가 곧 base 자체다 (예: `CODEX_HOME` = `~/.codex`). 기존 빌트인
+   * (codex/kimi/qwen/crush)은 모두 base 직속이라 미지정. 지정 시 `validateShareRel` 과 동일한
+   * traversal-safe 검증(절대/`..`/구분자 거부)을 거치고, 적용 후 주입 dir 안에 lexical 봉쇄된다.
+   */
+  envSubdir?: string;
+  /**
    * 선택. base 상대경로의 read-mostly 비-secret config allow-list — 세션 시작 시 base 에서
    * **0600 복사**(copy-isolate, issue #72)할 항목. 자격증명처럼 격리본에만 존재하므로 세션 내
    * 수정이 base 로 write-back 되지 않는다(재캡처 대상 아님). **자격증명 파일은 절대 포함하지

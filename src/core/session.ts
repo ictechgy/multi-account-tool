@@ -73,8 +73,13 @@ interface SessionCred {
 interface MaterializedRoot {
   /** 주입할 env var 이름. */
   env: string;
-  /** 세션 디렉토리 내 이 root 의 디렉토리 (env 값으로 주입). */
+  /** 세션 디렉토리 내 이 root 의 디렉토리 (env 값으로 주입 — base 의 부모일 수 있음, envSubdir 참고). */
   dir: string;
+  /**
+   * 자격증명/share 격리본의 실제 루트. envSubdir 가 있으면 `join(dir, envSubdir)`(예: gemini
+   * `<dir>/.gemini`), 없으면 `dir` 과 동일. base 내용과 1:1 미러 — cred/share 경로 합성의 기준.
+   */
+  credRoot: string;
   /** 실제 base 절대경로 (allow-list 복사 대상 계산용). */
   baseAbs: string;
   /** 이 root 의 자격증명 격리본 목록. */
@@ -142,6 +147,15 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
 
   const roots: MaterializedRoot[] = rootData.map((rd) => {
     const dir = join(sessionDir(id), rd.root.env);
+    // env 가 base 의 부모를 가리키는 CLI(예: gemini `GEMINI_CLI_HOME` → `<dir>/.gemini`)는
+    // envSubdir 로 자격증명 루트를 한 단계 내린다. validateShareRel 동급 검증(절대/`..`/구분자
+    // 거부) 후 credRoot 가 주입 dir 안에 lexical 봉쇄됨을 재확인 — credRoot 가 dir 밖을 가리키지
+    // 못한다. 미지정(undefined)이면 env 가 곧 base 라 credRoot = dir (기존 codex/kimi/qwen/crush
+    // 동작 불변). nullish 체크라 빈 문자열('')은 미지정으로 폴백하지 않고 validateShareRel 이 거부 —
+    // 빌트인 envSubdir 오설정(빈 값)을 silent 통과시키지 않고 plan 단계에서 명시 throw.
+    const credRoot =
+      rd.root.envSubdir != null ? join(dir, validateShareRel(rd.root.envSubdir)) : dir;
+    assertLexicallyContained(dir, credRoot);
     // share 항목 traversal-safe 검증 (절대/`..`/구분자 거부) — 정규화된 rel 로 통일 (Codex/Claude MED).
     const share = (rd.root.share ?? []).map((s) => validateShareRel(s));
     const credRels = new Set(rd.creds.map((c) => c.rel));
@@ -153,9 +167,10 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
     return {
       env: rd.root.env,
       dir,
+      credRoot,
       baseAbs: rd.baseAbs,
       share,
-      creds: rd.creds.map((c) => ({ ...c, absInSession: join(dir, c.rel) }))
+      creds: rd.creds.map((c) => ({ ...c, absInSession: join(credRoot, c.rel) }))
     };
   });
 
@@ -189,6 +204,14 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
       await fs.mkdir(root.dir, { recursive: true, mode: 0o700 });
       if ((await fs.lstat(root.dir)).isSymbolicLink()) {
         throw new Error(`세션 root 가 symlink 입니다: ${root.dir}`);
+      }
+      // envSubdir(예: gemini `.gemini`)로 cred 루트가 dir 하위면 명시 생성 + symlink 검증 —
+      // root.dir 와 동형 방어(fresh non-symlink 경로 보장). credRoot===dir 면 위에서 이미 처리됨.
+      if (root.credRoot !== root.dir) {
+        await fs.mkdir(root.credRoot, { recursive: true, mode: 0o700 });
+        if ((await fs.lstat(root.credRoot)).isSymbolicLink()) {
+          throw new Error(`세션 cred 루트가 symlink 입니다: ${root.credRoot}`);
+        }
       }
       // (먼저) 자격증명 격리본 복사 — fresh non-symlink 경로라 io-atomic 안전.
       for (const cred of root.creds) {
@@ -260,7 +283,9 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
   }
   await assertContainedRealpath(root.baseAbs, dirname(target));
 
-  const copyPath = join(root.dir, shareRel);
+  // 세션측 복사 위치는 자격증명 루트(credRoot) 기준 — envSubdir 가 있으면 base 내용과 1:1
+  // 미러되도록 cred 와 동일 루트에 둔다(gemini 등). envSubdir 없으면 credRoot===dir.
+  const copyPath = join(root.credRoot, shareRel);
   const copyParent = dirname(copyPath);
   await fs.mkdir(copyParent, { recursive: true, mode: 0o700 });
   const pst = await fs.lstat(copyParent);
