@@ -143,7 +143,20 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
   {
     id: 'claude',
     name: 'Claude Code',
-    sources: [claudeSource()]
+    sources: [claudeSource()],
+    // CLAUDE_CONFIG_DIR 로 ~/.claude 전체 재배치 가능. base 직속이라 envSubdir 불필요.
+    // share=∅ — settings.json 은 자격증명+config 혼재라 share 금지(세션 ephemeral).
+    //
+    // platform 별 동작 (session 정의 자체는 unconditional — planSession 이 source 종류로 분기):
+    //  (a) 비-macOS(linux 등): claudeSource()=file(`~/.claude/.credentials.json`, base 직속)이라
+    //      planSession 이 정상 격리한다 (동시 다계정 동작).
+    //  (b) macOS: claudeSource()=keychain 이라 planSession 이 비-file source 로 미지원 throw —
+    //      keychain 자격증명은 env 디렉토리 리다이렉트로 격리할 수 없다(파일이 아니라 OS 보안 저장소).
+    //  (c) CLAUDE_CONFIG_DIR 는 비공식·미문서 env 라 Claude Code 릴리스 변경 리스크가 있다.
+    //  (d) settings.json 의 세션 내 변경은 ephemeral — 종료 시 base 에 반영되지 않는다(알려진 한계,
+    //      share=∅ 의 결과).
+    //  (e) CLAUDE_CODE_OAUTH_TOKEN 은 종료 시 keychain 항목을 삭제하는 부작용이 있어 사용 금지.
+    session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] }
   },
   {
     id: 'codex',

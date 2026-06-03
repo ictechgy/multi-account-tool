@@ -329,7 +329,15 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     });
   });
 
-  it.each(['claude', 'gemini', 'aider', 'opencode', 'goose'])(
+  it('claude: session.roots 1개 (CLAUDE_CONFIG_DIR / ~/.claude), share 없음 (PR-2)', () => {
+    // base 직속 자격증명(linux file source)이라 envSubdir 불필요. settings.json 은 자격증명+config
+    // 혼재라 share 금지(세션 ephemeral). platform 무관 — session 은 unconditional 정의.
+    expect(find('claude').session).toEqual({
+      roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }]
+    });
+  });
+
+  it.each(['gemini', 'aider', 'opencode', 'goose'])(
     '%s: session 미지정(세션 격리 미지원)',
     (id) => {
       expect(find(id).session).toBeUndefined();
@@ -350,9 +358,13 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     }
   });
 
-  it('정적 invariant: 모든 자격증명 source 는 정확히 1개 root 의 base 직속(rel 에 path 구분자 없음)', () => {
+  it('정적 invariant: 모든 file 자격증명 source 는 정확히 1개 root 의 base 직속(rel 에 path 구분자 없음)', () => {
     // 각 session-capable CLI 의 file source path 가 어느 root base 의 직속 자식인지.
     // crush 2-root 가 서로 prefix 가 아니라 각 crush.json 이 정확히 1 root 에 귀속됨도 함께 검증.
+    //
+    // 비-file source(claude macOS=keychain 등)는 platform-split 으로 session 정의는 있으나 격리
+    // 불가다 — planSession 이 런타임에 명시 throw 한다(아래 'planSession / claude' describe). 따라서
+    // 본 정적 invariant 는 **file source 만** base 직속을 검증하고, 비-file source 는 건너뛴다.
     const rel = (base: string, p: string) => {
       const b = expandTilde(base).replace(/\/+$/, '') + '/';
       const f = expandTilde(p);
@@ -361,8 +373,8 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     for (const def of BUILTIN_CLI_DEFS) {
       if (!def.session) continue;
       for (const src of def.sources) {
-        expect(src.type).toBe('file');
-        const path = (src as { path: string }).path;
+        if (src.type !== 'file') continue; // keychain/os-keyring 은 격리 대상 아님(planSession 거부)
+        const path = src.path;
         const matches = def.session.roots.filter((r) => {
           const r2 = rel(r.base, path);
           return r2 !== null && !r2.includes('/');

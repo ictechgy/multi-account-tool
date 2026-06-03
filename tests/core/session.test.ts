@@ -281,6 +281,42 @@ describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
   });
 });
 
+describe('planSession / claude — keychain 미지원 + linux file 격리 (PR-2)', () => {
+  // claude 는 platform-split: linux=file(~/.claude/.credentials.json), macOS=keychain.
+  // session 정의는 unconditional 이나, planSession 은 file source 만 격리한다.
+
+  it('keychain source(macOS claude) + session → planSession 이 보강된 메시지로 throw', () => {
+    const claudeKeychainDef = {
+      id: 'claude',
+      name: 'Claude Code (keychain fixture)',
+      sources: [{ type: 'keychain', service: 'Claude Code-credentials', saveAs: 'credentials.json' }],
+      session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] }
+    } satisfies CliDef;
+    // 비-file source 거부 + keychain/OS-keyring 은 env 리다이렉트로 격리 불가 안내(메시지 보강).
+    expect(() => planSession(claudeKeychainDef, 'work', 'claude-work-abcd1234')).toThrow(
+      /file source 만 지원|keychain\/OS-keyring/
+    );
+  });
+
+  it('file source(linux claude) + session → planSession 정상 (base 직속, envSubdir 없음)', () => {
+    const claudeFileDef = {
+      id: 'claude',
+      name: 'Claude Code (file fixture)',
+      sources: [{ type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' }],
+      session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] }
+    } satisfies CliDef;
+    const id = 'claude-work-abcd1234';
+    const plan = planSession(claudeFileDef, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'CLAUDE_CONFIG_DIR');
+    expect(root.dir).toBe(dir);
+    // base 직속(envSubdir 없음) → credRoot=dir, 격리본은 dir 직속 credentials.json.
+    expect(root.creds).toHaveLength(1);
+    expect(root.creds[0].rel).toBe('.credentials.json'); // base 기준 상대경로
+    expect(root.creds[0].absInSession).toBe(join(dir, '.credentials.json'));
+  });
+});
+
 describe('listSessions / stopSession / reapOrphans', () => {
   /** sessionsDir 에 가짜 세션 디렉토리 + session.json 직접 생성. */
   async function makeSession(id: string, pid: number, startedAt: string): Promise<string> {

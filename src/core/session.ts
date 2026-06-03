@@ -126,8 +126,12 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
 
   for (const src of def.sources) {
     if (src.type !== 'file') {
+      // keychain(macOS claude)/os-keyring(linux goose) 자격증명은 파일이 아니라 OS 보안 저장소에
+      // 있어, env 디렉토리 리다이렉트(예: CLAUDE_CONFIG_DIR)로는 격리할 수 없다 — 그 env 는 파일
+      // 경로만 옮길 뿐 keychain/keyring entry 는 그대로다. 따라서 file source 만 세션 격리한다.
       throw new UsageError(
-        `세션 격리는 file source 만 지원합니다 (${def.id}: '${src.type}' source).`
+        `세션 격리는 file source 만 지원합니다 (${def.id}: '${src.type}' source). ` +
+          `keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트로 격리할 수 없습니다.`
       );
     }
     const fileAbs = expandTilde(src.path);
