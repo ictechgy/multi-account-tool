@@ -168,14 +168,13 @@ describe('planSession', () => {
     }
   );
 
-  it('share 정상 nested 항목은 정규화돼 plan 에 반영', () => {
+  it('share nested(다중 세그먼트) 항목은 거부 — 단일 세그먼트만 허용 (nested-path TOCTOU 제거, quad-review)', () => {
     const def: CliDef = {
       id: 'fakecli', name: 'Fake',
       sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
       session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['sub/config.toml'] }] }
     };
-    const plan = planSession(def, 'work', SID);
-    expect(plan.roots[0].share).toEqual(['sub/config.toml']);
+    expect(() => planSession(def, 'work', SID)).toThrow(/단일 세그먼트/);
   });
 });
 
@@ -337,36 +336,10 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     expect(await fs.readFile(join(plan.roots[0].dir, 'auth.json'), 'utf8')).toBe('TOK');
   });
 
-  it('정상 nested share → 세션 하위 디렉토리에 복사본 생성', async () => {
-    const nestedDef: CliDef = {
-      id: 'fakecli', name: 'Fake',
-      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
-      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['sub/config.toml'] }] }
-    };
-    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
-    await writeBaseFile('.fake/sub/config.toml', 'nested-shared');
-    const plan = planSession(nestedDef, 'work', SID);
-    await materializeSession(plan);
-    const copyPath = join(plan.roots[0].dir, 'sub', 'config.toml');
-    expect((await fs.lstat(copyPath)).isSymbolicLink()).toBe(false); // 복사본 — symlink 아님
-    expect(await fs.readFile(copyPath, 'utf8')).toBe('nested-shared');
-  });
-
-  it('base 측 부모가 symlink 로 base 밖을 가리키면 거부 (realpath 봉쇄, §4.2)', async () => {
-    const nestedDef: CliDef = {
-      id: 'fakecli', name: 'Fake',
-      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
-      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['sub/config.toml'] }] }
-    };
-    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
-    // base 밖(~/.outside)에 실제 파일 + base 안 'sub' 를 그 디렉토리로 향하는 symlink 로 escape.
-    await writeBaseFile('.outside/config.toml', 'escaped');
-    await fs.mkdir(join(tmp.home, '.fake'), { recursive: true });
-    await fs.symlink(join(tmp.home, '.outside'), join(tmp.home, '.fake', 'sub'));
-    const plan = planSession(nestedDef, 'work', SID);
-    await expect(materializeSession(plan)).rejects.toThrow();
-    await expect(fs.access(sessionDir(SID))).rejects.toThrow(); // 세션 디렉토리 미잔류
-  });
+  // (제거) 'nested share 복사' / 'base 측 부모 symlink escape 거부' 테스트는 share 가 단일 세그먼트로
+  // 제한되며 폐기됐다 — nested share 는 planSession 에서 거부돼 materialize 에 도달하지 않는다(위
+  // 'share nested 항목은 거부' 가 plan 단계 거부를 고정). base 측 share 대상 자체가 symlink 인 경우의
+  // 거부는 'allow-list 대상이 base 에서 symlink 면 거부' 테스트가 단일 세그먼트로 그대로 커버한다.
 
   it('allow-list 대상이 디렉토리면 거부 (isFile — 통째 노출 차단, #8)', async () => {
     const dirDef: CliDef = {
