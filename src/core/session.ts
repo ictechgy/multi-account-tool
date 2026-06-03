@@ -225,7 +225,10 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
       // envSubdir(예: gemini `.gemini`)로 cred 루트가 dir 하위면 명시 생성 + symlink 검증 —
       // root.dir 와 동형 방어(fresh non-symlink 경로 보장). credRoot===dir 면 위에서 이미 처리됨.
       if (root.credRoot !== root.dir) {
-        await fs.mkdir(root.credRoot, { recursive: true, mode: 0o700 });
+        // 단일 세그먼트 envSubdir(validateEnvSubdir 강제)라 credRoot 는 방금 만든 non-symlink root.dir 의
+        // **직속 자식**이다 → 비재귀 mkdir. 이미 존재하면(특히 symlink) EEXIST 로 즉시 실패해(fail-closed),
+        // recursive mkdir 이 기존 symlink 를 silent 추종하는 TOCTOU 를 차단한다 (quad-review agy MEDIUM).
+        await fs.mkdir(root.credRoot, { mode: 0o700 });
         if ((await fs.lstat(root.credRoot)).isSymbolicLink()) {
           throw new Error(`세션 cred 루트가 symlink 입니다: ${root.credRoot}`);
         }
@@ -309,6 +312,11 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
   if (!pst.isDirectory() || pst.isSymbolicLink()) {
     throw new Error(`allow-list 세션측 부모가 정상 디렉토리가 아닙니다: ${copyParent}`);
   }
+  // nested shareRel('a/b.json')의 중간 컴포넌트('a')가 symlink 면 위 lstat(마지막 컴포넌트만)으로는 못
+  // 잡고, recursive mkdir 이 그 symlink 를 추종해 세션 밖으로 escape 할 수 있다 (quad-review agy HIGH).
+  // copyParent 의 realpath 가 credRoot 안에 봉쇄됨을 검증해 중간 컴포넌트 symlink escape 를 차단한다
+  // (base 측의 assertContainedRealpath 와 대칭). 단일 세그먼트 share 면 copyParent===credRoot 라 no-op.
+  await assertContainedRealpath(root.credRoot, copyParent);
   // base 원본을 O_NOFOLLOW 로 읽어(마지막 컴포넌트 symlink swap 차단) 격리본으로 0600 atomic 복사.
   // 부모 디렉토리 escape 는 위 assertContainedRealpath 가, fresh non-symlink 쓰기는 writeFileAtomic
   // (O_EXCL|O_NOFOLLOW|0600)이 담당한다 — 자격증명 격리본 복사와 동일 보안 모델. 부모 컴포넌트는

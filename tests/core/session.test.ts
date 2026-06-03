@@ -306,6 +306,31 @@ describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
     await expect(fs.readFile(join(dir, '.gemini', 'config.json'), 'utf8')).resolves.toBe('{"cfg":true}');
     await removeSessionDir(id);
   });
+
+  // quad-review agy HIGH(Issue 1) fix 회귀: nested shareRel('sub/app.json')도 credRoot 하위에 정상
+  // 복사되고, materializeShareCopy 의 새 assertContainedRealpath(credRoot, copyParent) 봉쇄가 정상
+  // 중간 디렉토리(real dir)는 통과시킨다(중간 컴포넌트 symlink escape 만 차단). 단일 세그먼트 share 와
+  // 달리 share 는 다중 세그먼트가 허용된다(validateShareRel).
+  it('nested share(sub/app.json)도 credRoot 하위에 복사 — realpath 봉쇄가 정상 경로는 통과', async () => {
+    const id = 'gemini-work-beef1234';
+    const baseGemini = join(tmp.home, '.gemini');
+    await fs.mkdir(join(baseGemini, 'sub'), { recursive: true });
+    await fs.writeFile(join(baseGemini, 'sub', 'app.json'), '{"nested":1}');
+    const def = {
+      ...GEMINI_DEF,
+      session: {
+        roots: [
+          { env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini', share: ['sub/app.json'] }
+        ]
+      }
+    } satisfies CliDef;
+    await materializeSession(planSession(def, 'work', id));
+    const dir = join(sessionDir(id), 'GEMINI_CLI_HOME');
+    await expect(fs.readFile(join(dir, '.gemini', 'sub', 'app.json'), 'utf8')).resolves.toBe(
+      '{"nested":1}'
+    );
+    await removeSessionDir(id);
+  });
 });
 
 describe('planSession / gemini — 실제 빌트인 def 의 envSubdir 매핑 (PR-3)', () => {
