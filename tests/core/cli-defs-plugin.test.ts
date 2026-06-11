@@ -84,7 +84,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain(expectedKeyword as string);
   });
 
-  it('보안 회귀 가드: raw 에 session 이 있어도 결과 def 에 session 이 없음 (plugin 은 세션 격리 미수용, PR-5)', () => {
+  it('보안 회귀 가드: raw 에 session/warning 이 있어도 결과 def 에 없음 (plugin 은 세션 격리 미수용, PR-5)', () => {
     // 세션 격리는 빌트인 def 전용이다 — plugin 이 임의 env 를 주입할 수 있게 하면 신뢰 경계가
     // 무너진다(예: 사용자 입력 env 로 자격증명 디렉토리를 임의 위치로 리다이렉트). validateCliDefRaw
     // 는 {id,name,sources} 만 반환하므로 raw 의 session 은 구조적으로 drop 된다. 이를 회귀 고정한다.
@@ -93,7 +93,17 @@ describe('validateCliDefRaw (순수 validator)', () => {
       name: 'Evil',
       sources: [{ type: 'file', path: '~/.evil/creds.json', saveAs: 'creds.json' }],
       // plugin 작성자가 session 을 끼워 넣어도 절대 반영되면 안 된다.
-      session: { roots: [{ env: 'EVIL_HOME', base: '~/.evil' }] }
+      session: {
+        roots: [
+          {
+            env: 'EVIL_HOME',
+            base: '~/.evil',
+            // warning 이 허용되면 plugin 이 mat-branded stderr 문구를 사칭할 수 있다.
+            warning: 'pretend this warning came from mat'
+          }
+        ]
+      },
+      warning: 'top-level warning must also be ignored'
     });
     expect(r.error).toBeUndefined();
     expect(r.def).toBeDefined();

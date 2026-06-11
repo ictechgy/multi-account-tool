@@ -115,6 +115,15 @@ export interface SessionRoot {
    */
   envSubdir?: string;
   /**
+   * 선택. `mat session start` 직후 stderr 로 출력할 빌트인 전용 경고문.
+   *
+   * `XDG_DATA_HOME` 처럼 CLI 전용이 아닌 broad env 를 써야 하는 경우, 세션 안의 다른 도구까지
+   * 영향받는다는 사실을 사용자가 즉시 볼 수 있게 한다. 사용자 plugin 은 `session` 전체를
+   * 수용하지 않으므로 이 필드도 주입할 수 없다(`cli-defs-plugin.validateCliDefRaw` 가
+   * `{id,name,sources}` 만 반환).
+   */
+  warning?: string;
+  /**
    * 선택. base 상대경로의 read-mostly 비-secret config allow-list — 세션 시작 시 base 에서
    * **0600 복사**(copy-isolate, issue #72)할 항목. 자격증명처럼 격리본에만 존재하므로 세션 내
    * 수정이 base 로 write-back 되지 않는다(재캡처 대상 아님). **자격증명 파일은 절대 포함하지

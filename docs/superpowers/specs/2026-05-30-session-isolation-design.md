@@ -41,7 +41,7 @@ mat session start codex personal   # CODEX_HOME=<세션B>/codex — A 와 독립
 > base 부모를 가리키는 CLI 지원, 단일 세그먼트 강제). **Claude** = platform-split: Linux 는
 > `~/.claude/.credentials.json`(file, base 직속)을 `CLAUDE_CONFIG_DIR` 로 격리(✅), macOS 는 keychain
 > 이라 env 디렉토리 리다이렉트로 격리 불가(planSession 명시 throw, ❌). settings.json 은 자격증명+config
-> 혼재라 share 제외(세션 ephemeral). Aider/OpenCode 는 이번 범위 밖(아래 표 ⚠️ 유지). 근거:
+> 혼재라 share 제외(세션 ephemeral). Aider 는 계속 BLOCKED, OpenCode 는 EXPERIMENTAL 로 확대(XDG_DATA_HOME broad side effect). 근거:
 > `.omc/research/pr-g0-gemini-cli-home-gate.md`.
 
 | CLI | 격리 | env var | credential 포함 |
@@ -53,9 +53,9 @@ mat session start codex personal   # CODEX_HOME=<세션B>/codex — A 와 독립
 | Gemini | ✅ | `GEMINI_CLI_HOME` (envSubdir `.gemini`) | ✅ oauth_creds.json + google_accounts.json |
 | Claude | ⚠️ linux | `CLAUDE_CONFIG_DIR` (기본 `~/.claude`) | ✅ .credentials.json (macOS=keychain ❌) |
 | Aider | ⚠️ | `AIDER_CONFIG` (config 만) | ❌ (key=provider env) |
-| OpenCode | ⚠️ | `XDG_DATA_HOME` (비공식) | 추측 |
+| OpenCode | ⚠️ experimental | `XDG_DATA_HOME` + envSubdir `opencode` | ✅ auth.json (broad XDG side effect) |
 
-**1차 구현 대상**: ✅ 4개 — **Codex / Qwen / Kimi / Crush**. **개정 3**: + **Gemini**(envSubdir) / **Claude linux**(file). macOS Claude·Aider·OpenCode 는 미지원/범위 밖.
+**1차 구현 대상**: ✅ 4개 — **Codex / Qwen / Kimi / Crush**. **개정 3**: + **Gemini**(envSubdir) / **Claude linux**(file). **개정 4**: + **OpenCode EXPERIMENTAL**(`XDG_DATA_HOME` broad env; 다른 XDG 도구 data/credential 이 ephemeral 세션 dir 로 들어가 종료 시 사라질 수 있음). macOS Claude·Aider·Goose 는 미지원/범위 밖.
 
 ---
 
@@ -178,7 +178,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 - cli-defs.test 에 빌트인 4개 `session` 메타 회귀 가드. macOS + CI ubuntu 양쪽(파일/symlink 만 — secret-tool 무관).
 
 ## 10. 범위 밖 / 향후
-Gemini(Issue #2815), Claude(keychain env 부재), Aider(env-export), OpenCode(XDG 실측), Crush data root 비-secret 공유 확대, lterm shim, TUI 패널, `mat session env`(eval). Crush `~/.local/share/crush/` 의 DB/캐시 구조는 공유 확대 전 실측 필요.
+macOS Claude(keychain env 부재), Aider(env-export/redirect 부재), Goose(keychain/os-keyring), OpenCode upstream `OPENCODE_DATA_DIR` 추적(현재 XDG experimental), Antigravity 별도 credential, Crush data root 비-secret 공유 확대, lterm shim, TUI 패널, `mat session env`(eval). Crush `~/.local/share/crush/` 의 DB/캐시 구조는 공유 확대 전 실측 필요.
 
 ## 11. CLI 표면
 ```
@@ -193,4 +193,4 @@ mat session stop <id>               # 종료(SIGTERM) 또는 orphan 정리
 - **Alternatives**: symlink-overlay(io-atomic 비안전+fail-open+혼재 CLI 무효 → 기각), 전체 copy-isolate(allow-list 없이 — config 공유 0, 단순하나 Codex config 휘발; allow-list 가 이를 좁게 보완), env-only(자격증명 파일 못 다룸 → 기각).
 - **Why**: copy-isolate 는 fail-closed·io-atomic 부담 소거를 공짜로 얻고, 사용자 1차 요구(자격증명 격리, ROADMAP 원안=copy)와 정합. allow-list 가 분리형 config(Codex) 공유 이점을 좁고 안전하게 회복.
 - **Consequences**: (+) 자격증명·allow-list config 무간섭 보장, 동시 다계정, 동시쓰기 손상 0(copy-isolate 로 allow-list 공유 race 도 제거 — #72). (−) allow-list 외 비-secret 은 세션 내 ephemeral, allow-list config 의 세션 내 수정은 base 에 반영되지 않음(write-back 없음 — 영구 변경은 세션 밖에서).
-- **Follow-ups**: Crush data 비-secret 공유 확대(실측 후), Gemini/Claude/Aider/OpenCode, lterm shim, TUI.
+- **Follow-ups**: Crush data 비-secret 공유 확대(실측 후), macOS Claude/Aider/Goose/Antigravity, OpenCode `OPENCODE_DATA_DIR` upstream 추적, lterm shim, TUI.

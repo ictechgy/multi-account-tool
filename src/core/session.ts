@@ -86,6 +86,8 @@ interface MaterializedRoot {
   creds: SessionCred[];
   /** base 에서 세션으로 0600 복사할 read-mostly config (base 상대경로, cred 와 disjoint, write-back 없음 — #72). */
   share: string[];
+  /** 이 root 를 사용하는 세션 시작 시 stderr 로 출력할 사용자 경고(있으면). */
+  warning?: string;
 }
 
 /** 시작 시점 고정 세션 계획. */
@@ -200,6 +202,7 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
       credRoot,
       baseAbs: rd.baseAbs,
       share,
+      warning: rd.root.warning,
       creds: rd.creds.map((c) => ({ ...c, absInSession: join(credRoot, c.rel) }))
     };
   });
@@ -757,6 +760,7 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
   const id = makeSessionId(opts.cliId, profileName);
   const plan = planSession(def, profileName, id);
   await materializeSession(plan); // 세션 디렉토리 생성 + 자격증명 복사
+  emitSessionWarnings(plan);
   // pid 재사용 검출용 시작 서명 (조회 실패해도 세션 생성을 막지 않음 — liveness-only 폴백).
   const pidStart = (await processStartSignature(process.pid)) ?? undefined;
   const meta: SessionMeta = {
@@ -811,6 +815,16 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
     return { code: spawnResult!.code, signal: spawnResult!.signal, recaptureError };
   } finally {
     forwarders.dispose();
+  }
+}
+
+/** 세션 root 별 경고 출력 — OpenCode 의 XDG_DATA_HOME 같은 broad-env EXPERIMENTAL 경고용. */
+function emitSessionWarnings(plan: SessionPlan): void {
+  const seen = new Set<string>();
+  for (const root of plan.roots) {
+    if (!root.warning || seen.has(root.warning)) continue;
+    seen.add(root.warning);
+    process.stderr.write(`[mat] ${sanitizeForStderr(root.warning)}\n`);
   }
 }
 

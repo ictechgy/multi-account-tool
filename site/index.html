@@ -187,9 +187,9 @@
 <tbody><tr>
 <td>Claude Code</td>
 <td>✅</td>
+<td>✅</td>
 <td>❌</td>
-<td>❌</td>
-<td>macOS Keychain only — no Linux/Windows credential-store backend yet</td>
+<td>macOS Keychain on macOS; <code>~/.claude/.credentials.json</code> on Linux. <code>mat session</code> supports Linux via <code>CLAUDE_CONFIG_DIR</code>; macOS Keychain cannot be session-isolated</td>
 </tr>
 <tr>
 <td>Codex CLI</td>
@@ -203,7 +203,7 @@
 <td>✅</td>
 <td>✅</td>
 <td>⚠️ untested</td>
-<td><code>~/.gemini/oauth_creds.json</code> + <code>google_accounts.json</code></td>
+<td><code>~/.gemini/oauth_creds.json</code> + <code>google_accounts.json</code>; Gemini session uses <code>GEMINI_CLI_HOME</code> with <code>.gemini</code> envSubdir. Antigravity-specific credentials are a follow-up</td>
 </tr>
 <tr>
 <td>Aider</td>
@@ -238,7 +238,7 @@
 <td>✅</td>
 <td>✅</td>
 <td>⚠️ untested</td>
-<td>OS-agnostic XDG path (<code>~/.local/share/opencode/auth.json</code> on every OS via <code>xdg-basedir</code>)</td>
+<td>OS-agnostic XDG path (<code>$XDG_DATA_HOME/opencode/auth.json</code>, default <code>~/.local/share/opencode/auth.json</code>). <code>mat session</code> is <strong>EXPERIMENTAL</strong> via broad <code>XDG_DATA_HOME</code>; <code>OPENCODE_CONFIG_DIR</code> / config/env/project-local <code>apiKey</code> can bypass <code>auth.json</code> isolation</td>
 </tr>
 <tr>
 <td>Goose</td>
@@ -455,12 +455,25 @@ mat session start codex personal    # independent isolated dir → &quot;persona
 <td>Crush</td>
 <td><code>CRUSH_GLOBAL_CONFIG</code> + <code>CRUSH_GLOBAL_DATA</code></td>
 </tr>
+<tr>
+<td>Gemini CLI</td>
+<td><code>GEMINI_CLI_HOME</code> (<code>.gemini</code> envSubdir)</td>
+</tr>
+<tr>
+<td>Claude Code (Linux only)</td>
+<td><code>CLAUDE_CONFIG_DIR</code></td>
+</tr>
+<tr>
+<td>OpenCode (<strong>EXPERIMENTAL</strong>)</td>
+<td><code>XDG_DATA_HOME</code> (<code>opencode</code> envSubdir; broad XDG side effects)</td>
+</tr>
 </tbody></table></div>
-<p><strong>Not supported</strong> (no credential-relocating env var; <code>mat session start</code> errors out): <code>gemini</code> (no env override — <a href="https://github.com/google-gemini/gemini-cli/issues/2815">gemini-cli#2815</a>), <code>claude</code> (macOS Keychain service name is not env-overridable), <code>aider</code> (credentials are provider env vars, not a file), <code>opencode</code>, <code>goose</code>, and any user <strong>plugin</strong> CLI (1st iteration is built-in only).</p>
+<p><strong>Not supported</strong> (no safe credential-relocating env var; <code>mat session start</code> errors out): <code>claude</code> on macOS (Keychain service name is not env-overridable), <code>aider</code> (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file), <code>goose</code> (keychain/OS-keyring credentials cannot be env-redirected), and any user <strong>plugin</strong> CLI (built-in only trust boundary).</p>
 <p>Exit codes mirror <code>mat exec</code>: <code>0</code> success, <code>2</code> usage error, <code>74</code> re-capture failed, <code>128+N</code> child signal <code>N</code> (self-raised), child&#39;s own non-zero code propagated otherwise.</p>
 <p><strong>Limitations (read before relying on it):</strong></p>
 <ul>
-<li><strong>Credentials are isolated; non-secret config is <em>not</em> shared (1st iteration).</strong> Anything other than the credential file (model config, history, sessions, caches) is <strong>not</strong> materialized into the session — the CLI falls back to its defaults and anything it creates inside the session is <strong>discarded on exit</strong> (only the credential file is re-captured). This is a deliberate, fail-closed default. Contrast with <code>mat exec</code>, where the CLI uses the real config dir so history is preserved: prefer <code>mat exec</code> for long single-account work, <code>mat session</code> for concurrent multi-account. (An allow-list to share read-mostly config like Codex <code>config.toml</code> is implemented but disabled until its contents are verified — a follow-up.)</li>
+<li><strong>Credentials are isolated; non-secret config is mostly ephemeral.</strong> mat copies credentials into the session and re-captures only credentials on exit. A narrow allow-list may copy read-mostly non-secret config (currently Codex <code>config.toml</code>) as copy-isolate, never write-back; everything else (history, caches, sessions, most config) is created inside the session and <strong>discarded on exit</strong>. Prefer <code>mat exec</code> for long single-account work where you want the real config/history, and <code>mat session</code> for concurrent multi-account isolation.</li>
+<li><strong>OpenCode EXPERIMENTAL:</strong> OpenCode isolation uses <code>XDG_DATA_HOME</code> because upstream does not expose <code>OPENCODE_DATA_DIR</code>. This env affects the whole subshell: other XDG-aware tools (for example Crush) may write data or credentials into the ephemeral session directory and lose them when the session exits. Also, OpenCode config channels (<code>OPENCODE_CONFIG_DIR</code>, <code>OPENCODE_CONFIG</code>, <code>OPENCODE_CONFIG_CONTENT</code>, project-local <code>opencode.json</code>/<code>.opencode</code>, or plaintext <code>apiKey</code> in config) can still bypass <code>auth.json</code> isolation.</li>
 <li><strong><code>SIGKILL</code> orphans</strong> the session directory (trap-impossible, same as <code>mat exec</code>); the next <code>mat session</code> call reaps it (owning process gone — PID-reuse-aware via the process start-time signature — <strong>and</strong> both the session&#39;s start time and its directory mtime older than 1h).</li>
 <li><strong>Parent-trust assumption:</strong> isolation assumes <code>~/.multi-account-tool</code> and its parent are trusted; a symlinked <code>~/.multi-account-tool</code> is out of scope.</li>
 <li><strong>Same profile, two concurrent sessions:</strong> re-capture is unsynchronized — single-credential CLIs are last-writer-wins; multi-credential CLIs (Qwen/Crush) may end up with files from different sessions. Both are always valid credentials of the <strong>same account</strong> (never wrong-account, never corrupted) and self-heal on next use. Prefer a distinct profile per terminal; per-profile locking is a follow-up.</li>
