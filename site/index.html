@@ -35,7 +35,7 @@
 <h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
 <p class="inline-lang" aria-hidden="true"><a href="ko.html">한국어</a> | English</p>
 
-<p>Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. No more <code>logout</code> / <code>login</code> shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths, OAuth refresh-token rotation awareness with TUI dialog (recapture / discard / cancel).</p>
+<p>Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. No more <code>logout</code> / <code>login</code> shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths, OAuth refresh-token rotation awareness with TUI dialog (recapture / discard / cancel).</p>
 <div class="hero-cta"><a class="btn btn-primary" href="#install">Install</a><a class="btn" href="https://github.com/ictechgy/multi-account-tool">GitHub <span aria-hidden="true">↗</span></a></div>
 <pre><code>╭ Multi-Account Tool ────────────────────────────────╮
 │  AI CLI account switcher                           │
@@ -43,7 +43,7 @@
 
   &gt; Claude Code            [active: personal] ✓
     Codex CLI              [active: work]     ✓
-    Gemini / Antigravity   [active: personal] ✓
+    Gemini CLI              [active: personal] ✓
 </code></pre>
 
   </div>
@@ -86,7 +86,7 @@
 <td>File swap</td>
 </tr>
 <tr>
-<td>Gemini / Antigravity</td>
+<td>Gemini CLI</td>
 <td><code>~/.gemini/oauth_creds.json</code>, <code>google_accounts.json</code></td>
 <td>File swap</td>
 </tr>
@@ -139,7 +139,7 @@
 <td><code>mat freshness codex</code> before swap; <code>mat exec</code> for one-shot sessions</td>
 </tr>
 <tr>
-<td>Gemini / Antigravity</td>
+<td>Gemini CLI</td>
 <td>OAuth (<code>refresh_token</code> + <code>google_accounts.json.active</code>)</td>
 <td>🔴 High</td>
 <td>Same as Codex</td>
@@ -199,11 +199,18 @@
 <td><code>~/.codex/auth.json</code> (cross-platform file path)</td>
 </tr>
 <tr>
-<td>Gemini / Antigravity</td>
+<td>Gemini CLI</td>
 <td>✅</td>
 <td>✅</td>
 <td>⚠️ untested</td>
-<td><code>~/.gemini/oauth_creds.json</code> + <code>google_accounts.json</code>; Gemini session uses <code>GEMINI_CLI_HOME</code> with <code>.gemini</code> envSubdir. Antigravity-specific credentials are a follow-up</td>
+<td><code>~/.gemini/oauth_creds.json</code> + <code>google_accounts.json</code>; <code>mat session</code> uses <code>GEMINI_CLI_HOME</code> with <code>.gemini</code> envSubdir</td>
+</tr>
+<tr>
+<td>Google Antigravity (<code>agy</code>)</td>
+<td>❌ blocked</td>
+<td>❌ blocked</td>
+<td>❌ blocked</td>
+<td>Not a Gemini CLI credential source. Official docs describe OS-native keyring auth; settings/cache live under <code>~/.gemini/antigravity-cli/</code>, but safe probes found no CLI-specific credential/data redirect (<code>GEMINI_CLI_HOME</code>, XDG envs, and <code>ANTIGRAVITY_EXECUTABLE_DATA_DIR</code> did not relocate app-data). A 0600 <code>antigravity-oauth-token</code> file may exist, but without a stable documented token-store/keyring contract mat does not swap or session-isolate it</td>
 </tr>
 <tr>
 <td>Aider</td>
@@ -468,7 +475,7 @@ mat session start codex personal    # independent isolated dir → &quot;persona
 <td><code>XDG_DATA_HOME</code> (<code>opencode</code> envSubdir; broad XDG side effects)</td>
 </tr>
 </tbody></table></div>
-<p><strong>Not supported</strong> (no safe credential-relocating env var; <code>mat session start</code> errors out): <code>claude</code> on macOS (Keychain service name is not env-overridable), <code>aider</code> (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file), <code>goose</code> (keychain/OS-keyring credentials cannot be env-redirected), and any user <strong>plugin</strong> CLI (built-in only trust boundary).</p>
+<p><strong>Not supported</strong> (no safe credential-relocating env var; <code>mat session start</code> errors out): <code>claude</code> on macOS (Keychain service name is not env-overridable), <code>aider</code> (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file), <code>goose</code> (keychain/OS-keyring credentials cannot be env-redirected), Google Antigravity / <code>agy</code> (native keyring plus no stable CLI-specific credential redirect; <code>HOME</code> redirect is too broad), and any user <strong>plugin</strong> CLI (built-in only trust boundary).</p>
 <p>Exit codes mirror <code>mat exec</code>: <code>0</code> success, <code>2</code> usage error, <code>74</code> re-capture failed, <code>128+N</code> child signal <code>N</code> (self-raised), child&#39;s own non-zero code propagated otherwise.</p>
 <p><strong>Limitations (read before relying on it):</strong></p>
 <ul>

@@ -4,7 +4,7 @@
 
 📖 **문서 사이트:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-여러 AI CLI 계정(Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 **하나의 TUI 에서 빠르게 전환**해 사용하는 도구. 매번 `logout` → `login` 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시, OAuth refresh 토큰 회전 인지 + TUI 재캡처/폐기/취소 dialog 등 안전장치를 기본 적용.
+여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 **하나의 TUI 에서 빠르게 전환**해 사용하는 도구. 매번 `logout` → `login` 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시, OAuth refresh 토큰 회전 인지 + TUI 재캡처/폐기/취소 dialog 등 안전장치를 기본 적용.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -13,7 +13,7 @@
 
   > Claude Code            [활성: personal] ✓
     Codex CLI              [활성: work]     ✓
-    Gemini / Antigravity   [활성: personal] ✓
+    Gemini CLI              [활성: personal] ✓
 ```
 
 ---
@@ -32,7 +32,7 @@
 | --- | --- | --- |
 | Claude Code | macOS Keychain (`Claude Code-credentials`) | Keychain 항목 swap |
 | Codex CLI | `~/.codex/auth.json` | 파일 swap |
-| Gemini / Antigravity | `~/.gemini/oauth_creds.json`, `google_accounts.json` | 파일 swap |
+| Gemini CLI | `~/.gemini/oauth_creds.json`, `google_accounts.json` | 파일 swap |
 | Aider | `~/.aider.conf.yml` | 파일 swap |
 | Kimi CLI | `~/.kimi/config.toml` | 파일 swap |
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | 파일 swap |
@@ -47,7 +47,7 @@
 | CLI | 인증 방식 | rotation 위험 | mat 안전 모드 |
 | --- | --- | --- | --- |
 | Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 높음 — token revoke 재현됨 | swap 전 `mat freshness codex` 점검 / 일회성은 `mat exec` |
-| Gemini / Antigravity | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 높음 | Codex 와 동일 |
+| Gemini CLI | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 높음 | Codex 와 동일 |
 | OpenCode | provider 별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex 와 동일 |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (PR-H adapter, high-confidence rotation 분류) |
 | Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider 라우팅) | 🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account) | `mat freshness goose` 가 source 별 결과 보고, identity-aware |
@@ -63,7 +63,8 @@
 | --- | --- | --- | --- | --- |
 | Claude Code | ✅ | ✅ | ❌ | macOS 는 Keychain, Linux 는 `~/.claude/.credentials.json`. `mat session` 은 Linux 에서 `CLAUDE_CONFIG_DIR` 로 지원; macOS Keychain 은 세션 격리 불가 |
 | Codex CLI | ✅ | ✅ | ⚠️ 미검증 | `~/.codex/auth.json` (cross-platform file path) |
-| Gemini / Antigravity | ✅ | ✅ | ⚠️ 미검증 | `~/.gemini/oauth_creds.json` + `google_accounts.json`; Gemini 세션은 `GEMINI_CLI_HOME` + `.gemini` envSubdir 사용. Antigravity 별도 자격증명은 follow-up |
+| Gemini CLI | ✅ | ✅ | ⚠️ 미검증 | `~/.gemini/oauth_creds.json` + `google_accounts.json`; `mat session` 은 `GEMINI_CLI_HOME` + `.gemini` envSubdir 사용 |
+| Google Antigravity (`agy`) | ❌ blocked | ❌ blocked | ❌ blocked | Gemini CLI 자격증명 source 가 아니다. 공식 문서는 OS native keyring 인증을 설명하고 설정/cache 는 `~/.gemini/antigravity-cli/` 아래에 두지만, 안전 실측에서 CLI 전용 credential/data redirect 를 찾지 못했다 (`GEMINI_CLI_HOME`, XDG env, `ANTIGRAVITY_EXECUTABLE_DATA_DIR` 모두 app-data 를 재배치하지 않음). 0600 `antigravity-oauth-token` 파일이 존재할 수 있어도 안정 문서화된 token-store/keyring 계약 전까지 mat 는 swap/session 격리를 지원하지 않는다 |
 | Aider | ✅ | ✅ | ⚠️ 미검증 | **env override**: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_BASE` 등이 `~/.aider.conf.yml` 을 우회 — mat 는 shell env 를 swap 할 수 없음 |
 | Kimi CLI | ✅ | ✅ | ⚠️ 미검증 | **env override**: `MOONSHOT_API_KEY` 등이 `~/.kimi/config.toml` 을 우회 |
 | Qwen Code CLI | ✅ | ✅ | ⚠️ 미검증 | 자격증명 우선순위: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. mat 는 두 파일 모두 swap 하지만 shell env 는 영향 없음 |
@@ -231,7 +232,7 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 | Claude Code (Linux 전용) | `CLAUDE_CONFIG_DIR` |
 | OpenCode (**EXPERIMENTAL**) | `XDG_DATA_HOME` (`opencode` envSubdir; broad XDG side effect) |
 
-**미지원** (안전한 자격증명 재배치 env 없음; `mat session start` 가 명시 에러): macOS `claude` (Keychain service name env override 불가), `aider` (provider env / CLI args / project-local config 등 세션 재배치 불가 채널), `goose` (keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), 그리고 사용자 **플러그인** CLI (빌트인 전용 신뢰경계).
+**미지원** (안전한 자격증명 재배치 env 없음; `mat session start` 가 명시 에러): macOS `claude` (Keychain service name env override 불가), `aider` (provider env / CLI args / project-local config 등 세션 재배치 불가 채널), `goose` (keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), Google Antigravity / `agy` (native keyring + 안정적인 CLI 전용 credential redirect 부재; `HOME` redirect 는 너무 광범위), 그리고 사용자 **플러그인** CLI (빌트인 전용 신뢰경계).
 
 종료 코드는 `mat exec` 와 동형: `0` 성공, `2` 사용법 에러, `74` 재캡처 실패, `128+N` 자식 시그널 `N` (self-raise), 그 외 자식 종료 코드 전달.
 

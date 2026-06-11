@@ -192,7 +192,7 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
   },
   {
     id: 'gemini',
-    name: 'Gemini / Antigravity',
+    name: 'Gemini CLI',
     sources: [
       { type: 'file', path: '~/.gemini/oauth_creds.json', saveAs: 'oauth_creds.json' },
       { type: 'file', path: '~/.gemini/google_accounts.json', saveAs: 'google_accounts.json' }
@@ -202,8 +202,15 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     // .omc/research/pr-g0-gemini-cli-home-gate.md) → envSubdir='.gemini' 로 cred 루트를 한 단계 내림.
     // sources 불변(oauth_creds.json + google_accounts.json 2개). 2-cred 는 기존 runRecaptureLocked
     // 가 원자 그룹으로 처리하므로 신규 인프라 불필요. share=∅ — settings.json write-back 가능성이
-    // 있어 미공유(통째 ephemeral). antigravity(agy)는 별도(~/.gemini/antigravity*, macOS keychain
-    // 가능성)라 이번 범위 밖.
+    // 있어 미공유(통째 ephemeral).
+    //
+    // Google Antigravity CLI(`agy`)는 Gemini CLI 와 별도다. 공식 문서는 토큰을 OS native
+    // keyring(Apple Keychain / Linux Secret Service / Windows Credential Manager)에 저장한다고 설명하고,
+    // 설정/플러그인/cache 는 `~/.gemini/antigravity-cli/` 하위에 둔다. 로컬 agy 1.0.7 실측상
+    // `GEMINI_CLI_HOME`, XDG env, `ANTIGRAVITY_EXECUTABLE_DATA_DIR` 는 그 app-data root 를 옮기지
+    // 못했고, broad `HOME` 만 영향을 줬다. 0600 `antigravity-oauth-token` 파일이 관찰될 수 있지만
+    // keyring/파일 저장 계약과 세션용 redirect 가 안정 문서화되기 전까지 mat source/session 으로
+    // 지원하지 않는다(부분 auth 격리 금지).
     session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] }
   },
   {

@@ -33,7 +33,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
   it.each([
     ['claude', 'Claude Code'],
     ['codex', 'Codex CLI'],
-    ['gemini', 'Gemini / Antigravity'],
+    ['gemini', 'Gemini CLI'],
     ['aider', 'Aider'],
     ['kimi', 'Kimi CLI'],
     ['qwen', 'Qwen Code CLI'],
@@ -42,6 +42,10 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ['goose', 'Goose']
   ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
+  });
+
+  it('antigravity/agy 는 별도 builtin 으로 과장 등록하지 않는다 (G2: keyring+redirect 계약 전까지 미지원)', () => {
+    expect(BUILTIN_CLI_DEFS.some((c) => c.id === 'antigravity' || c.id === 'agy')).toBe(false);
   });
 
   it('claude source 는 1개 (현재 platform 기준)', () => {
