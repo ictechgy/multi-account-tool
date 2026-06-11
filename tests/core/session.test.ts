@@ -167,6 +167,17 @@ describe('runSession', () => {
     );
   });
 
+  it('프로필 부재 → UsageError, materialize/spawn 미실행', async () => {
+    mockProfileExists.mockResolvedValue(false);
+
+    await expect(runSession({ cliId: 'codex', profileName: 'missing' })).rejects.toBeInstanceOf(
+      UsageError
+    );
+
+    expect(mockReadProfile).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
   it('자격증명 부재 → 에러 + 세션 디렉토리 미잔류', async () => {
     mockReadProfile.mockResolvedValue(null);
     await expect(runSession({ cliId: 'codex', profileName: 'work' })).rejects.toThrow();
@@ -455,6 +466,13 @@ describe('listSessions / stopSession / reapOrphans', () => {
 
   const DEAD_PID = 2147483646; // 사실상 존재하지 않는 pid → isProcessAlive false
 
+  it('listSessions: sessionsDir 이 디렉토리가 아닌 경우 ENOENT 외 오류를 전파', async () => {
+    await fs.mkdir(join(tmp.home, '.multi-account-tool'), { recursive: true });
+    await fs.writeFile(sessionsDir(), 'not-a-directory');
+
+    await expect(listSessions()).rejects.toMatchObject({ code: 'ENOTDIR' });
+  });
+
   it('listSessions: 살아있는 pid → alive true, 죽은 pid → false', async () => {
     await makeSession('codex-work-aaaaaaaa', process.pid, new Date().toISOString());
     await makeSession('codex-work-bbbbbbbb', DEAD_PID, new Date().toISOString());
@@ -462,6 +480,17 @@ describe('listSessions / stopSession / reapOrphans', () => {
     const byId = Object.fromEntries(sessions.map((s) => [s.id, s.alive]));
     expect(byId['codex-work-aaaaaaaa']).toBe(true);
     expect(byId['codex-work-bbbbbbbb']).toBe(false);
+  });
+
+  it('reapOrphans: invalid startedAt 이어도 디렉토리 mtime 이 TTL 초과면 회수', async () => {
+    const dir = await makeSession('codex-work-badtime1', DEAD_PID, 'not-a-date');
+    const oldTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fs.utimes(dir, oldTime, oldTime);
+
+    const reaped = await reapOrphans();
+
+    expect(reaped).toContain('codex-work-badtime1');
+    await expect(fs.access(dir)).rejects.toThrow();
   });
 
   it('reapOrphans: pid 죽음 + TTL 초과 + 디렉토리 mtime 초과 → 회수', async () => {
@@ -490,6 +519,17 @@ describe('listSessions / stopSession / reapOrphans', () => {
   it('stopSession: 죽은 세션은 디렉토리 정리', async () => {
     const dir = await makeSession('codex-work-ffffffff', DEAD_PID, new Date().toISOString());
     await stopSession('codex-work-ffffffff');
+    await expect(fs.access(dir)).rejects.toThrow();
+  });
+
+  it('stopSession: 손상된 session.json 은 unreadable 로 보고 디렉토리만 best-effort 정리', async () => {
+    const id = 'codex-work-corrupt1';
+    const dir = sessionDir(id);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, 'session.json'), '{not-json');
+
+    await stopSession(id);
+
     await expect(fs.access(dir)).rejects.toThrow();
   });
 

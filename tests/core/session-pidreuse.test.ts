@@ -68,6 +68,15 @@ function spyKill(): ReturnType<typeof vi.spyOn> {
 
 const HOUR = 60 * 60 * 1000;
 
+describe('processStartSignature', () => {
+  it.each([0, -1, 1.5])(
+    '잘못된 pid(%s)는 ps 호출 없이 null 반환',
+    async (pid) => {
+      await expect(processStartSignature(pid)).resolves.toBeNull();
+    }
+  );
+});
+
 describe('stopSession — pid 재사용 방어 (H2)', () => {
   it('서명 일치 + 살아있음 → SIGTERM (디렉토리는 소유 mat 이 정리하도록 보존)', async () => {
     const sig = await processStartSignature(process.pid);
