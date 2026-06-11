@@ -83,6 +83,19 @@ const SID = 'codex-work-test0001';
 /** 테스트용 지연 — late-landing 모사 등에 사용. */
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f-\x9f]/;
+
+async function rejectedMessage(promise: Promise<unknown>): Promise<string> {
+  let thrown: unknown;
+  try {
+    await promise;
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBeInstanceOf(Error);
+  return (thrown as Error).message;
+}
+
 describe('planSession', () => {
   it('codex: 단일 root/cred (auth.json, rel auth.json), share=[config.toml] (issue #63-3)', () => {
     // config.toml 은 secret-free 검증 완료 — base 공유 허용 (토큰은 auth.json 에 분리).
@@ -319,6 +332,48 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     await fs.symlink(join(tmp.home, '.fake/real.toml'), join(tmp.home, '.fake/config.toml'));
     const plan = planSession(fakeDef, 'work', SID);
     await expect(materializeSession(plan)).rejects.toThrow();
+    await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+  });
+
+  it('allow-list symlink 오류 메시지의 path control char 를 sanitize', async () => {
+    const controlBase = join(tmp.home, 'fake-\x1b[31m');
+    const def: CliDef = {
+      id: 'fakecli', name: 'Fake',
+      sources: [{ type: 'file', path: join(controlBase, 'auth.json'), saveAs: 'a.json' }],
+      session: { roots: [{ env: 'FAKE_HOME', base: controlBase, share: ['config.toml'] }] }
+    };
+    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    await fs.mkdir(controlBase, { recursive: true });
+    await fs.writeFile(join(controlBase, 'real.toml'), 'x');
+    await fs.symlink(join(controlBase, 'real.toml'), join(controlBase, 'config.toml'));
+
+    const plan = planSession(def, 'work', SID);
+    const message = await rejectedMessage(materializeSession(plan));
+
+    expect(message).toContain('allow-list 대상이 symlink');
+    expect(message).toContain('fake-?[31m');
+    expect(message).not.toMatch(CONTROL_CHAR_RE);
+    await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+  });
+
+  it('allow-list realpath escape 오류 메시지의 nested path control char 를 sanitize (방어적 plan)', async () => {
+    await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+    await writeBaseFile('.fake/auth.json', 'base-tok');
+    const outside = join(tmp.home, 'outside-share');
+    await fs.mkdir(outside, { recursive: true });
+    await fs.writeFile(join(outside, 'config.toml'), 'shared');
+    const linkName = 'link-\x1b[31m';
+    await fs.symlink(outside, join(tmp.home, '.fake', linkName));
+    const plan = planSession(fakeDef, 'work', SID);
+    // public planSession 은 nested share 를 거부한다. 여기서는 assertContainedRealpath 의
+    // defense-in-depth throw 메시지를 검증하기 위해 plan 객체만 직접 변형한다.
+    plan.roots[0].share = [`${linkName}/config.toml`];
+
+    const message = await rejectedMessage(materializeSession(plan));
+
+    expect(message).toContain('allow-list 대상이 base 밖');
+    expect(message).toContain('link-?[31m');
+    expect(message).not.toMatch(CONTROL_CHAR_RE);
     await expect(fs.access(sessionDir(SID))).rejects.toThrow();
   });
 
