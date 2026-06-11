@@ -35,7 +35,7 @@
 <h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
 <p class="inline-lang" aria-hidden="true"><a href="index.html">English</a> | 한국어</p>
 
-<p>여러 AI CLI 계정(Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 <strong>하나의 TUI 에서 빠르게 전환</strong>해 사용하는 도구. 매번 <code>logout</code> → <code>login</code> 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시, OAuth refresh 토큰 회전 인지 + TUI 재캡처/폐기/취소 dialog 등 안전장치를 기본 적용.</p>
+<p>여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 <strong>하나의 TUI 에서 빠르게 전환</strong>해 사용하는 도구. 매번 <code>logout</code> → <code>login</code> 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시, OAuth refresh 토큰 회전 인지 + TUI 재캡처/폐기/취소 dialog 등 안전장치를 기본 적용.</p>
 <div class="hero-cta"><a class="btn btn-primary" href="#install">설치</a><a class="btn" href="https://github.com/ictechgy/multi-account-tool">GitHub <span aria-hidden="true">↗</span></a></div>
 <pre><code>╭ Multi-Account Tool ────────────────────────────────╮
 │  AI CLI 계정 스위처                                 │
@@ -43,7 +43,7 @@
 
   &gt; Claude Code            [활성: personal] ✓
     Codex CLI              [활성: work]     ✓
-    Gemini / Antigravity   [활성: personal] ✓
+    Gemini CLI              [활성: personal] ✓
 </code></pre>
 
   </div>
@@ -86,7 +86,7 @@
 <td>파일 swap</td>
 </tr>
 <tr>
-<td>Gemini / Antigravity</td>
+<td>Gemini CLI</td>
 <td><code>~/.gemini/oauth_creds.json</code>, <code>google_accounts.json</code></td>
 <td>파일 swap</td>
 </tr>
@@ -139,7 +139,7 @@
 <td>swap 전 <code>mat freshness codex</code> 점검 / 일회성은 <code>mat exec</code></td>
 </tr>
 <tr>
-<td>Gemini / Antigravity</td>
+<td>Gemini CLI</td>
 <td>OAuth (<code>refresh_token</code> + <code>google_accounts.json.active</code>)</td>
 <td>🔴 높음</td>
 <td>Codex 와 동일</td>
@@ -199,11 +199,18 @@
 <td><code>~/.codex/auth.json</code> (cross-platform file path)</td>
 </tr>
 <tr>
-<td>Gemini / Antigravity</td>
+<td>Gemini CLI</td>
 <td>✅</td>
 <td>✅</td>
 <td>⚠️ 미검증</td>
-<td><code>~/.gemini/oauth_creds.json</code> + <code>google_accounts.json</code>; Gemini 세션은 <code>GEMINI_CLI_HOME</code> + <code>.gemini</code> envSubdir 사용. Antigravity 별도 자격증명은 follow-up</td>
+<td><code>~/.gemini/oauth_creds.json</code> + <code>google_accounts.json</code>; <code>mat session</code> 은 <code>GEMINI_CLI_HOME</code> + <code>.gemini</code> envSubdir 사용</td>
+</tr>
+<tr>
+<td>Google Antigravity (<code>agy</code>)</td>
+<td>❌ blocked</td>
+<td>❌ blocked</td>
+<td>❌ blocked</td>
+<td>Gemini CLI 자격증명 source 가 아니다. 공식 문서는 OS native keyring 인증을 설명하고 설정/cache 는 <code>~/.gemini/antigravity-cli/</code> 아래에 두지만, 안전 실측에서 CLI 전용 credential/data redirect 를 찾지 못했다 (<code>GEMINI_CLI_HOME</code>, XDG env, <code>ANTIGRAVITY_EXECUTABLE_DATA_DIR</code> 모두 app-data 를 재배치하지 않음). 0600 <code>antigravity-oauth-token</code> 파일이 존재할 수 있어도 안정 문서화된 token-store/keyring 계약 전까지 mat 는 swap/session 격리를 지원하지 않는다</td>
 </tr>
 <tr>
 <td>Aider</td>
@@ -468,7 +475,7 @@ mat session start codex personal    # 독립 격리 디렉토리 → &quot;perso
 <td><code>XDG_DATA_HOME</code> (<code>opencode</code> envSubdir; broad XDG side effect)</td>
 </tr>
 </tbody></table></div>
-<p><strong>미지원</strong> (안전한 자격증명 재배치 env 없음; <code>mat session start</code> 가 명시 에러): macOS <code>claude</code> (Keychain service name env override 불가), <code>aider</code> (provider env / CLI args / project-local config 등 세션 재배치 불가 채널), <code>goose</code> (keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), 그리고 사용자 <strong>플러그인</strong> CLI (빌트인 전용 신뢰경계).</p>
+<p><strong>미지원</strong> (안전한 자격증명 재배치 env 없음; <code>mat session start</code> 가 명시 에러): macOS <code>claude</code> (Keychain service name env override 불가), <code>aider</code> (provider env / CLI args / project-local config 등 세션 재배치 불가 채널), <code>goose</code> (keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), Google Antigravity / <code>agy</code> (native keyring + 안정적인 CLI 전용 credential redirect 부재; <code>HOME</code> redirect 는 너무 광범위), 그리고 사용자 <strong>플러그인</strong> CLI (빌트인 전용 신뢰경계).</p>
 <p>종료 코드는 <code>mat exec</code> 와 동형: <code>0</code> 성공, <code>2</code> 사용법 에러, <code>74</code> 재캡처 실패, <code>128+N</code> 자식 시그널 <code>N</code> (self-raise), 그 외 자식 종료 코드 전달.</p>
 <p><strong>한계 (사용 전 필독):</strong></p>
 <ul>

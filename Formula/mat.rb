@@ -12,7 +12,7 @@
 # 자세한 안내는 저장소 PUBLISHING.md 참고.
 
 class Mat < Formula
-  desc "여러 AI CLI(Claude Code, Codex, Gemini/Antigravity) 계정을 하나의 TUI에서 전환"
+  desc "여러 AI CLI(Claude Code, Codex, Gemini CLI) 계정을 하나의 TUI에서 전환"
   homepage "https://github.com/ictechgy/multi-account-tool"
   url "https://registry.npmjs.org/multi-account-tool/-/multi-account-tool-0.1.0.tgz"
   sha256 "REPLACE_WITH_REAL_SHA256_AFTER_NPM_PUBLISH"

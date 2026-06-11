@@ -4,7 +4,7 @@
 
 📖 **Documentation:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravity, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. No more `logout` / `login` shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths, OAuth refresh-token rotation awareness with TUI dialog (recapture / discard / cancel).
+Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. No more `logout` / `login` shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths, OAuth refresh-token rotation awareness with TUI dialog (recapture / discard / cancel).
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -13,7 +13,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 
   > Claude Code            [active: personal] ✓
     Codex CLI              [active: work]     ✓
-    Gemini / Antigravity   [active: personal] ✓
+    Gemini CLI              [active: personal] ✓
 ```
 
 ---
@@ -32,7 +32,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini / Antigravit
 | --- | --- | --- |
 | Claude Code | macOS Keychain (`Claude Code-credentials`) | Keychain entry swap |
 | Codex CLI | `~/.codex/auth.json` | File swap |
-| Gemini / Antigravity | `~/.gemini/oauth_creds.json`, `google_accounts.json` | File swap |
+| Gemini CLI | `~/.gemini/oauth_creds.json`, `google_accounts.json` | File swap |
 | Aider | `~/.aider.conf.yml` | File swap |
 | Kimi CLI | `~/.kimi/config.toml` | File swap |
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | File swap |
@@ -47,7 +47,7 @@ Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refre
 | CLI | Auth type | Rotation risk | `mat` safe modes |
 | --- | --- | --- | --- |
 | Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 High — confirmed token revocation after stale restore | `mat freshness codex` before swap; `mat exec` for one-shot sessions |
-| Gemini / Antigravity | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 High | Same as Codex |
+| Gemini CLI | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 High | Same as Codex |
 | OpenCode | OAuth per provider (`provider.refresh`, `provider.accountId`) | 🔴 High | Same as Codex |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 Mitigated — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec`, and `mat freshness claude` (PR-H adapter, high-confidence rotation classification) |
 | Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider-routed) | 🟢 Mitigated — identity-aware adapter (provider key matrix + keychain account) | `mat freshness goose` reports per-source result, identity-aware |
@@ -63,7 +63,8 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 | --- | --- | --- | --- | --- |
 | Claude Code | ✅ | ✅ | ❌ | macOS Keychain on macOS; `~/.claude/.credentials.json` on Linux. `mat session` supports Linux via `CLAUDE_CONFIG_DIR`; macOS Keychain cannot be session-isolated |
 | Codex CLI | ✅ | ✅ | ⚠️ untested | `~/.codex/auth.json` (cross-platform file path) |
-| Gemini / Antigravity | ✅ | ✅ | ⚠️ untested | `~/.gemini/oauth_creds.json` + `google_accounts.json`; Gemini session uses `GEMINI_CLI_HOME` with `.gemini` envSubdir. Antigravity-specific credentials are a follow-up |
+| Gemini CLI | ✅ | ✅ | ⚠️ untested | `~/.gemini/oauth_creds.json` + `google_accounts.json`; `mat session` uses `GEMINI_CLI_HOME` with `.gemini` envSubdir |
+| Google Antigravity (`agy`) | ❌ blocked | ❌ blocked | ❌ blocked | Not a Gemini CLI credential source. Official docs describe OS-native keyring auth; settings/cache live under `~/.gemini/antigravity-cli/`, but safe probes found no CLI-specific credential/data redirect (`GEMINI_CLI_HOME`, XDG envs, and `ANTIGRAVITY_EXECUTABLE_DATA_DIR` did not relocate app-data). A 0600 `antigravity-oauth-token` file may exist, but without a stable documented token-store/keyring contract mat does not swap or session-isolate it |
 | Aider | ✅ | ✅ | ⚠️ untested | **env override**: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_BASE` etc. bypass `~/.aider.conf.yml` — `mat` cannot swap shell env |
 | Kimi CLI | ✅ | ✅ | ⚠️ untested | **env override**: `MOONSHOT_API_KEY` and friends bypass `~/.kimi/config.toml` |
 | Qwen Code CLI | ✅ | ✅ | ⚠️ untested | Credential precedence: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. `mat` swaps both files but cannot affect shell env |
@@ -231,7 +232,7 @@ mat session start codex personal    # independent isolated dir → "personal" ac
 | Claude Code (Linux only) | `CLAUDE_CONFIG_DIR` |
 | OpenCode (**EXPERIMENTAL**) | `XDG_DATA_HOME` (`opencode` envSubdir; broad XDG side effects) |
 
-**Not supported** (no safe credential-relocating env var; `mat session start` errors out): `claude` on macOS (Keychain service name is not env-overridable), `aider` (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file), `goose` (keychain/OS-keyring credentials cannot be env-redirected), and any user **plugin** CLI (built-in only trust boundary).
+**Not supported** (no safe credential-relocating env var; `mat session start` errors out): `claude` on macOS (Keychain service name is not env-overridable), `aider` (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file), `goose` (keychain/OS-keyring credentials cannot be env-redirected), Google Antigravity / `agy` (native keyring plus no stable CLI-specific credential redirect; `HOME` redirect is too broad), and any user **plugin** CLI (built-in only trust boundary).
 
 Exit codes mirror `mat exec`: `0` success, `2` usage error, `74` re-capture failed, `128+N` child signal `N` (self-raised), child's own non-zero code propagated otherwise.
 

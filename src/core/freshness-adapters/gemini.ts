@@ -1,5 +1,5 @@
 /**
- * Gemini / Antigravity 의 freshness adapter.
+ * Gemini CLI 의 freshness adapter.
  *
  * Gemini 의 두 source:
  *  - `~/.gemini/oauth_creds.json`: Google OAuth 토큰 (`access_token`, `refresh_token`,

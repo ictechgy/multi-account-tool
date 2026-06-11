@@ -26,7 +26,7 @@ mat session start codex personal   # CODEX_HOME=<세션B>/codex — A 와 독립
 ```
 
 ### 비목표 (이번 iteration)
-- env override 미지원 CLI (Gemini, Claude/macOS Keychain) 세션 격리 — 명시 에러.
+- env override 미지원 CLI (Claude/macOS Keychain, Aider, Goose, Google Antigravity/`agy`) 세션 격리 — 명시 에러.
 - lterm 패키지 코드 변경 / shim wrapper (후속, ROADMAP §3-C).
 - TUI 통합 (CLI 명령만).
 - 비-secret config 의 세션↔전역 **양방향 실시간 동기화** (allow-list 의 좁은 공유만; 그 외 비-secret 은 세션 내 ephemeral).
@@ -43,6 +43,8 @@ mat session start codex personal   # CODEX_HOME=<세션B>/codex — A 와 독립
 > 이라 env 디렉토리 리다이렉트로 격리 불가(planSession 명시 throw, ❌). settings.json 은 자격증명+config
 > 혼재라 share 제외(세션 ephemeral). Aider 는 계속 BLOCKED, OpenCode 는 EXPERIMENTAL 로 확대(XDG_DATA_HOME broad side effect). 근거:
 > `.omc/research/pr-g0-gemini-cli-home-gate.md`.
+>
+> **개정 이력 5 (2026-06-11)**: Google Antigravity CLI(`agy`)는 Gemini CLI 와 분리해 BLOCKED 로 명시. 공식 문서는 OS native keyring(Apple Keychain / Linux Secret Service/dbus / Windows Credential Manager) 인증을 설명하고, 설정/cache 는 `~/.gemini/antigravity-cli/` 하위에 둔다. 로컬 agy 1.0.7 안전 실측에서 `GEMINI_CLI_HOME`, XDG env, `ANTIGRAVITY_EXECUTABLE_DATA_DIR` 는 app-data 를 재배치하지 못했고 broad `HOME` 만 영향을 줬다. 0600 `antigravity-oauth-token` 파일이 관찰될 수 있어도 안정 문서화된 token-store/keyring 계약과 CLI 전용 redirect 전에는 부분 auth 격리를 금지한다.
 
 | CLI | 격리 | env var | credential 포함 |
 |---|---|---|---|
@@ -50,12 +52,13 @@ mat session start codex personal   # CODEX_HOME=<세션B>/codex — A 와 독립
 | Qwen | ✅ | `QWEN_HOME` (기본 `~/.qwen`) | ✅ settings.json + .env (config 혼재) |
 | Kimi | ✅ | `KIMI_SHARE_DIR` (기본 `~/.kimi`) | ✅ config.toml (config 혼재) |
 | Crush | ✅ | `CRUSH_GLOBAL_CONFIG` + `CRUSH_GLOBAL_DATA` | ✅ crush.json ×2 |
-| Gemini | ✅ | `GEMINI_CLI_HOME` (envSubdir `.gemini`) | ✅ oauth_creds.json + google_accounts.json |
+| Gemini CLI | ✅ | `GEMINI_CLI_HOME` (envSubdir `.gemini`) | ✅ oauth_creds.json + google_accounts.json |
+| Google Antigravity (`agy`) | ❌ blocked | 없음 (`HOME` 만 app-data 에 영향, 너무 광범위) | ❌ 공식 keyring auth + 미문서/불안정 파일 token-store |
 | Claude | ⚠️ linux | `CLAUDE_CONFIG_DIR` (기본 `~/.claude`) | ✅ .credentials.json (macOS=keychain ❌) |
 | Aider | ⚠️ | `AIDER_CONFIG` (config 만) | ❌ (key=provider env) |
 | OpenCode | ⚠️ experimental | `XDG_DATA_HOME` + envSubdir `opencode` | ✅ auth.json (broad XDG side effect) |
 
-**1차 구현 대상**: ✅ 4개 — **Codex / Qwen / Kimi / Crush**. **개정 3**: + **Gemini**(envSubdir) / **Claude linux**(file). **개정 4**: + **OpenCode EXPERIMENTAL**(`XDG_DATA_HOME` broad env; 다른 XDG 도구 data/credential 이 ephemeral 세션 dir 로 들어가 종료 시 사라질 수 있음). macOS Claude·Aider·Goose 는 미지원/범위 밖.
+**1차 구현 대상**: ✅ 4개 — **Codex / Qwen / Kimi / Crush**. **개정 3**: + **Gemini**(envSubdir) / **Claude linux**(file). **개정 4**: + **OpenCode EXPERIMENTAL**(`XDG_DATA_HOME` broad env; 다른 XDG 도구 data/credential 이 ephemeral 세션 dir 로 들어가 종료 시 사라질 수 있음). macOS Claude·Aider·Goose·Google Antigravity(`agy`) 는 미지원/범위 밖.
 
 ---
 
@@ -178,7 +181,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 - cli-defs.test 에 빌트인 4개 `session` 메타 회귀 가드. macOS + CI ubuntu 양쪽(파일/symlink 만 — secret-tool 무관).
 
 ## 10. 범위 밖 / 향후
-macOS Claude(keychain env 부재), Aider(env-export/redirect 부재), Goose(keychain/os-keyring), OpenCode upstream `OPENCODE_DATA_DIR` 추적(현재 XDG experimental), Antigravity 별도 credential, Crush data root 비-secret 공유 확대, lterm shim, TUI 패널, `mat session env`(eval). Crush `~/.local/share/crush/` 의 DB/캐시 구조는 공유 확대 전 실측 필요.
+macOS Claude(keychain env 부재), Aider(env-export/redirect 부재), Goose(keychain/os-keyring), Google Antigravity(`agy`: native keyring + 안정 credential redirect 부재), OpenCode upstream `OPENCODE_DATA_DIR` 추적(현재 XDG experimental), Crush data root 비-secret 공유 확대, lterm shim, TUI 패널, `mat session env`(eval). Crush `~/.local/share/crush/` 의 DB/캐시 구조는 공유 확대 전 실측 필요.
 
 ## 11. CLI 표면
 ```
@@ -193,4 +196,4 @@ mat session stop <id>               # 종료(SIGTERM) 또는 orphan 정리
 - **Alternatives**: symlink-overlay(io-atomic 비안전+fail-open+혼재 CLI 무효 → 기각), 전체 copy-isolate(allow-list 없이 — config 공유 0, 단순하나 Codex config 휘발; allow-list 가 이를 좁게 보완), env-only(자격증명 파일 못 다룸 → 기각).
 - **Why**: copy-isolate 는 fail-closed·io-atomic 부담 소거를 공짜로 얻고, 사용자 1차 요구(자격증명 격리, ROADMAP 원안=copy)와 정합. allow-list 가 분리형 config(Codex) 공유 이점을 좁고 안전하게 회복.
 - **Consequences**: (+) 자격증명·allow-list config 무간섭 보장, 동시 다계정, 동시쓰기 손상 0(copy-isolate 로 allow-list 공유 race 도 제거 — #72). (−) allow-list 외 비-secret 은 세션 내 ephemeral, allow-list config 의 세션 내 수정은 base 에 반영되지 않음(write-back 없음 — 영구 변경은 세션 밖에서).
-- **Follow-ups**: Crush data 비-secret 공유 확대(실측 후), macOS Claude/Aider/Goose/Antigravity, OpenCode `OPENCODE_DATA_DIR` upstream 추적, lterm shim, TUI.
+- **Follow-ups**: Crush data 비-secret 공유 확대(실측 후), macOS Claude/Aider/Goose/Google Antigravity, OpenCode `OPENCODE_DATA_DIR` upstream 추적, lterm shim, TUI. Antigravity unblock 조건은 (1) `AGY_HOME`/`ANTIGRAVITY_CONFIG_HOME` 같은 CLI 전용 credential redirect, 또는 (2) 문서화된 token-store 경로와 플랫폼별 keyring service/account 계약, 또는 (3) 안전한 비파괴 테스트로 검증 가능한 upstream auth relocation 계약.

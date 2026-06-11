@@ -8,7 +8,7 @@
 ## Done
 
 - ✅ **`mat exec <cli> <profile> -- <cmd...>`** — 시간 격리 실행. cli 별 lockfile 로 동시 swap 차단, stale lock 자동 복구, SIGINT/SIGTERM/SIGHUP 전달, `finally` 원복. 세션 격리는 아니며 `SIGKILL` 시 원복 불가는 한계로 명시.
-- ✅ **`mat session start/list/stop`** — 세션별 격리 (아래 #2). env 주입(`CODEX_HOME` 등) + copy-isolate 로 터미널마다 다른 계정 **동시** 사용. 지원: Codex/Qwen/Kimi/Crush/Gemini/Claude(Linux)/OpenCode(EXPERIMENTAL). 자격증명만 격리(비-secret config 공유는 follow-up), 종료 시 원자 재캡처, orphan 회수(pid+TTL). 설계/구현 합의: `docs/superpowers/specs/2026-05-30-session-isolation-design.md` + `.omc/plans/session-isolation.md` (ralplan consensus). macOS Claude(keychain)/Aider/Goose/plugin 은 미지원(명시 에러). OpenCode 는 broad XDG_DATA_HOME side effect 때문에 EXPERIMENTAL.
+- ✅ **`mat session start/list/stop`** — 세션별 격리 (아래 #2). env 주입(`CODEX_HOME` 등) + copy-isolate 로 터미널마다 다른 계정 **동시** 사용. 지원: Codex/Qwen/Kimi/Crush/Gemini CLI/Claude(Linux)/OpenCode(EXPERIMENTAL). 자격증명만 격리(비-secret config 공유는 follow-up), 종료 시 원자 재캡처, orphan 회수(pid+TTL). 설계/구현 합의: `docs/superpowers/specs/2026-05-30-session-isolation-design.md` + `.omc/plans/session-isolation.md` (ralplan consensus). macOS Claude(keychain)/Aider/Goose/Google Antigravity(`agy`)/plugin 은 미지원(명시 에러). OpenCode 는 broad XDG_DATA_HOME side effect 때문에 EXPERIMENTAL.
 
 ---
 
@@ -108,7 +108,7 @@
 ### lterm 컨텍스트
 - `@ictechgy/lterm` v1.0.3 (사용자 본인 작품, npm: `@ictechgy/lterm`)
 - tmux 호환 PTY 세션 데몬 (`lterm start`, `lterm resume`, `lterm send-keys`)
-- 빌트인 agent shim: `lterm claude` / `lterm codex` / `lterm agy` / `lterm gemini` 등
+- 빌트인 agent shim: `lterm claude` / `lterm codex` / `lterm agy` / `lterm gemini` 등 (`mat` 기준 Google Antigravity/`agy` 자격증명 swap·session 격리는 native keyring + 안정 redirect 부재로 별도 미지원)
 
 ### 통합 시나리오
 
