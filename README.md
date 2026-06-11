@@ -61,14 +61,14 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 
 | CLI | macOS | Linux | Windows | Override / known limits |
 | --- | --- | --- | --- | --- |
-| Claude Code | ✅ | ❌ | ❌ | macOS Keychain only — no Linux/Windows credential-store backend yet |
+| Claude Code | ✅ | ✅ | ❌ | macOS Keychain on macOS; `~/.claude/.credentials.json` on Linux. `mat session` supports Linux via `CLAUDE_CONFIG_DIR`; macOS Keychain cannot be session-isolated |
 | Codex CLI | ✅ | ✅ | ⚠️ untested | `~/.codex/auth.json` (cross-platform file path) |
-| Gemini / Antigravity | ✅ | ✅ | ⚠️ untested | `~/.gemini/oauth_creds.json` + `google_accounts.json` |
+| Gemini / Antigravity | ✅ | ✅ | ⚠️ untested | `~/.gemini/oauth_creds.json` + `google_accounts.json`; Gemini session uses `GEMINI_CLI_HOME` with `.gemini` envSubdir. Antigravity-specific credentials are a follow-up |
 | Aider | ✅ | ✅ | ⚠️ untested | **env override**: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_BASE` etc. bypass `~/.aider.conf.yml` — `mat` cannot swap shell env |
 | Kimi CLI | ✅ | ✅ | ⚠️ untested | **env override**: `MOONSHOT_API_KEY` and friends bypass `~/.kimi/config.toml` |
 | Qwen Code CLI | ✅ | ✅ | ⚠️ untested | Credential precedence: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. `mat` swaps both files but cannot affect shell env |
 | Crush | ✅ | ✅ | ⚠️ untested | **project-local override**: `./.crush.json` / `./crush.json` in CWD takes precedence over `~/.config/crush/*`; `CRUSH_GLOBAL_*` env vars also override |
-| OpenCode | ✅ | ✅ | ⚠️ untested | OS-agnostic XDG path (`~/.local/share/opencode/auth.json` on every OS via `xdg-basedir`) |
+| OpenCode | ✅ | ✅ | ⚠️ untested | OS-agnostic XDG path (`$XDG_DATA_HOME/opencode/auth.json`, default `~/.local/share/opencode/auth.json`). `mat session` is **EXPERIMENTAL** via broad `XDG_DATA_HOME`; `OPENCODE_CONFIG_DIR` / config/env/project-local `apiKey` can bypass `auth.json` isolation |
 | Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service (`goose`/`secrets` via `secret-tool`) + `~/.config/goose/*.yaml`. On Linux mat includes the os-keyring source by default and requires `secret-tool` (libsecret-tools) + a keyring daemon — a missing tool or down daemon **errors out** rather than silently swapping stale YAML (Goose reaches the keyring via the libsecret *library*, so a missing `secret-tool` CLI does not prove the keyring is unused). Set `GOOSE_DISABLE_KEYRING=1` if you use the file backend; mat then omits os-keyring and swaps `secrets.yaml`. Windows Credential Manager not yet supported |
 
 "⚠️ untested" = swap logic is platform-agnostic file I/O, but the project's CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI's documentation, not exercised. Patches and bug reports welcome.
@@ -227,14 +227,18 @@ mat session start codex personal    # independent isolated dir → "personal" ac
 | Qwen Code | `QWEN_HOME` |
 | Kimi | `KIMI_SHARE_DIR` |
 | Crush | `CRUSH_GLOBAL_CONFIG` + `CRUSH_GLOBAL_DATA` |
+| Gemini CLI | `GEMINI_CLI_HOME` (`.gemini` envSubdir) |
+| Claude Code (Linux only) | `CLAUDE_CONFIG_DIR` |
+| OpenCode (**EXPERIMENTAL**) | `XDG_DATA_HOME` (`opencode` envSubdir; broad XDG side effects) |
 
-**Not supported** (no credential-relocating env var; `mat session start` errors out): `gemini` (no env override — [gemini-cli#2815](https://github.com/google-gemini/gemini-cli/issues/2815)), `claude` (macOS Keychain service name is not env-overridable), `aider` (credentials are provider env vars, not a file), `opencode`, `goose`, and any user **plugin** CLI (1st iteration is built-in only).
+**Not supported** (no safe credential-relocating env var; `mat session start` errors out): `claude` on macOS (Keychain service name is not env-overridable), `aider` (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file), `goose` (keychain/OS-keyring credentials cannot be env-redirected), and any user **plugin** CLI (built-in only trust boundary).
 
 Exit codes mirror `mat exec`: `0` success, `2` usage error, `74` re-capture failed, `128+N` child signal `N` (self-raised), child's own non-zero code propagated otherwise.
 
 **Limitations (read before relying on it):**
 
-- **Credentials are isolated; non-secret config is *not* shared (1st iteration).** Anything other than the credential file (model config, history, sessions, caches) is **not** materialized into the session — the CLI falls back to its defaults and anything it creates inside the session is **discarded on exit** (only the credential file is re-captured). This is a deliberate, fail-closed default. Contrast with `mat exec`, where the CLI uses the real config dir so history is preserved: prefer `mat exec` for long single-account work, `mat session` for concurrent multi-account. (An allow-list to share read-mostly config like Codex `config.toml` is implemented but disabled until its contents are verified — a follow-up.)
+- **Credentials are isolated; non-secret config is mostly ephemeral.** mat copies credentials into the session and re-captures only credentials on exit. A narrow allow-list may copy read-mostly non-secret config (currently Codex `config.toml`) as copy-isolate, never write-back; everything else (history, caches, sessions, most config) is created inside the session and **discarded on exit**. Prefer `mat exec` for long single-account work where you want the real config/history, and `mat session` for concurrent multi-account isolation.
+- **OpenCode EXPERIMENTAL:** OpenCode isolation uses `XDG_DATA_HOME` because upstream does not expose `OPENCODE_DATA_DIR`. This env affects the whole subshell: other XDG-aware tools (for example Crush) may write data or credentials into the ephemeral session directory and lose them when the session exits. Also, OpenCode config channels (`OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`, project-local `opencode.json`/`.opencode`, or plaintext `apiKey` in config) can still bypass `auth.json` isolation.
 - **`SIGKILL` orphans** the session directory (trap-impossible, same as `mat exec`); the next `mat session` call reaps it (owning process gone — PID-reuse-aware via the process start-time signature — **and** both the session's start time and its directory mtime older than 1h).
 - **Parent-trust assumption:** isolation assumes `~/.multi-account-tool` and its parent are trusted; a symlinked `~/.multi-account-tool` is out of scope.
 - **Same profile, two concurrent sessions:** re-capture is unsynchronized — single-credential CLIs are last-writer-wins; multi-credential CLIs (Qwen/Crush) may end up with files from different sessions. Both are always valid credentials of the **same account** (never wrong-account, never corrupted) and self-heal on next use. Prefer a distinct profile per terminal; per-profile locking is a follow-up.

@@ -61,14 +61,14 @@
 
 | CLI | macOS | Linux | Windows | Override / 알려진 한계 |
 | --- | --- | --- | --- | --- |
-| Claude Code | ✅ | ❌ | ❌ | macOS Keychain 전용 — Linux/Windows credential-store 백엔드 미지원 |
+| Claude Code | ✅ | ✅ | ❌ | macOS 는 Keychain, Linux 는 `~/.claude/.credentials.json`. `mat session` 은 Linux 에서 `CLAUDE_CONFIG_DIR` 로 지원; macOS Keychain 은 세션 격리 불가 |
 | Codex CLI | ✅ | ✅ | ⚠️ 미검증 | `~/.codex/auth.json` (cross-platform file path) |
-| Gemini / Antigravity | ✅ | ✅ | ⚠️ 미검증 | `~/.gemini/oauth_creds.json` + `google_accounts.json` |
+| Gemini / Antigravity | ✅ | ✅ | ⚠️ 미검증 | `~/.gemini/oauth_creds.json` + `google_accounts.json`; Gemini 세션은 `GEMINI_CLI_HOME` + `.gemini` envSubdir 사용. Antigravity 별도 자격증명은 follow-up |
 | Aider | ✅ | ✅ | ⚠️ 미검증 | **env override**: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_BASE` 등이 `~/.aider.conf.yml` 을 우회 — mat 는 shell env 를 swap 할 수 없음 |
 | Kimi CLI | ✅ | ✅ | ⚠️ 미검증 | **env override**: `MOONSHOT_API_KEY` 등이 `~/.kimi/config.toml` 을 우회 |
 | Qwen Code CLI | ✅ | ✅ | ⚠️ 미검증 | 자격증명 우선순위: **shell env > `~/.qwen/.env` > `~/.qwen/settings.json`**. mat 는 두 파일 모두 swap 하지만 shell env 는 영향 없음 |
 | Crush | ✅ | ✅ | ⚠️ 미검증 | **project-local override**: CWD 의 `./.crush.json` / `./crush.json` 이 `~/.config/crush/*` 보다 우선; `CRUSH_GLOBAL_*` env 도 우선 |
-| OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로 (`~/.local/share/opencode/auth.json`, 모든 OS 에서 `xdg-basedir` 사용) |
+| OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로 (`$XDG_DATA_HOME/opencode/auth.json`, 기본 `~/.local/share/opencode/auth.json`). `mat session` 은 broad `XDG_DATA_HOME` 기반 **EXPERIMENTAL**; `OPENCODE_CONFIG_DIR` / config/env/project-local `apiKey` 는 `auth.json` 격리를 우회 가능 |
 | Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service (`goose`/`secrets`, `secret-tool` 경유) + `~/.config/goose/*.yaml`. Linux 는 기본적으로 os-keyring 을 포함하며 `secret-tool` (libsecret-tools) + keyring daemon 이 필요 — 미설치/daemon-down 시 stale YAML 로 조용히 swap 하지 않고 **명시 에러** (Goose 는 libsecret *라이브러리* 로 keyring 에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않음). file backend 면 `GOOSE_DISABLE_KEYRING=1` 설정 시 mat 가 os-keyring 을 생략하고 `secrets.yaml` 을 swap. Windows Credential Manager 미지원 |
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.
@@ -227,14 +227,18 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 | Qwen Code | `QWEN_HOME` |
 | Kimi | `KIMI_SHARE_DIR` |
 | Crush | `CRUSH_GLOBAL_CONFIG` + `CRUSH_GLOBAL_DATA` |
+| Gemini CLI | `GEMINI_CLI_HOME` (`.gemini` envSubdir) |
+| Claude Code (Linux 전용) | `CLAUDE_CONFIG_DIR` |
+| OpenCode (**EXPERIMENTAL**) | `XDG_DATA_HOME` (`opencode` envSubdir; broad XDG side effect) |
 
-**미지원** (자격증명 재배치 env 없음; `mat session start` 가 명시 에러): `gemini` (env override 없음 — [gemini-cli#2815](https://github.com/google-gemini/gemini-cli/issues/2815)), `claude` (macOS Keychain service name env override 불가), `aider` (자격증명이 파일 아닌 provider env), `opencode`, `goose`, 그리고 사용자 **플러그인** CLI (1차는 빌트인 전용).
+**미지원** (안전한 자격증명 재배치 env 없음; `mat session start` 가 명시 에러): macOS `claude` (Keychain service name env override 불가), `aider` (provider env / CLI args / project-local config 등 세션 재배치 불가 채널), `goose` (keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), 그리고 사용자 **플러그인** CLI (빌트인 전용 신뢰경계).
 
 종료 코드는 `mat exec` 와 동형: `0` 성공, `2` 사용법 에러, `74` 재캡처 실패, `128+N` 자식 시그널 `N` (self-raise), 그 외 자식 종료 코드 전달.
 
 **한계 (사용 전 필독):**
 
-- **자격증명만 격리, 비-secret config 는 공유 안 됨 (1차).** 자격증명 파일 외(모델 설정·history·sessions·캐시)는 세션에 materialize 하지 않는다 — CLI 는 기본값을 쓰고, 세션 안에서 생성한 것은 **종료 시 폐기**(자격증명만 재캡처). 의도된 fail-closed 기본값. `mat exec` 는 실제 config 디렉토리를 써서 history 가 보존되는 것과 대비: **장기 단일 계정 작업은 `mat exec`, 동시 다계정은 `mat session`** 을 쓰라. (Codex `config.toml` 같은 read-mostly config 공유 allow-list 메커니즘은 구현돼 있으나 내용 검증 전까지 비활성 — follow-up.)
+- **자격증명은 격리, 비-secret config 는 대부분 ephemeral.** mat 은 자격증명을 세션에 복사하고 종료 시 자격증명만 재캡처한다. 좁은 allow-list 의 read-mostly 비-secret config(현재 Codex `config.toml`)는 copy-isolate 로 복사될 수 있지만 write-back 은 없다. 그 외 history·cache·session·대부분 config 는 세션 안에서 만들어지고 **종료 시 폐기**된다. 실제 config/history 보존이 중요한 장기 단일 계정 작업은 `mat exec`, 동시 다계정은 `mat session` 을 권장.
+- **OpenCode EXPERIMENTAL:** OpenCode 는 upstream 에 `OPENCODE_DATA_DIR` 가 없어 `XDG_DATA_HOME` 을 사용한다. 이 env 는 subshell 전체에 적용되므로 다른 XDG 도구(예: Crush)가 세션 안에서 data/credential 을 쓰면 ephemeral 세션 디렉토리에 기록됐다가 종료 시 사라질 수 있다. 또한 OpenCode config 채널(`OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`, project-local `opencode.json`/`.opencode`, config 안 plaintext `apiKey`)은 여전히 `auth.json` 격리를 우회할 수 있다.
 - **`SIGKILL`** 은 세션 디렉토리를 orphan 으로 남긴다 (trap 불가, `mat exec` 와 동일) — 다음 `mat session` 호출이 회수 (소유 프로세스 사망 — 프로세스 시작서명으로 **PID 재사용까지 식별** — **그리고** 세션 시작시각·디렉토리 mtime 둘 다 1h 초과 시).
 - **부모 신뢰 전제:** 격리는 `~/.multi-account-tool` 과 그 부모가 신뢰됨을 전제 — `~/.multi-account-tool` 자체가 symlink 로 바꿔치기된 경우는 범위 밖.
 - **같은 프로필 동시 2세션:** 재캡처가 직렬화되지 않는다 — 단일 자격증명 CLI 는 last-writer-wins, 멀티 자격증명 CLI(Qwen/Crush)는 파일별로 서로 다른 세션의 것이 섞일 수 있다. 둘 다 항상 **같은 계정**의 유효한 자격증명이며(wrong-account 아님·손상 아님) 다음 사용 시 자가 치유된다. 터미널마다 다른 프로필 사용 권장 — 프로필 단위 lock 은 follow-up.

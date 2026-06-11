@@ -13,9 +13,17 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 import { expandTilde } from '../../src/core/paths.js';
+
+function expectedOpenCodeDataRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const dataHome = env.XDG_DATA_HOME && env.XDG_DATA_HOME.length > 0
+    ? env.XDG_DATA_HOME
+    : '~/.local/share';
+  return join(dataHome, 'opencode');
+}
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
   it('claude/codex/gemini/aider/kimi/qwen/crush/opencode/goose 9개 정의를 정확히 포함', () => {
@@ -87,12 +95,24 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     ]);
   });
 
-  it('opencode source 는 1개 file (~/.local/share/opencode/auth.json, OS 공통)', () => {
+  it('opencode source 는 1개 file (~/.local/share/opencode/auth.json, OS 공통) + EXPERIMENTAL session', () => {
     // OpenCode 는 npm xdg-basedir 사용 → macOS/Linux/BSD/Windows 모두 동일 경로.
     const opencode = BUILTIN_CLI_DEFS.find((c) => c.id === 'opencode');
+    const expectedRoot = expectedOpenCodeDataRoot();
     expect(opencode?.sources).toEqual([
-      { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }
+      { type: 'file', path: join(expectedRoot, 'auth.json'), saveAs: 'opencode-auth.json' }
     ]);
+    expect(opencode?.session).toEqual({
+      roots: [
+        expect.objectContaining({
+          env: 'XDG_DATA_HOME',
+          base: expectedRoot,
+          envSubdir: 'opencode'
+        })
+      ]
+    });
+    expect(opencode?.session?.roots[0].warning).toContain('EXPERIMENTAL OpenCode');
+    expect(opencode?.session?.roots[0].warning).toContain('XDG_DATA_HOME');
   });
 
   it('goose source 수는 현재 platform 에 따라 darwin=3(keychain) / linux=3(os-keyring) / 그 외=2(file)', () => {
@@ -198,13 +218,39 @@ describe('opencode source — platform 무관 단일 경로 (xdg-basedir 동작)
       const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
       const opencode = defs.find((c) => c.id === 'opencode');
       const src = opencode!.sources[0];
+      const expectedRoot = expectedOpenCodeDataRoot();
       expect(src.type).toBe('file');
       if (src.type === 'file') {
-        expect(src.path).toBe('~/.local/share/opencode/auth.json');
+        expect(src.path).toBe(join(expectedRoot, 'auth.json'));
         expect(src.saveAs).toBe('opencode-auth.json');
       }
+      expect(opencode!.session!.roots[0]).toMatchObject({
+        env: 'XDG_DATA_HOME',
+        base: expectedRoot,
+        envSubdir: 'opencode'
+      });
     }
   );
+
+  it('XDG_DATA_HOME 설정 시 import 시점에 source/session base 가 해당 data root 를 따른다', async () => {
+    // BUILTIN_CLI_DEFS 는 module load 시점 const 배열이라 env 변경 후 vi.resetModules + dynamic import 필요.
+    vi.stubGlobal('process', {
+      ...process,
+      env: { ...process.env, XDG_DATA_HOME: '/tmp/mat-xdg-data' }
+    });
+    vi.resetModules();
+    const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
+    const opencode = defs.find((c) => c.id === 'opencode')!;
+    const expectedRoot = expectedOpenCodeDataRoot({ XDG_DATA_HOME: '/tmp/mat-xdg-data' });
+    expect(opencode.sources).toEqual([
+      { type: 'file', path: join(expectedRoot, 'auth.json'), saveAs: 'opencode-auth.json' }
+    ]);
+    expect(opencode.session!.roots[0]).toMatchObject({
+      env: 'XDG_DATA_HOME',
+      base: expectedRoot,
+      envSubdir: 'opencode'
+    });
+  });
 });
 
 /**
@@ -346,7 +392,18 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     });
   });
 
-  it.each(['aider', 'opencode', 'goose'])(
+  it('opencode: EXPERIMENTAL session.roots 1개 (XDG_DATA_HOME / ~/.local/share/opencode, envSubdir=opencode)', () => {
+    const expectedRoot = expectedOpenCodeDataRoot();
+    expect(find('opencode').session?.roots).toHaveLength(1);
+    expect(find('opencode').session!.roots[0]).toMatchObject({
+      env: 'XDG_DATA_HOME',
+      base: expectedRoot,
+      envSubdir: 'opencode'
+    });
+    expect(find('opencode').session!.roots[0].warning).toContain('EXPERIMENTAL OpenCode');
+  });
+
+  it.each(['aider', 'goose'])(
     '%s: session 미지정(세션 격리 미지원)',
     (id) => {
       expect(find(id).session).toBeUndefined();

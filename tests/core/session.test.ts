@@ -218,6 +218,30 @@ describe('runSession', () => {
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(mockAcquire).not.toHaveBeenCalled();
   });
+
+  it('warning 이 있는 session root → spawn 전 EXPERIMENTAL 경고를 stderr 에 1회 출력', async () => {
+    const warning =
+      'EXPERIMENTAL OpenCode: XDG_DATA_HOME is redirected; other XDG tools (e.g. Crush) may write data/credentials into this ephemeral session dir and lose them at exit.';
+    mockFindCliDef.mockReturnValue({
+      ...DEF,
+      id: 'opencode',
+      sources: [{ type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }],
+      session: { roots: [{ env: 'XDG_DATA_HOME', base: '~/.local/share/opencode', envSubdir: 'opencode', warning }] }
+    });
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await runSession({ cliId: 'opencode', profileName: 'work' });
+      const warnings = stderrSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((s) => s.includes('EXPERIMENTAL OpenCode'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('XDG_DATA_HOME');
+      expect(warnings[0]).toContain('Crush');
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
 });
 
 describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {
@@ -354,6 +378,30 @@ describe('planSession / gemini — 실제 빌트인 def 의 envSubdir 매핑 (PR
       'oauth_creds.json'
     ]);
     expect(root.share).toEqual([]); // share=∅ (settings.json write-back 가능성)
+  });
+});
+
+describe('planSession / opencode — 실제 빌트인 def 의 XDG_DATA_HOME 매핑 (EXPERIMENTAL)', () => {
+  /** mock 된 cli-defs 를 우회해 실제 빌트인 opencode def 를 읽는다. */
+  async function realOpenCodeDef(): Promise<CliDef> {
+    const actual = await vi.importActual<typeof import('../../src/core/cli-defs.js')>(
+      '../../src/core/cli-defs.js'
+    );
+    return actual.BUILTIN_CLI_DEFS.find((c) => c.id === 'opencode')!;
+  }
+
+  it('auth.json 이 <주입dir>/opencode/auth.json 으로 매핑되고 XDG 경고가 유지된다', async () => {
+    const def = await realOpenCodeDef();
+    const id = 'opencode-work-1234abcd';
+    const plan = planSession(def, 'work', id);
+    const root = plan.roots[0];
+    const dir = join(sessionDir(id), 'XDG_DATA_HOME');
+    expect(root.dir).toBe(dir); // env 주입값 = XDG_DATA_HOME 자체
+    expect(root.creds).toHaveLength(1);
+    expect(root.creds[0].rel).toBe('auth.json');
+    expect(root.creds[0].absInSession).toBe(join(dir, 'opencode', 'auth.json'));
+    expect(root.warning).toContain('EXPERIMENTAL OpenCode');
+    expect(root.warning).toContain('Crush');
   });
 });
 

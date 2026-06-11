@@ -8,7 +8,7 @@
 ## Done
 
 - ✅ **`mat exec <cli> <profile> -- <cmd...>`** — 시간 격리 실행. cli 별 lockfile 로 동시 swap 차단, stale lock 자동 복구, SIGINT/SIGTERM/SIGHUP 전달, `finally` 원복. 세션 격리는 아니며 `SIGKILL` 시 원복 불가는 한계로 명시.
-- ✅ **`mat session start/list/stop`** — 세션별 격리 (아래 #2). env 주입(`CODEX_HOME` 등) + copy-isolate 로 터미널마다 다른 계정 **동시** 사용. 1차 지원: Codex/Qwen/Kimi/Crush. 자격증명만 격리(비-secret config 공유는 follow-up), 종료 시 원자 재캡처, orphan 회수(pid+TTL). 설계/구현 합의: `docs/superpowers/specs/2026-05-30-session-isolation-design.md` + `.omc/plans/session-isolation.md` (ralplan consensus). Gemini/Claude(keychain)/Aider/OpenCode/plugin 은 미지원(명시 에러).
+- ✅ **`mat session start/list/stop`** — 세션별 격리 (아래 #2). env 주입(`CODEX_HOME` 등) + copy-isolate 로 터미널마다 다른 계정 **동시** 사용. 지원: Codex/Qwen/Kimi/Crush/Gemini/Claude(Linux)/OpenCode(EXPERIMENTAL). 자격증명만 격리(비-secret config 공유는 follow-up), 종료 시 원자 재캡처, orphan 회수(pid+TTL). 설계/구현 합의: `docs/superpowers/specs/2026-05-30-session-isolation-design.md` + `.omc/plans/session-isolation.md` (ralplan consensus). macOS Claude(keychain)/Aider/Goose/plugin 은 미지원(명시 에러). OpenCode 는 broad XDG_DATA_HOME side effect 때문에 EXPERIMENTAL.
 
 ---
 
@@ -77,7 +77,7 @@
   - 안 되면 OS 전역 한계 — 세션 격리 불가능 (현재 모델 유지).
 - **Codex**: `CODEX_HOME` 또는 `CODEX_AUTH_FILE` 같은 env var?
 - **Gemini**: `GEMINI_CONFIG_DIR` ?
-- **Aider**: `--config-file <path>` CLI 옵션 + `OPENAI_API_KEY` env 직접 export
+- **Aider**: `--config-file <path>` CLI 옵션 + `OPENAI_API_KEY` env 직접 export — 세션 재배치 env 부재로 BLOCKED
 
 ### 설계 시나리오
 
