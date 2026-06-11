@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { writeFileAtomic } from '../../src/core/io-atomic.js';
 
@@ -130,4 +130,47 @@ describe('writeFileAtomic', () => {
     const entries = await fs.readdir(dir);
     expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
   });
+
+  it('writeFile 실패 시 열린 handle close 와 tmp cleanup 을 best-effort 로 시도하고 원본 에러를 보존한다', async () => {
+    vi.resetModules();
+    const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const writeErr = new Error('write failed');
+    const closeErr = new Error('close failed');
+    const rmErr = new Error('rm failed');
+    const handle = {
+      writeFile: vi.fn().mockRejectedValue(writeErr),
+      close: vi.fn().mockRejectedValue(closeErr)
+    };
+    const mkdir = vi.fn().mockResolvedValue(undefined);
+    const open = vi.fn().mockResolvedValue(handle);
+    const rename = vi.fn().mockResolvedValue(undefined);
+    const rmMock = vi.fn().mockRejectedValue(rmErr);
+
+    vi.doMock('node:fs', () => ({
+      ...realFs,
+      constants: realFs.constants,
+      promises: {
+        mkdir,
+        open,
+        rename,
+        rm: rmMock
+      }
+    }));
+
+    try {
+      const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
+
+      await expect(mockedWriteFileAtomic('/tmp/mat-secret.json', 'secret')).rejects.toBe(writeErr);
+      expect(mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
+      expect(open).toHaveBeenCalledOnce();
+      expect(handle.writeFile).toHaveBeenCalledWith('secret');
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(rmMock).toHaveBeenCalledWith('/tmp/mat-secret.json.tmp', { force: true });
+      expect(rename).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
+  });
+
 });

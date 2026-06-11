@@ -627,4 +627,87 @@ describe('runExec', () => {
     expect(mockSnapshot).toHaveBeenCalledWith('codex', 'work');
     expect(mockSwitch).toHaveBeenCalledTimes(2);  // swap + restore
   });
+
+  it('spawn error 와 exit 이 중복 전달돼도 첫 settle 결과만 사용한다', async () => {
+    const listeners: Record<string, (...args: unknown[]) => void> = {};
+    const child = {
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(),
+      on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        listeners[event] = cb;
+        return child;
+      }),
+      // 실제 ChildProcess 는 listener 를 제거하지만, 여기서는 의도적으로 no-op 처리해 두 번째
+      // 이벤트가 settle guard(`if (settled) return`) 를 직접 통과하게 만든다.
+      removeAllListeners: vi.fn(() => child)
+    } as unknown as FakeChildProcess;
+    const firstError = new Error('first spawn error');
+    mockSpawn.mockImplementation(() => {
+      setImmediate(() => {
+        listeners.error(firstError);
+        listeners.exit(0, null);
+      });
+      return asChildProcess(child);
+    });
+
+    await expect(runExec({
+      cliId: 'codex', profileName: 'work', command: 'flaky-child', args: []
+    })).rejects.toThrow('first spawn error');
+
+    expect(mockSnapshot).toHaveBeenCalledOnce();
+    expect(mockSwitch).toHaveBeenCalledTimes(2); // spawn error 이후에도 recapture + restore
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('SIGINT forwarder: child 생성 전 신호는 안전하게 무시된다', async () => {
+    const child = fakeChild({ exit: { code: 0, signal: null } });
+    mockAcquire.mockImplementation(async () => {
+      latestSignalListener('SIGINT')('SIGINT');
+      return release as () => Promise<void>;
+    });
+    mockSpawn.mockReturnValue(asChildProcess(child));
+
+    const result = await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+
+    expect(result.code).toBe(0);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('SIGTERM forwarder: 이미 종료 표시된 child 에는 신호를 보내지 않는다', async () => {
+    const child = fakeChild({});
+    mockSpawn.mockImplementation(() => {
+      setImmediate(() => {
+        child.exitCode = 0;
+        latestSignalListener('SIGTERM')('SIGTERM');
+        child.emit('exit', 0, null);
+      });
+      return asChildProcess(child);
+    });
+
+    const result = await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+
+    expect(result.code).toBe(0);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('restore 가 non-Error 값을 reject 해도 Error 로 감싸 restoreError 에 보존한다', async () => {
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+    mockSwitch
+      .mockResolvedValueOnce(FAKE_SWITCH)
+      .mockRejectedValueOnce('restore string failure');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      const result = await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+
+      expect(result.code).toBe(0);
+      expect(result.restoreError).toBeInstanceOf(Error);
+      expect(result.restoreError?.message).toBe('restore string failure');
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
 });
