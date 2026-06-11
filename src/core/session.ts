@@ -310,12 +310,14 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
     throw err;
   }
   if (tst.isSymbolicLink()) {
-    throw new Error(`allow-list 대상이 symlink 입니다 (복사 거부): ${target}`);
+    throw new Error(`allow-list 대상이 symlink 입니다 (복사 거부): ${sessionPathForError(target)}`);
   }
   // 일반 파일만 복사 (PR #61 2회차 Forge): 디렉토리를 통째로 복사하면 그 안의 nested/미래 파일·
   // symlink 가 개별 allow-list 없이 노출돼 좁은 공유 계약이 깨진다. 디렉토리 공유는 미지원.
   if (!tst.isFile()) {
-    throw new Error(`allow-list 대상이 일반 파일이 아닙니다 (디렉토리 공유 미지원): ${target}`);
+    throw new Error(
+      `allow-list 대상이 일반 파일이 아닙니다 (디렉토리 공유 미지원): ${sessionPathForError(target)}`
+    );
   }
   await assertContainedRealpath(root.baseAbs, dirname(target));
 
@@ -328,11 +330,15 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
   // credRoot 는 materializeSession 이 이미 생성·non-symlink 검증했으나, 방어적으로 등식·non-symlink 를
   // 재확인한다(불변식이 깨지면 fail-closed).
   if (copyParent !== root.credRoot) {
-    throw new Error(`allow-list share 가 credRoot 직속이 아닙니다(단일 세그먼트 위반): ${copyPath}`);
+    throw new Error(
+      `allow-list share 가 credRoot 직속이 아닙니다(단일 세그먼트 위반): ${sessionPathForError(copyPath)}`
+    );
   }
   const pst2 = await fs.lstat(copyParent);
   if (!pst2.isDirectory() || pst2.isSymbolicLink()) {
-    throw new Error(`allow-list 세션측 부모(credRoot)가 정상 디렉토리가 아닙니다: ${copyParent}`);
+    throw new Error(
+      `allow-list 세션측 부모(credRoot)가 정상 디렉토리가 아닙니다: ${sessionPathForError(copyParent)}`
+    );
   }
   // base 원본을 O_NOFOLLOW 로 읽어(마지막 컴포넌트 symlink swap 차단) 격리본으로 0600 atomic 복사.
   // 세션측은 copyParent===credRoot(단일 세그먼트 share, 위에서 non-symlink 검증)이고 fresh non-symlink
@@ -359,7 +365,7 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
 function assertLexicallyContained(baseAbs: string, childAbs: string): void {
   const rel = relative(baseAbs, childAbs);
   if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
-    throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${childAbs}`);
+    throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${sessionPathForError(childAbs)}`);
   }
 }
 
@@ -369,8 +375,16 @@ async function assertContainedRealpath(baseAbs: string, childAbs: string): Promi
   const childReal = await fs.realpath(childAbs);
   const rel = relative(baseReal, childReal);
   if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
-    throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${childAbs}`);
+    throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${sessionPathForError(childAbs)}`);
   }
+}
+
+/**
+ * session allow-list 경로가 Error.message 를 거쳐 top-level stderr 에 노출될 수 있으므로,
+ * throw 시점에 terminal control chars 를 제거한다. 경로 redact 가 아니라 표시 안전성 방어.
+ */
+function sessionPathForError(path: string): string {
+  return sanitizeForStderr(path);
 }
 
 /** 재캡처 1건 단위 (preflight 수집물). */
