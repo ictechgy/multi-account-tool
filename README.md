@@ -114,7 +114,7 @@ npm link
 
 ```bash
 mat --version                  # prints the installed semver
-mat --help                     # subcommand list (TUI flags + `mat exec` / `mat freshness`)
+mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat freshness`)
 node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (CLI defs load + paths resolve, never touches credentials)
 ```
 
@@ -127,7 +127,7 @@ The smoke test is read-only and safe to run on a machine with active mat profile
 ```bash
 mat              # launch the TUI
 mat --version    # print installed version
-mat --help       # short usage summary (subcommands: exec, freshness)
+mat --help       # short usage summary (subcommands: exec, session, freshness)
 ```
 
 The TUI opens with **CLI → profile → switch**.
@@ -184,7 +184,7 @@ Behaviour:
 - **On exit, `mat` re-captures the live credentials into `<profile>` first** (so rotation triggered by `<cmd>` is preserved), then restores the previous active profile. The recapture has a default 10s timeout (`MAT_EXEC_RECAPTURE_TIMEOUT_MS` env override) to bound keychain-prompt hangs.
 - The restore step runs in a `finally` block so normal exit, errors, and forwarded signals all trigger it. **A `SIGKILL` (or other untrappable signal: `SIGSEGV` / `SIGBUS`) to `mat` itself bypasses restore** — on the next `mat` invocation, the stale lock is auto-recovered and `mat` writes a stderr warning indicating the live credentials may still belong to `<profile>` rather than the previous active profile (policy B: warn + drop).
 
-This is **temporal isolation**, not session isolation: while the child runs, the OS-global credentials are the `<profile>` ones. Two terminals running different `mat exec` commands serialise via the lock; true per-session isolation is on the roadmap.
+This is **temporal isolation**, not session isolation: while the child runs, the OS-global credentials are the `<profile>` ones. Two terminals running different `mat exec` commands serialise via the lock. Use `mat session` when you need true per-terminal isolation with different accounts running concurrently.
 
 Exit codes:
 
@@ -248,10 +248,10 @@ Exit codes mirror `mat exec`: `0` success, `2` usage error, `74` re-capture fail
 ### `mat freshness` — pre-swap safety check
 
 ```bash
-mat freshness [<cli>] [--profile <name>] [--json]
+mat freshness [<cli>] [--profile <name>] [--json] [--check-only]
 ```
 
-Compare live credentials with the active (or specified) profile snapshot and report drift before you swap. Useful in CI chains (`mat freshness && deploy.sh`) to block stale-restore incidents (e.g., OAuth `refresh_token` revocation after wrong-profile restore).
+Compare live credentials with the active (or specified) profile snapshot and report drift before you swap. If `<cli>` is omitted, mat reports every built-in/plugin CLI that currently has an active profile. Useful in CI chains (`mat freshness && deploy.sh`) to block stale-restore incidents (e.g., OAuth `refresh_token` revocation after wrong-profile restore).
 
 ```bash
 # Quick safety check before a long Claude session
@@ -259,16 +259,21 @@ mat freshness claude
 
 # Inspect a specific profile (machine-readable JSON for CI)
 mat freshness codex --profile work --json
+
+# Statusline/dashboard mode: print the same report, but do not fail on unsafe states
+mat freshness --check-only
 ```
 
 Each source is classified into one of four states — `fresh` (byte-identical), `rotated` (token rotated but identity preserved; safe to swap), `stale` (identity changed — a different account; **swap will revoke**), `inflight` (multi-source CLI partially updated — retry shortly).
+
+`--check-only` is read-only monitoring mode: it still prints `stale` / low-confidence `rotated` / `inflight` results, but exits `0` so prompts, statuslines, and dashboards can display the warning without breaking the shell. Usage errors and source-read failures are not masked.
 
 Exit codes:
 
 | Code | Meaning |
 | --- | --- |
 | `0` | All sources are `fresh` or high-confidence `rotated` — safe to swap |
-| `1` | One or more sources are `stale`, low-confidence `rotated`, or `inflight` — **fix before swap** |
+| `1` | One or more sources are `stale`, low-confidence `rotated`, or `inflight` — **fix before swap** (unless `--check-only`) |
 | `2` | Usage error |
 | `74` | Internal check failed (e.g., source read error) |
 
@@ -281,10 +286,15 @@ See the OAuth Rotation Safety Matrix at the top of this README for per-CLI class
 ```
 ~/.multi-account-tool/
 ├── config.json                   # active profile pointer + flags
+├── app.log                       # best-effort TUI warnings / diagnostic trail
 ├── cli-defs/                     # optional user plugins — see "Adding a new CLI"
 │   └── <id>.json
-├── locks/                        # per-CLI `mat exec` lock dirs (auto-recovered on stale)
-│   └── <cli>.lock/
+├── locks/
+│   ├── <cli>.lock/               # per-CLI `mat exec` lock dirs (auto-recovered on stale)
+│   └── recapture/
+│       └── <cli>/<profile>.lock/ # `mat session` profile recapture advisory locks
+├── sessions/
+│   └── <session-id>/             # ephemeral `mat session` dirs + session.json while running/orphaned
 └── profiles/
     ├── claude/                   # credentials.json (macOS Keychain backup, plaintext)
     │   ├── personal/
@@ -328,7 +338,7 @@ Files are created with `0600`, directories with `0700`.
 - Profile names: `[a-zA-Z0-9가-힣_.-]{1,40}` + NFC normalization + explicit rejection of `.` / `..` / `/` / `\` / NUL
 - Keychain swap: backup → exact-acct delete → add. If `add` fails, the backup is auto-restored; if the rollback also fails, both errors surface together.
 - Restore is rollback-safe for multi-source CLIs (already-restored sources are reverted to the live backup on partial failure)
-- Error messages are redacted (JWT pattern + 50+ char base64-like sequences → `[redacted]`)
+- Error messages are redacted (JWT pattern + 50+ char base64-like sequences → `[redacted]`), and session allow-list paths are sanitized for terminal control characters before they can reach stderr
 - Dependencies: `npm audit` clean
 
 ### Not recommended on

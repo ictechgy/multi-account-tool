@@ -114,7 +114,7 @@ npm link
 
 ```bash
 mat --version                  # 설치된 semver 출력
-mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat freshness`)
+mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat session` / `mat freshness`)
 node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke test (CLI 정의 로드 + path resolve 확인, 자격증명 미수정)
 ```
 
@@ -127,7 +127,7 @@ smoke test 는 read-only 라 활성 mat 프로필이 있는 환경에서도 안�
 ```bash
 mat              # TUI 실행
 mat --version    # 설치된 버전 출력
-mat --help       # 짧은 사용법 (subcommand: exec / freshness)
+mat --help       # 짧은 사용법 (subcommand: exec / session / freshness)
 ```
 
 TUI 가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
@@ -184,7 +184,7 @@ lterm send-keys "mat exec claude work -- claude" Enter
 - **종료 시 라이브 자격증명을 `<profile>` 으로 재캡처한 뒤 원래 활성 프로필로 원복**한다 (`<cmd>` 가 OAuth refresh rotation 등으로 토큰을 갱신했을 가능성 보존). 재캡처는 기본 10s timeout (`MAT_EXEC_RECAPTURE_TIMEOUT_MS` env override) 으로 keychain prompt hang 차단.
 - 원복은 `finally` 블록에서 일어나 정상 종료, 에러, trap 가능 시그널 모두에서 실행된다. **단 `mat` 자체가 `SIGKILL` (또는 `SIGSEGV` / `SIGBUS` 등 trap 불가 시그널) 을 받으면 원복은 일어나지 않는다** — 다음 `mat` 실행 시 stale lock 자동 회수 + 사용자에게 "라이브 자격증명이 이전 활성 프로필이 아닌 `<profile>` 의 것일 수 있음" stderr 안내 (정책 B: warn + drop).
 
-이는 **시간 격리**이지 세션 격리가 아니다. 자식이 실행되는 동안 OS 전역 자격증명은 `<profile>` 의 것. 두 터미널에서 서로 다른 `mat exec` 를 동시에 띄우면 lock 으로 직렬화되며, 진짜 세션별 격리는 로드맵.
+이는 **시간 격리**이지 세션 격리가 아니다. 자식이 실행되는 동안 OS 전역 자격증명은 `<profile>` 의 것. 두 터미널에서 서로 다른 `mat exec` 를 동시에 띄우면 lock 으로 직렬화된다. 터미널별로 서로 다른 계정을 동시에 써야 한다면 `mat session` 을 사용하라.
 
 종료 코드:
 
@@ -248,10 +248,10 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 ### `mat freshness` — swap 전 안전성 점검
 
 ```bash
-mat freshness [<cli>] [--profile <name>] [--json]
+mat freshness [<cli>] [--profile <name>] [--json] [--check-only]
 ```
 
-라이브 자격증명과 활성 (또는 지정) 프로필 저장본을 비교해 swap 전에 drift 를 보고. CI chain (`mat freshness && deploy.sh`) 으로 wrong-profile 복원으로 인한 OAuth `refresh_token` revoke 사고 사전 차단.
+라이브 자격증명과 활성 (또는 지정) 프로필 저장본을 비교해 swap 전에 drift 를 보고한다. `<cli>` 를 생략하면 현재 활성 프로필이 있는 모든 builtin/plugin CLI 를 보고한다. CI chain (`mat freshness && deploy.sh`) 으로 wrong-profile 복원으로 인한 OAuth `refresh_token` revoke 사고를 사전 차단할 수 있다.
 
 ```bash
 # 긴 Claude 세션 시작 전 빠른 점검
@@ -259,16 +259,21 @@ mat freshness claude
 
 # 특정 프로필 검사 (JSON 출력, CI 친화)
 mat freshness codex --profile work --json
+
+# statusline/dashboard 모드: 같은 보고서를 출력하되 unsafe 상태여도 실패하지 않음
+mat freshness --check-only
 ```
 
 각 source 는 4-state 로 분류 — `fresh` (byte 동일), `rotated` (토큰 회전됐지만 identity 유지, swap 안전), `stale` (identity 변경 — 다른 계정, **swap 시 revoke 위험**), `inflight` (multi-source CLI 의 부분 갱신 race — 잠시 후 재시도).
+
+`--check-only` 는 read-only 모니터링 모드다. `stale` / low-confidence `rotated` / `inflight` 결과를 그대로 출력하지만 exit code 는 `0` 으로 유지해 프롬프트, statusline, dashboard 가 경고를 표시하면서도 shell 흐름을 끊지 않게 한다. 사용 오류나 source 읽기 실패는 숨기지 않는다.
 
 종료 코드:
 
 | 코드 | 의미 |
 | --- | --- |
 | `0` | 모든 source 가 `fresh` 또는 high-confidence `rotated` — swap 안전 |
-| `1` | 하나 이상의 source 가 `stale`, low-confidence `rotated`, `inflight` — **swap 전 조치 필요** |
+| `1` | 하나 이상의 source 가 `stale`, low-confidence `rotated`, `inflight` — **swap 전 조치 필요** (`--check-only` 제외) |
 | `2` | 사용 오류 |
 | `74` | 내부 검사 실패 (source 읽기 에러 등) |
 
@@ -281,10 +286,15 @@ CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 
 ```
 ~/.multi-account-tool/
 ├── config.json                   # 활성 프로필 포인터 + 플래그
+├── app.log                       # best-effort TUI 경고 / 진단 로그
 ├── cli-defs/                     # 사용자 플러그인 (선택) — "새 CLI 추가하기" 참고
 │   └── <id>.json
-├── locks/                        # CLI 별 `mat exec` lock (stale 자동 회수)
-│   └── <cli>.lock/
+├── locks/
+│   ├── <cli>.lock/               # CLI 별 `mat exec` lock (stale 자동 회수)
+│   └── recapture/
+│       └── <cli>/<profile>.lock/ # `mat session` 프로필 재캡처 advisory lock
+├── sessions/
+│   └── <session-id>/             # 실행 중/orphan `mat session` 임시 디렉토리 + session.json
 └── profiles/
     ├── claude/                   # credentials.json (macOS Keychain 백업, 평문 JSON)
     │   ├── personal/
@@ -328,7 +338,7 @@ CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 
 - 프로필 이름: `[a-zA-Z0-9가-힣_.-]{1,40}` + NFC 정규화 + `.` / `..` / `/` / `\` / NUL 명시 차단
 - Keychain swap: 백업 → 정확 acct 매칭 delete → add. add 실패 시 자동 롤백, 롤백도 실패하면 에러 메시지에 함께 노출.
 - multi-source CLI 복원은 부분 실패에 안전 (한 source 실패 시 이미 복원된 source 를 라이브 백업으로 되돌림)
-- 에러 메시지의 JWT 및 50자+ base64-like 시퀀스는 redact 처리
+- 에러 메시지의 JWT 및 50자+ base64-like 시퀀스는 redact 처리하고, session allow-list 경로는 stderr 노출 전 terminal control char 를 sanitize
 - 의존성: `npm audit` clean
 
 ### 사용을 권하지 않는 환경
