@@ -182,7 +182,7 @@ describe('runSession — exit-before-write race (recordChildPid settle 보장, #
     expect(armed).toBe(true); // race 윈도우(2단계 ps 보류) 확보
 
     // child 를 **먼저** exit 시킨다 — recordChildPid 2단계(ps→write)는 아직 보류 중.
-    // spawnSessionShell 의 promise 가 resolve 되고 runSession 이 cleanup 으로 진행을 시도한다.
+    // spawnSessionTarget 의 promise 가 resolve 되고 runSession 이 cleanup 으로 진행을 시도한다.
     child.emit('exit', 0, null);
 
     // exit 후 충분한 시간(매크로태스크 + 실제 fs I/O 윈도우)을 흘린다.

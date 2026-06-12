@@ -427,6 +427,8 @@ lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
 <p>참고: <code>2</code> / <code>74</code> / <code>75</code> 는 <code>mat</code> 자체의 에러 모델로 예약 (spawn 전 검증 / lock 경합 / spawn 후 원복 실패). 그 외의 <code>128</code> 미만 non-zero 코드는 모두 자식의 종료 코드를 투명하게 그대로 전달. <code>74</code> 가 <code>mat</code> 의 원복 실패인지 자식의 exit 74 인지 헷갈리면 stderr 의 <code>restoreError</code> 로그를 확인.</p>
 <h3 id="mat-session-세션별-격리-터미널마다-다른-계정-동시에"><code>mat session</code> — 세션별 격리 (터미널마다 다른 계정, 동시에)</h3>
 <pre><code class="language-bash">mat session start &lt;cli&gt; &lt;profile&gt;   # &lt;profile&gt; 로 격리된 subshell 실행
+mat session run &lt;cli&gt; &lt;profile&gt; -- [cli-args...]
+                                  # builtin CLI executable 을 격리 env 로 직접 실행
 mat session list                    # 실행 중 / orphan 세션 목록
 mat session stop &lt;id&gt;               # 세션 종료 또는 orphan 정리
 </code></pre>
@@ -438,6 +440,7 @@ mat session start codex work        # CODEX_HOME 이 격리 디렉토리 → &qu
 mat session start codex personal    # 독립 격리 디렉토리 → &quot;personal&quot; 계정
 </code></pre>
 <p><strong>메커니즘 — env 주입 + copy-isolate.</strong> <code>mat session start</code> 는 <code>$SHELL</code> 을 spawn 하되 CLI 의 config-dir env (예: <code>CODEX_HOME</code>) 를 <code>~/.multi-account-tool/sessions/&lt;id&gt;/</code> 아래 세션 전용 디렉토리로 가리킨다. 프로필 자격증명을 그 디렉토리에 <strong>복사</strong>(0600)하므로 subshell 안의 CLI 는 격리된 계정을 읽는다. 종료 시 (OAuth rotation 됐을 수 있는) 자격증명을 프로필로 <strong>재캡처</strong>하고 세션 디렉토리를 삭제한다. OS 전역 자격증명과 <code>mat exec</code> lock 은 건드리지 않아 세션이 서로 간섭 없이 동시 실행된다.</p>
+<p><code>mat session run</code> 은 같은 materialize → env 주입 → 재캡처 → cleanup lifecycle 을 쓰지만 shell 을 열지 않는다. 대신 mat 이 <code>&lt;cli&gt;</code> 에 대응하는 builtin CLI executable(예: <code>codex</code>)을 선택하고 <code>[cli-args...]</code> 를 그 executable 의 argv 로 넘긴다. <code>--</code> 뒤는 임의 명령이 아니라 선택된 builtin CLI 의 인자다. 현재는 안전한 command-scoped 경계가 있는 builtin(Codex, Qwen, Kimi, Crush, Gemini CLI, Linux Claude)에만 열려 있다. OpenCode safer-run 과 Aider partial-run 은 hard-stop 정책이 들어가는 후속 작업으로 남긴다.</p>
 <p><strong>지원 CLI</strong> (자격증명 디렉토리를 env 로 재배치할 수 있는 것):</p>
 <div class="table-wrap"><table>
 <thead>
@@ -632,7 +635,7 @@ mat freshness --check-only
 <li><del>커뮤니티 CLI 정의를 위한 플러그인 메커니즘</del> ✅ (v0.3)</li>
 <li><del>Aider 빌트인 지원</del> ✅ (v0.3) + <del>Kimi / Qwen / Crush / OpenCode</del> ✅ (v0.3.x)</li>
 <li><del>세션별 자격증명 격리</del> ✅ (v0.4.x — <code>mat session start/list/stop</code>: env 주입 + copy-isolate, 동시 다계정; 아래 <code>lterm</code> shim 통합은 아직 미구현)</li>
-<li>예정: <code>mat session run &lt;cli&gt; &lt;profile&gt; -- [cli-args...]</code> command-scoped safer run. OpenCode safer-run 과 Aider partial-run 의 후속 경로이며, Antigravity 는 upstream 의 안정 auth-store 계약 전까지 research-only 로 유지한다. 상세는 <a href="https://github.com/ictechgy/multi-account-tool/blob/main/docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md">R&amp;D note</a> 참고.</li>
+<li><del><code>mat session run &lt;cli&gt; &lt;profile&gt; -- [cli-args...]</code> framework</del> ✅ — command-scoped safer-run 기반. OpenCode hard-stop probe 와 Aider forced config/env-file 은 후속으로 남기며, Antigravity 는 upstream 의 안정 auth-store 계약 전까지 research-only 로 유지한다. 상세는 <a href="https://github.com/ictechgy/multi-account-tool/blob/main/docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md">R&amp;D note</a> 참고.</li>
 <li>빌트인 CLI 추가 확장 — <del>Goose</del> ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service 는 <code>os-keyring</code> source type 으로 추가됨). Copilot / Amp 는 보류 — Copilot 은 multi-account <code>/user switch</code> application-state swap 이 필요하고, Windows Credential Manager 지원도 아직 미해결 (별도 후속). Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).</li>
 <li><strong>Goose Linux</strong>: Linux 에서 mat 는 Goose 의 기본 <code>secret-service</code> 백엔드 (libsecret, GNOME Keyring/KWallet) 를 <code>os-keyring</code> source (<code>secret-tool</code> CLI, <code>goose</code>/<code>secrets</code>) 로 swap 하고 <code>~/.config/goose/*.yaml</code> 도 함께 swap 한다. 설정별 동작:<ul>
 <li><strong>기본 (keyring)</strong>: os-keyring source 가 포함되며 <code>secret-tool</code> (libsecret-tools) + keyring daemon 이 필요하다. 미설치이거나 daemon 이 down/접근거부면 <strong>명시 에러</strong> — yaml 로 조용히 fallback 하지 <em>않는다</em>. Goose 는 keyring 에 libsecret <em>라이브러리</em> (<code>secret-tool</code> CLI 와 별도 패키지) 로 접근하므로, CLI 부재가 keyring 미사용을 증명하지 못한다. 활성 keyring 사용자에게 <code>secrets.yaml</code> 을 조용히 swap 하면 wrong-account 가 된다. (도구 부재가 아니라) keyring 항목 자체의 부재는 정상 &quot;not found&quot; 로 yaml 로 넘어간다.</li>

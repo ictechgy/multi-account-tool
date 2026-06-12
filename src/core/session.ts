@@ -706,6 +706,11 @@ export interface SessionStartOptions {
   profileName: string;
 }
 
+export interface SessionCommandOptions extends SessionStartOptions {
+  /** Arguments passed to the builtin CLI executable selected by `CliDef.sessionRun`. */
+  args: string[];
+}
+
 export interface SessionResult {
   /** 자식(subshell) 종료 코드. signal 종료 시 null. */
   code: number | null;
@@ -714,6 +719,10 @@ export interface SessionResult {
   /** 종료 재캡처 실패/timeout 시 설정. cli.tsx 가 별도 exit code 로 매핑. */
   recaptureError?: Error;
 }
+
+type SessionSpawnTarget =
+  | { kind: 'shell' }
+  | { kind: 'command'; executable: string; args: string[] };
 
 /** session.json 스키마 (세션 디렉토리에 기록 — list/orphan 이 읽음). */
 interface SessionMeta {
@@ -757,11 +766,38 @@ export interface SessionInfo {
  * 원자 재캡처 + 정리. 전역 swap/lock 을 건드리지 않아 동시 다계정 안전.
  */
 export async function runSession(opts: SessionStartOptions): Promise<SessionResult> {
+  return runSessionWithTarget(opts, () => ({ kind: 'shell' }));
+}
+
+/**
+ * Command-scoped session 실행 — `$SHELL` 대신 mat 이 고른 builtin executable 을 직접 spawn 한다.
+ *
+ * `args` 는 executable 의 argv 로만 전달된다. 임의 command/shell 은 받지 않으므로, `mat exec` 와 달리
+ * 전역 swap/lock 없이 기존 session copy-isolate + 재캡처 lifecycle 을 그대로 쓴다.
+ */
+export async function runSessionCommand(opts: SessionCommandOptions): Promise<SessionResult> {
+  return runSessionWithTarget(opts, (def) => {
+    if (!def.sessionRun) {
+      throw new UsageError(`'${opts.cliId}' 는 session run 을 지원하지 않습니다 (builtin executable 미정의).`);
+    }
+    return {
+      kind: 'command',
+      executable: validateSessionRunExecutable(def.sessionRun.executable),
+      args: opts.args.slice()
+    };
+  });
+}
+
+async function runSessionWithTarget(
+  opts: SessionStartOptions,
+  targetFor: (def: CliDef) => SessionSpawnTarget
+): Promise<SessionResult> {
   const def = findCliDef(opts.cliId);
   if (!def) throw new UsageError(`알 수 없는 CLI: ${opts.cliId}`);
   if (!def.session || def.session.roots.length === 0) {
     throw new UsageError(`'${opts.cliId}' 는 세션 격리를 지원하지 않습니다 (env override 미지원).`);
   }
+  const target = targetFor(def);
   const profileName = validateProfileName(opts.profileName);
   if (!(await profileExists(opts.cliId, profileName))) {
     throw new UsageError(`프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
@@ -792,7 +828,7 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
   const forwarders = registerSessionForwarders(childRef);
   try {
     // 자식 pid 기록(recordChildPid)의 진행 중인 promise 를 캡처한다 (#71 결함: race + lifecycle).
-    // spawnSessionShell 은 onSpawned 를 await 없이(`void`) 시작하므로, child 가 빨리 exit 하면 spawn 이
+    // spawnSessionTarget 은 onSpawned 를 await 없이(`void`) 시작하므로, child 가 빨리 exit 하면 spawn 이
     // resolve 돼 아래 cleanup 으로 넘어가는데 그 시점에 recordChildPid 가 아직 ps 대기/2단계 write 중일
     // 수 있다. cleanup 의 removeSessionDir 가 세션 디렉토리를 지운 뒤 recordChildPid 의 writeSessionMeta
     // 가 실행되면 writeFileAtomic 의 recursive mkdir 가 삭제된 디렉토리에 session.json 만 재생성(orphan)
@@ -801,7 +837,7 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
     let spawnResult: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     let spawnError: unknown;
     try {
-      spawnResult = await spawnSessionShell(plan, childRef, (childPid, isChildAlive) => {
+      spawnResult = await spawnSessionTarget(plan, target, childRef, (childPid, isChildAlive) => {
         // recordChildPid 는 내부 try/catch 로 throw 하지 않지만, 방어적으로 .catch 를 달아
         // settle 만 보장(unhandled rejection 봉인). isChildAlive 를 함께 넘겨 서명 캡처 전/중에
         // child 가 exit 했는지 쓰기 직전 확인하게 한다 (#71 결함: pid 재사용 서명 오기록 차단).
@@ -830,6 +866,21 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
   } finally {
     forwarders.dispose();
   }
+}
+
+/** builtin executable name 방어 검증 — plugin/user input 이 아니라도 spawn 전 fail-closed. */
+function validateSessionRunExecutable(executable: string): string {
+  if (
+    typeof executable !== 'string' ||
+    executable.length === 0 ||
+    !/^[a-zA-Z0-9._-]+$/.test(executable) ||
+    executable.includes('/') ||
+    executable.includes('\\') ||
+    executable.includes('\x00')
+  ) {
+    throw new UsageError(`session run executable 이 유효하지 않습니다: ${sanitizeForStderr(String(executable))}`);
+  }
+  return executable;
 }
 
 /** 세션 root 별 경고 출력 — OpenCode 의 XDG_DATA_HOME 같은 broad-env EXPERIMENTAL 경고용. */
@@ -903,7 +954,11 @@ function makeSessionId(cliId: string, profileName: string): string {
 }
 
 /**
- * subshell spawn (stdio inherit, env 에 root env + MAT_SESSION 주입, 셸 미경유 argv).
+ * session child spawn (stdio inherit, env 에 root env + MAT_SESSION 주입, 셸 미경유 argv).
+ *
+ * - `kind:'shell'`: 기존 `mat session start` — `$SHELL` 을 argv 없이 spawn.
+ * - `kind:'command'`: `mat session run` — builtin executable 을 직접 spawn 하고 사용자가 준 tail 을
+ *   argv 로만 전달. shell/alias 는 거치지 않는다.
  *
  * `onSpawned` 는 spawn 직후 child.pid 가 유효한 정수일 때 1회 호출된다 (#63-2, await 하지 않음) —
  * 자식 pid 추적 정보를 session.json 에 기록할 기회를 호출자에게 준다. 콜백은 즉시 시작만 하고 그
@@ -918,16 +973,18 @@ function makeSessionId(cliId: string, profileName: string): string {
  * 후 그 값을 기록하기 직전 이 함수로 child 가 이미 exit 했는지 확인해, 재사용된 pid 의 무관 서명을
  * childPidStart 로 굳히지 않게 한다.
  */
-function spawnSessionShell(
+function spawnSessionTarget(
   plan: SessionPlan,
+  target: SessionSpawnTarget,
   childRef: { current: ChildProcess | null },
   onSpawned?: (childPid: number, isChildAlive: () => boolean) => Promise<void>
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve, reject) => {
-    const shell = process.env.SHELL || '/bin/sh';
+    const command = target.kind === 'shell' ? (process.env.SHELL || '/bin/sh') : target.executable;
+    const args = target.kind === 'shell' ? [] : target.args;
     const env: NodeJS.ProcessEnv = { ...process.env, MAT_SESSION: plan.id };
     for (const root of plan.roots) env[root.env] = root.dir; // 격리 디렉토리 주입 (토큰 미포함, 경로만)
-    const child = spawn(shell, [], { stdio: 'inherit', env });
+    const child = spawn(command, args, { stdio: 'inherit', env });
     childRef.current = child;
 
     // child 생존 확인 함수 — exit/signal 로 종료하면 exitCode/signalCode 중 하나가 non-null 이 된다.

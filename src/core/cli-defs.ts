@@ -175,7 +175,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     //  (d) settings.json 의 세션 내 변경은 ephemeral — 종료 시 base 에 반영되지 않는다(알려진 한계,
     //      share=∅ 의 결과).
     //  (e) CLAUDE_CODE_OAUTH_TOKEN 은 종료 시 keychain 항목을 삭제하는 부작용이 있어 사용 금지.
-    session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] }
+    session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] },
+    sessionRun: { executable: 'claude' }
   },
   {
     id: 'codex',
@@ -188,7 +189,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     // base 에서 **0600 복사**(copy-isolate, issue #72) — 시작 시점 설정 재현(UX)은 유지하되,
     // 세션 내 `codex mcp add`/`plugin add` 가 config.toml 에 써도 base 가 오염되지 않는다(write-back
     // 없음). OAuth 토큰은 auth.json 에만 있으며 source 로 격리 복사된다 (issue #63-3).
-    session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex', share: ['config.toml'] }] }
+    session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex', share: ['config.toml'] }] },
+    sessionRun: { executable: 'codex' }
   },
   {
     id: 'gemini',
@@ -211,7 +213,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     // 못했고, broad `HOME` 만 영향을 줬다. 0600 `antigravity-oauth-token` 파일이 관찰될 수 있지만
     // keyring/파일 저장 계약과 세션용 redirect 가 안정 문서화되기 전까지 mat source/session 으로
     // 지원하지 않는다(부분 auth 격리 금지).
-    session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] }
+    session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] },
+    sessionRun: { executable: 'gemini' }
   },
   {
     // Aider 는 `~/.aider.conf.yml` 에 모델 + API key 를 텍스트로 보관 (env var 사용자는 별도 워크플로 필요).
@@ -233,7 +236,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     ],
     // KIMI_SHARE_DIR 로 ~/.kimi 재배치 가능 (config.toml 포함). 세션 격리 지원.
     // config.toml 이 자격증명=config 그 자체(A=B)라 share 후보 없음 — 통째 격리 복사.
-    session: { roots: [{ env: 'KIMI_SHARE_DIR', base: '~/.kimi' }] }
+    session: { roots: [{ env: 'KIMI_SHARE_DIR', base: '~/.kimi' }] },
+    sessionRun: { executable: 'kimi' }
   },
   {
     // Alibaba 공식 Qwen Code CLI (https://github.com/QwenLM/qwen-code, npm `@qwen-code/qwen-code`).
@@ -253,7 +257,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     ],
     // QWEN_HOME 으로 ~/.qwen 재배치 가능 (settings.json + .env 포함). 세션 격리 지원.
     // settings.json 이 자격증명+config 혼재라 share 후보 없음 — 통째 격리 복사.
-    session: { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] }
+    session: { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] },
+    sessionRun: { executable: 'qwen' }
   },
   {
     // Charm.sh 공식 Crush (https://github.com/charmbracelet/crush). Go 기반 TUI AI 코딩 에이전트.
@@ -284,7 +289,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
         { env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
         { env: 'CRUSH_GLOBAL_DATA', base: '~/.local/share/crush' }
       ]
-    }
+    },
+    sessionRun: { executable: 'crush' }
   },
   {
     // SST OpenCode (https://github.com/sst/opencode). MIT 라이선스 오픈소스 AI 코딩 에이전트.
