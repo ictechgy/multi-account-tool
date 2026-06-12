@@ -414,6 +414,21 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     }
   );
 
+  it('sessionRun executable 은 builtin session-capable CLI 에만 정의된다 (plugin/user 주입 아님)', () => {
+    expect(Object.fromEntries(BUILTIN_CLI_DEFS.map((c) => [c.id, c.sessionRun?.executable]))).toMatchObject({
+      claude: 'claude',
+      codex: 'codex',
+      gemini: 'gemini',
+      kimi: 'kimi',
+      qwen: 'qwen',
+      crush: 'crush'
+    });
+    // OpenCode requires dedicated config/env/project hard-stop probes before command-scoped run is enabled.
+    expect(find('opencode').sessionRun).toBeUndefined();
+    expect(find('aider').sessionRun).toBeUndefined();
+    expect(find('goose').sessionRun).toBeUndefined();
+  });
+
   it('share allow-list 회귀 가드: codex root 는 config.toml 1개, 그 외 모든 root 는 비어있음', () => {
     // codex 의 config.toml 은 secret-free 검증 완료(issue #63-3) — 유일한 비-∅ share.
     // 나머지 CLI root 에 새 share 항목을 추가할 때는 secret-free 여부를 먼저 검증하고 여기에 명시한다.

@@ -32,6 +32,7 @@ const USAGE =
   `  mat                                            TUI 실행\n` +
   `  mat exec <cli> <profile> -- <cmd...>          <profile> 로 swap 후 <cmd> 실행, 종료 후 원복\n` +
   `  mat session start <cli> <profile>             <profile> 로 격리된 subshell 실행 (동시 다계정)\n` +
+  `  mat session run <cli> <profile> -- [args...]  builtin CLI 를 격리 env 로 직접 실행\n` +
   `  mat session list                              실행 중/orphan 세션 목록\n` +
   `  mat session stop <id>                         세션 종료 또는 orphan 정리\n` +
   `  mat freshness [<cli>] [--profile <name>] [--json] [--check-only]\n` +

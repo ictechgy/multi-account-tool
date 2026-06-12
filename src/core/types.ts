@@ -146,6 +146,19 @@ export interface SessionSpec {
 }
 
 /**
+ * Command-scoped session execution (`mat session run`) metadata.
+ *
+ * This is intentionally narrower than `mat exec`: the user supplies argv for a
+ * mat-owned builtin executable, not an arbitrary shell command. User plugin
+ * definitions cannot inject this field because `cli-defs-plugin` only returns
+ * `{ id, name, sources }` after validation.
+ */
+export interface SessionRunSpec {
+  /** Builtin executable name to spawn without a shell, e.g. `codex` or `gemini`. */
+  executable: string;
+}
+
+/**
  * 하나의 AI CLI 정의.
  * 새로운 CLI 를 추가하려면 BUILTIN_CLI_DEFS 에 항목을 추가한다.
  */
@@ -161,6 +174,11 @@ export interface CliDef {
    * (`mat session start` 시 명시 에러). plugin 정의 CLI 는 1차에선 미수용(빌트인 전용).
    */
   session?: SessionSpec;
+  /**
+   * 선택. command-scoped session run 지원 명세. `--` 뒤 인자는 이 builtin executable 의 argv 로만
+   * 전달된다. Aider/OpenCode 의 추가 hard-stop 정책은 별도 후속 PR 에서 이 경계를 확장한다.
+   */
+  sessionRun?: SessionRunSpec;
 }
 
 /** 프로필 메타데이터. profiles/<cli>/<name>/meta.json 에 저장. */

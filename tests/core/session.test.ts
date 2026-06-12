@@ -62,6 +62,7 @@ import {
   reapOrphans,
   removeSessionDir,
   runSession,
+  runSessionCommand,
   stopSession
 } from '../../src/core/session.js';
 import { switchProfile } from '../../src/core/switcher.js';
@@ -83,10 +84,12 @@ const DEF = {
   id: 'codex',
   name: 'Codex (fixture)',
   sources: [{ type: 'file', path: '~/.codex/auth.json', saveAs: 'auth.json' }],
-  session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex' }] }
+  session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex' }] },
+  sessionRun: { executable: 'codex' }
 } satisfies CliDef;
 
 type FakeChildProcess = EventEmitter & {
+  pid?: number;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   kill: ReturnType<typeof vi.fn>;
@@ -99,8 +102,10 @@ function asChildProcess(fake: FakeChildProcess): ChildProcess {
 function fakeChild(opts: {
   exit?: { code: number | null; signal: NodeJS.Signals | null };
   error?: Error;
+  pid?: number;
 }): FakeChildProcess {
   const ee = new EventEmitter() as FakeChildProcess;
+  if (opts.pid != null) ee.pid = opts.pid;
   ee.exitCode = null;
   ee.signalCode = null;
   ee.kill = vi.fn();
@@ -111,6 +116,20 @@ function fakeChild(opts: {
     });
   }
   return ee;
+}
+
+async function eventually(fn: () => void | Promise<void>): Promise<void> {
+  let last: unknown;
+  for (let i = 0; i < 50; i++) {
+    try {
+      await fn();
+      return;
+    } catch (err) {
+      last = err;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw last;
 }
 
 let tmp: TmpHome;
@@ -253,6 +272,94 @@ describe('runSession', () => {
       stderrSpy.mockRestore();
     }
   });
+});
+
+describe('runSessionCommand', () => {
+  it('성공: builtin executable spawn(env + argv) → exit 0 → 재캡처 → 세션 디렉토리 삭제', async () => {
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    const result = await runSessionCommand({
+      cliId: 'codex',
+      profileName: 'work',
+      args: ['--help']
+    });
+
+    expect(result).toEqual({ code: 0, signal: null, recaptureError: undefined });
+    const [cmd, args, options] = mockSpawn.mock.calls[0];
+    expect(cmd).toBe('codex');
+    expect(args).toEqual(['--help']);
+    expect((options as { stdio: string }).stdio).toBe('inherit');
+    const env = (options as { env: Record<string, string> }).env;
+    expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
+    expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
+    expect(mockStage).toHaveBeenCalledWith('codex', 'work', 'auth.json', 'TOK');
+    expect(mockCommit).toHaveBeenCalled();
+    expect(mockSwitch).not.toHaveBeenCalled();
+    expect(mockAcquire).not.toHaveBeenCalled();
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('빈 argv 도 builtin executable 에 그대로 전달한다', async () => {
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSessionCommand({ cliId: 'codex', profileName: 'work', args: [] });
+
+    const [cmd, args] = mockSpawn.mock.calls[0];
+    expect(cmd).toBe('codex');
+    expect(args).toEqual([]);
+  });
+
+  it('command mode 도 자식 pid 기록 경로를 통과한다', async () => {
+    const child = fakeChild({ pid: 4321 });
+    mockSpawn.mockReturnValue(asChildProcess(child));
+
+    const runPromise = runSessionCommand({
+      cliId: 'codex',
+      profileName: 'work',
+      args: ['run']
+    });
+
+    await eventually(() => expect(mockSpawn).toHaveBeenCalled());
+    const env = (mockSpawn.mock.calls[0][2] as { env: Record<string, string> }).env;
+    const id = env.MAT_SESSION;
+    await eventually(async () => {
+      const meta = JSON.parse(await fs.readFile(join(sessionDir(id), 'session.json'), 'utf8')) as {
+        childPid?: number;
+      };
+      expect(meta.childPid).toBe(4321);
+    });
+
+    child.emit('exit', 0, null);
+    await expect(runPromise).resolves.toMatchObject({ code: 0, signal: null });
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('sessionRun 미정의 CLI → UsageError, spawn/materialize 미실행', async () => {
+    mockFindCliDef.mockReturnValue({
+      id: 'codex',
+      name: 'Codex without run',
+      sources: [{ type: 'file', path: '~/.codex/auth.json', saveAs: 'auth.json' }],
+      session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex' }] }
+    });
+
+    await expect(runSessionCommand({ cliId: 'codex', profileName: 'work', args: [] })).rejects.toBeInstanceOf(
+      UsageError
+    );
+    expect(mockReadProfile).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it.each(['', '../codex', 'bin\\codex', 'bad cmd', 'bad\x00cmd'])(
+    'invalid executable(%j) → UsageError, spawn/materialize 미실행',
+    async (executable) => {
+      mockFindCliDef.mockReturnValue({ ...DEF, sessionRun: { executable } });
+      await expect(runSessionCommand({ cliId: 'codex', profileName: 'work', args: [] })).rejects.toBeInstanceOf(
+        UsageError
+      );
+      expect(mockReadProfile).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('planSession / envSubdir — nested base (gemini, PR-0)', () => {

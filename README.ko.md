@@ -204,6 +204,8 @@ lterm send-keys "mat exec claude work -- claude" Enter
 
 ```bash
 mat session start <cli> <profile>   # <profile> 로 격리된 subshell 실행
+mat session run <cli> <profile> -- [cli-args...]
+                                  # builtin CLI executable 을 격리 env 로 직접 실행
 mat session list                    # 실행 중 / orphan 세션 목록
 mat session stop <id>               # 세션 종료 또는 orphan 정리
 ```
@@ -219,6 +221,8 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 ```
 
 **메커니즘 — env 주입 + copy-isolate.** `mat session start` 는 `$SHELL` 을 spawn 하되 CLI 의 config-dir env (예: `CODEX_HOME`) 를 `~/.multi-account-tool/sessions/<id>/` 아래 세션 전용 디렉토리로 가리킨다. 프로필 자격증명을 그 디렉토리에 **복사**(0600)하므로 subshell 안의 CLI 는 격리된 계정을 읽는다. 종료 시 (OAuth rotation 됐을 수 있는) 자격증명을 프로필로 **재캡처**하고 세션 디렉토리를 삭제한다. OS 전역 자격증명과 `mat exec` lock 은 건드리지 않아 세션이 서로 간섭 없이 동시 실행된다.
+
+`mat session run` 은 같은 materialize → env 주입 → 재캡처 → cleanup lifecycle 을 쓰지만 shell 을 열지 않는다. 대신 mat 이 `<cli>` 에 대응하는 builtin CLI executable(예: `codex`)을 선택하고 `[cli-args...]` 를 그 executable 의 argv 로 넘긴다. `--` 뒤는 임의 명령이 아니라 선택된 builtin CLI 의 인자다. 현재는 안전한 command-scoped 경계가 있는 builtin(Codex, Qwen, Kimi, Crush, Gemini CLI, Linux Claude)에만 열려 있다. OpenCode safer-run 과 Aider partial-run 은 hard-stop 정책이 들어가는 후속 작업으로 남긴다.
 
 **지원 CLI** (자격증명 디렉토리를 env 로 재배치할 수 있는 것):
 
@@ -408,7 +412,7 @@ v0.4+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 - ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3)
 - ~~Aider 빌트인 지원~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - ~~세션별 자격증명 격리~~ ✅ (v0.4.x — `mat session start/list/stop`: env 주입 + copy-isolate, 동시 다계정; 아래 `lterm` shim 통합은 아직 미구현)
-- 예정: `mat session run <cli> <profile> -- [cli-args...]` command-scoped safer run. OpenCode safer-run 과 Aider partial-run 의 후속 경로이며, Antigravity 는 upstream 의 안정 auth-store 계약 전까지 research-only 로 유지한다. 상세는 [R&D note](./docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md) 참고.
+- ~~`mat session run <cli> <profile> -- [cli-args...]` framework~~ ✅ — command-scoped safer-run 기반. OpenCode hard-stop probe 와 Aider forced config/env-file 은 후속으로 남기며, Antigravity 는 upstream 의 안정 auth-store 계약 전까지 research-only 로 유지한다. 상세는 [R&D note](./docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md) 참고.
 - 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service 는 `os-keyring` source type 으로 추가됨). Copilot / Amp 는 보류 — Copilot 은 multi-account `/user switch` application-state swap 이 필요하고, Windows Credential Manager 지원도 아직 미해결 (별도 후속). Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
 - **Goose Linux**: Linux 에서 mat 는 Goose 의 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) 로 swap 하고 `~/.config/goose/*.yaml` 도 함께 swap 한다. 설정별 동작:
   - **기본 (keyring)**: os-keyring source 가 포함되며 `secret-tool` (libsecret-tools) + keyring daemon 이 필요하다. 미설치이거나 daemon 이 down/접근거부면 **명시 에러** — yaml 로 조용히 fallback 하지 *않는다*. Goose 는 keyring 에 libsecret *라이브러리* (`secret-tool` CLI 와 별도 패키지) 로 접근하므로, CLI 부재가 keyring 미사용을 증명하지 못한다. 활성 keyring 사용자에게 `secrets.yaml` 을 조용히 swap 하면 wrong-account 가 된다. (도구 부재가 아니라) keyring 항목 자체의 부재는 정상 "not found" 로 yaml 로 넘어간다.

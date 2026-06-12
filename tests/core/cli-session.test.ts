@@ -9,14 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/core/session.js', () => ({
   runSession: vi.fn(),
+  runSessionCommand: vi.fn(),
   listSessions: vi.fn(),
   stopSession: vi.fn()
 }));
 
 import { handleSession } from '../../src/core/session-cli.js';
-import { listSessions, runSession, stopSession } from '../../src/core/session.js';
+import { listSessions, runSession, runSessionCommand, stopSession } from '../../src/core/session.js';
 
 const mockRun = vi.mocked(runSession);
+const mockRunCommand = vi.mocked(runSessionCommand);
 const mockList = vi.mocked(listSessions);
 const mockStop = vi.mocked(stopSession);
 
@@ -57,6 +59,58 @@ describe('handleSession — start', () => {
   it('인자 과다(3개) → exitCode 2', async () => {
     expect(await handleSession(['start', 'codex', 'work', 'extra'])).toEqual({ exitCode: 2 });
     expect(mockRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleSession — run', () => {
+  it('정상 종료(code 0) → exitCode 0, runSessionCommand 호출(argv 전달)', async () => {
+    mockRunCommand.mockResolvedValue({ code: 0, signal: null });
+    const r = await handleSession(['run', 'codex', 'work', '--', '--help']);
+    expect(r).toEqual({ exitCode: 0 });
+    expect(mockRunCommand).toHaveBeenCalledWith({
+      cliId: 'codex',
+      profileName: 'work',
+      args: ['--help']
+    });
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('빈 argv 도 허용 (`--` 뒤 인자 없음)', async () => {
+    mockRunCommand.mockResolvedValue({ code: 0, signal: null });
+    expect(await handleSession(['run', 'codex', 'work', '--'])).toEqual({ exitCode: 0 });
+    expect(mockRunCommand).toHaveBeenCalledWith({
+      cliId: 'codex',
+      profileName: 'work',
+      args: []
+    });
+  });
+
+  it('자식 non-zero 종료 → 그 code 전파', async () => {
+    mockRunCommand.mockResolvedValue({ code: 7, signal: null });
+    expect(await handleSession(['run', 'codex', 'work', '--', 'run'])).toEqual({ exitCode: 7 });
+  });
+
+  it('시그널 종료 → raiseSignal 채움 (self-raise)', async () => {
+    mockRunCommand.mockResolvedValue({ code: null, signal: 'SIGTERM' });
+    expect(await handleSession(['run', 'codex', 'work', '--'])).toEqual({
+      exitCode: 0,
+      raiseSignal: 'SIGTERM'
+    });
+  });
+
+  it('재캡처 실패 → exitCode 74', async () => {
+    mockRunCommand.mockResolvedValue({ code: 0, signal: null, recaptureError: new Error('x') });
+    expect(await handleSession(['run', 'codex', 'work', '--'])).toEqual({ exitCode: 74 });
+  });
+
+  it('구분자 누락 → exitCode 2, runSessionCommand 미호출', async () => {
+    expect(await handleSession(['run', 'codex', 'work'])).toEqual({ exitCode: 2 });
+    expect(mockRunCommand).not.toHaveBeenCalled();
+  });
+
+  it('구분자 전 인자 과다 → exitCode 2, runSessionCommand 미호출', async () => {
+    expect(await handleSession(['run', 'codex', 'work', 'extra', '--'])).toEqual({ exitCode: 2 });
+    expect(mockRunCommand).not.toHaveBeenCalled();
   });
 });
 

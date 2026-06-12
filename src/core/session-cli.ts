@@ -13,7 +13,7 @@
  * catch 가 exit 2 매핑. 잘못된 서브커맨드/인자는 여기서 exit 2 를 반환한다.
  */
 
-import { listSessions, runSession, stopSession } from './session.js';
+import { listSessions, runSession, runSessionCommand, stopSession } from './session.js';
 
 /** 재캡처 실패 시 exit code (cli.tsx EXIT_RESTORE_FAILED 와 동일 74 — 자동화 감지용). */
 const EXIT_RECAPTURE_FAILED = 74;
@@ -21,6 +21,8 @@ const EXIT_RECAPTURE_FAILED = 74;
 export const SESSION_USAGE =
   `사용법:\n` +
   `  mat session start <cli> <profile>   격리된 subshell 실행\n` +
+  `  mat session run <cli> <profile> -- [cli-args...]\n` +
+  `                                        builtin CLI 를 격리 env 로 직접 실행\n` +
   `  mat session list                    세션 목록\n` +
   `  mat session stop <id>               세션 종료/정리\n`;
 
@@ -42,6 +44,35 @@ export async function handleSession(rest: string[]): Promise<SessionDispatchResu
     }
     const [cliId, profileName] = subArgs;
     const { code, signal, recaptureError } = await runSession({ cliId, profileName });
+    if (signal) return { exitCode: 0, raiseSignal: signal };
+    if (code != null && code !== 0) return { exitCode: code };
+    return { exitCode: recaptureError ? EXIT_RECAPTURE_FAILED : (code ?? 0) };
+  }
+
+  if (sub === 'run') {
+    const sepIdx = subArgs.indexOf('--');
+    if (sepIdx < 0) {
+      process.stderr.write(
+        `mat session run: 명령 구분자 \`--\` 가 필요합니다.\n` +
+          `  예: mat session run codex work -- --help\n`
+      );
+      return { exitCode: 2 };
+    }
+    const before = subArgs.slice(0, sepIdx);
+    const after = subArgs.slice(sepIdx + 1);
+    if (before.length !== 2) {
+      process.stderr.write(
+        `mat session run: <cli> 와 <profile> 두 인자가 필요합니다 (받음: ${before.length}개).\n` +
+          `  예: mat session run codex work -- --help\n`
+      );
+      return { exitCode: 2 };
+    }
+    const [cliId, profileName] = before;
+    const { code, signal, recaptureError } = await runSessionCommand({
+      cliId,
+      profileName,
+      args: after
+    });
     if (signal) return { exitCode: 0, raiseSignal: signal };
     if (code != null && code !== 0) return { exitCode: code };
     return { exitCode: recaptureError ? EXIT_RECAPTURE_FAILED : (code ?? 0) };

@@ -84,7 +84,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain(expectedKeyword as string);
   });
 
-  it('보안 회귀 가드: raw 에 session/warning 이 있어도 결과 def 에 없음 (plugin 은 세션 격리 미수용, PR-5)', () => {
+  it('보안 회귀 가드: raw 에 session/sessionRun/warning 이 있어도 결과 def 에 없음 (plugin 은 세션 격리 미수용)', () => {
     // 세션 격리는 빌트인 def 전용이다 — plugin 이 임의 env 를 주입할 수 있게 하면 신뢰 경계가
     // 무너진다(예: 사용자 입력 env 로 자격증명 디렉토리를 임의 위치로 리다이렉트). validateCliDefRaw
     // 는 {id,name,sources} 만 반환하므로 raw 의 session 은 구조적으로 drop 된다. 이를 회귀 고정한다.
@@ -103,11 +103,14 @@ describe('validateCliDefRaw (순수 validator)', () => {
           }
         ]
       },
+      // command-scoped session run 도 builtin-only 신뢰 경계다. plugin 이 임의 executable 을 주입하면 안 된다.
+      sessionRun: { executable: 'evil' },
       warning: 'top-level warning must also be ignored'
     });
     expect(r.error).toBeUndefined();
     expect(r.def).toBeDefined();
     expect(r.def!.session).toBeUndefined(); // session 미수용 — 구조적 drop
+    expect(r.def!.sessionRun).toBeUndefined(); // sessionRun 미수용 — 구조적 drop
     // 반환 키가 {id,name,sources} 로만 한정되는지도 고정(향후 필드 추가 시 의도 검토 강제).
     expect(Object.keys(r.def!).sort()).toEqual(['id', 'name', 'sources']);
   });

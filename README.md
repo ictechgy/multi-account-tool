@@ -204,6 +204,8 @@ Note: `2` / `74` / `75` are reserved by `mat`'s own error model (pre-spawn valid
 
 ```bash
 mat session start <cli> <profile>   # launch an isolated subshell on <profile>
+mat session run <cli> <profile> -- [cli-args...]
+                                  # run the builtin CLI executable directly in isolation
 mat session list                    # running / orphan sessions
 mat session stop <id>               # terminate a session or reap an orphan
 ```
@@ -219,6 +221,8 @@ mat session start codex personal    # independent isolated dir → "personal" ac
 ```
 
 **Mechanism — env injection + copy-isolate.** `mat session start` spawns your `$SHELL` with the CLI's config-dir env var (e.g. `CODEX_HOME`) pointed at a fresh per-session directory under `~/.multi-account-tool/sessions/<id>/`. The profile's credentials are **copied** (0600) into that directory, so the CLI inside the subshell reads the isolated account. On exit, mat **re-captures** the (possibly OAuth-rotated) credentials back into the profile and removes the session directory. The OS-global credentials and `mat exec`'s lock are never touched — so sessions run concurrently without interference.
+
+`mat session run` uses the same materialize → env injection → re-capture → cleanup lifecycle, but it does **not** open a shell. Instead, mat chooses the built-in CLI executable for `<cli>` (for example `codex`) and passes `[cli-args...]` to that executable. The `--` tail is argv for the selected builtin CLI, not an arbitrary command. This framework is enabled only for built-ins with a safe command-scoped boundary today (Codex, Qwen, Kimi, Crush, Gemini CLI, and Claude on Linux). OpenCode safer-run and Aider partial-run remain follow-ups until their hard-stop policies land.
 
 **Supported CLIs** (those that relocate their *credential* directory via an env var):
 
@@ -408,7 +412,7 @@ See [ROADMAP.md](./ROADMAP.md) for v0.4+ plans:
 - ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3)
 - ~~Aider built-in support~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - ~~Session-scoped credential isolation~~ ✅ (v0.4.x — `mat session start/list/stop`: env-injection + copy-isolate, concurrent multi-account; the `lterm` shim integration below is still pending)
-- Planned: `mat session run <cli> <profile> -- [cli-args...]` for command-scoped safer runs. This is the follow-up path for OpenCode safer-run and Aider partial-run; Antigravity remains research-only until upstream documents a stable auth-store contract. See [the R&D note](./docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md).
+- ~~`mat session run <cli> <profile> -- [cli-args...]` framework~~ ✅ — command-scoped safer-run foundation. OpenCode hard-stop probes and Aider forced config/env-file remain follow-ups; Antigravity remains research-only until upstream documents a stable auth-store contract. See [the R&D note](./docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md).
 - More built-in CLIs — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service added via the `os-keyring` source type). Copilot / Amp remain deferred — Copilot needs multi-account `/user switch` application-state swap, and Windows Credential Manager support is still pending (a separate follow-up). Cursor Agent: plugin recommended (keychain service name not publicly documented).
 - **Goose Linux**: on Linux, mat swaps Goose's default `secret-service` backend (libsecret, GNOME Keyring/KWallet) through the `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) plus the `~/.config/goose/*.yaml` files. Behavior by configuration:
   - **Default (keyring)**: the os-keyring source is included and requires `secret-tool` (libsecret-tools) + a running keyring daemon. A missing tool or a down/denied daemon produces an **explicit error** — mat does *not* silently fall back to YAML, because Goose accesses the keyring through the libsecret *library* (a separate package from the `secret-tool` CLI), so a missing CLI does not prove the keyring is unused. Silently swapping `secrets.yaml` for an active keyring user would be a wrong-account write. An absent keyring entry (vs. a missing tool) is a normal "not found" and skips to the YAML files.
