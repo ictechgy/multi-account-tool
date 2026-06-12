@@ -408,6 +408,7 @@ v0.4+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 - ~~커뮤니티 CLI 정의를 위한 플러그인 메커니즘~~ ✅ (v0.3)
 - ~~Aider 빌트인 지원~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - ~~세션별 자격증명 격리~~ ✅ (v0.4.x — `mat session start/list/stop`: env 주입 + copy-isolate, 동시 다계정; 아래 `lterm` shim 통합은 아직 미구현)
+- 예정: `mat session run <cli> <profile> -- [cli-args...]` command-scoped safer run. OpenCode safer-run 과 Aider partial-run 의 후속 경로이며, Antigravity 는 upstream 의 안정 auth-store 계약 전까지 research-only 로 유지한다. 상세는 [R&D note](./docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md) 참고.
 - 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service 는 `os-keyring` source type 으로 추가됨). Copilot / Amp 는 보류 — Copilot 은 multi-account `/user switch` application-state swap 이 필요하고, Windows Credential Manager 지원도 아직 미해결 (별도 후속). Cursor Agent 는 plugin 권장 (keychain service name 공식 미공개).
 - **Goose Linux**: Linux 에서 mat 는 Goose 의 기본 `secret-service` 백엔드 (libsecret, GNOME Keyring/KWallet) 를 `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`) 로 swap 하고 `~/.config/goose/*.yaml` 도 함께 swap 한다. 설정별 동작:
   - **기본 (keyring)**: os-keyring source 가 포함되며 `secret-tool` (libsecret-tools) + keyring daemon 이 필요하다. 미설치이거나 daemon 이 down/접근거부면 **명시 에러** — yaml 로 조용히 fallback 하지 *않는다*. Goose 는 keyring 에 libsecret *라이브러리* (`secret-tool` CLI 와 별도 패키지) 로 접근하므로, CLI 부재가 keyring 미사용을 증명하지 못한다. 활성 keyring 사용자에게 `secrets.yaml` 을 조용히 swap 하면 wrong-account 가 된다. (도구 부재가 아니라) keyring 항목 자체의 부재는 정상 "not found" 로 yaml 로 넘어간다.
