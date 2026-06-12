@@ -242,7 +242,7 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 - **OpenCode EXPERIMENTAL:** OpenCode 는 upstream 에 `OPENCODE_DATA_DIR` 가 없어 `XDG_DATA_HOME` 을 사용한다. 이 env 는 subshell 전체에 적용되므로 다른 XDG 도구(예: Crush)가 세션 안에서 data/credential 을 쓰면 ephemeral 세션 디렉토리에 기록됐다가 종료 시 사라질 수 있다. 또한 OpenCode config 채널(`OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`, project-local `opencode.json`/`.opencode`, config 안 plaintext `apiKey`)은 여전히 `auth.json` 격리를 우회할 수 있다.
 - **`SIGKILL`** 은 세션 디렉토리를 orphan 으로 남긴다 (trap 불가, `mat exec` 와 동일) — 다음 `mat session` 호출이 회수 (소유 프로세스 사망 — 프로세스 시작서명으로 **PID 재사용까지 식별** — **그리고** 세션 시작시각·디렉토리 mtime 둘 다 1h 초과 시).
 - **부모 신뢰 전제:** 격리는 `~/.multi-account-tool` 과 그 부모가 신뢰됨을 전제 — `~/.multi-account-tool` 자체가 symlink 로 바꿔치기된 경우는 범위 밖.
-- **같은 프로필 동시 2세션:** 재캡처가 직렬화되지 않는다 — 단일 자격증명 CLI 는 last-writer-wins, 멀티 자격증명 CLI(Qwen/Crush)는 파일별로 서로 다른 세션의 것이 섞일 수 있다. 둘 다 항상 **같은 계정**의 유효한 자격증명이며(wrong-account 아님·손상 아님) 다음 사용 시 자가 치유된다. 터미널마다 다른 프로필 사용 권장 — 프로필 단위 lock 은 follow-up.
+- **같은 프로필 동시 2세션:** 재캡처는 best-effort 프로필 단위 advisory lock (`locks/recapture/<cli>/<profile>.lock`) 으로 backup → stage → commit 구간을 가능한 한 직렬화한다. lock 획득 실패/timeout 시에는 세션 종료를 막지 않고 lock-free 2-phase commit 으로 degrade 한다. 이 경우 단일 자격증명 CLI 는 last-writer-wins, 멀티 자격증명 CLI(Qwen/Crush)는 **같은 계정**의 서로 다른 세션 파일이 일시적으로 섞일 수 있다. wrong-account credential 을 쓰지는 않으며 다음 사용 시 자가 치유된다. 결정적 재캡처가 필요하면 터미널마다 다른 프로필 사용을 권장.
 - **`mat session stop`** 은 소유 프로세스의 신원(PID + 시작서명)을 확인할 수 있을 때만 `SIGTERM` 을 보낸다. 확인 불가 시(드묾 — 예: `ps` 미사용 가능) PID 를 재사용한 무관 프로세스를 죽일 위험을 피해 세션을 건드리지 않고 재시도를 안내한다.
 
 ### `mat freshness` — swap 전 안전성 점검
