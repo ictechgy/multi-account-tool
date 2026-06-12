@@ -282,7 +282,7 @@ npm link
 </code></pre>
 <h3 id="verify-the-install">Verify the install</h3>
 <pre><code class="language-bash">mat --version                  # prints the installed semver
-mat --help                     # subcommand list (TUI flags + `mat exec` / `mat freshness`)
+mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat freshness`)
 node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (CLI defs load + paths resolve, never touches credentials)
 </code></pre>
 <p>The smoke test is read-only and safe to run on a machine with active mat profiles.</p>
@@ -290,7 +290,7 @@ node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (
 <h2 id="usage">Usage</h2>
 <pre><code class="language-bash">mat              # launch the TUI
 mat --version    # print installed version
-mat --help       # short usage summary (subcommands: exec, freshness)
+mat --help       # short usage summary (subcommands: exec, session, freshness)
 </code></pre>
 <p>The TUI opens with <strong>CLI → profile → switch</strong>.</p>
 <h3 id="first-run">First run</h3>
@@ -386,7 +386,7 @@ lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
 <li><strong>On exit, <code>mat</code> re-captures the live credentials into <code>&lt;profile&gt;</code> first</strong> (so rotation triggered by <code>&lt;cmd&gt;</code> is preserved), then restores the previous active profile. The recapture has a default 10s timeout (<code>MAT_EXEC_RECAPTURE_TIMEOUT_MS</code> env override) to bound keychain-prompt hangs.</li>
 <li>The restore step runs in a <code>finally</code> block so normal exit, errors, and forwarded signals all trigger it. <strong>A <code>SIGKILL</code> (or other untrappable signal: <code>SIGSEGV</code> / <code>SIGBUS</code>) to <code>mat</code> itself bypasses restore</strong> — on the next <code>mat</code> invocation, the stale lock is auto-recovered and <code>mat</code> writes a stderr warning indicating the live credentials may still belong to <code>&lt;profile&gt;</code> rather than the previous active profile (policy B: warn + drop).</li>
 </ul>
-<p>This is <strong>temporal isolation</strong>, not session isolation: while the child runs, the OS-global credentials are the <code>&lt;profile&gt;</code> ones. Two terminals running different <code>mat exec</code> commands serialise via the lock; true per-session isolation is on the roadmap.</p>
+<p>This is <strong>temporal isolation</strong>, not session isolation: while the child runs, the OS-global credentials are the <code>&lt;profile&gt;</code> ones. Two terminals running different <code>mat exec</code> commands serialise via the lock. Use <code>mat session</code> when you need true per-terminal isolation with different accounts running concurrently.</p>
 <p>Exit codes:</p>
 <div class="table-wrap"><table>
 <thead>
@@ -483,20 +483,24 @@ mat session start codex personal    # independent isolated dir → &quot;persona
 <li><strong>OpenCode EXPERIMENTAL:</strong> OpenCode isolation uses <code>XDG_DATA_HOME</code> because upstream does not expose <code>OPENCODE_DATA_DIR</code>. This env affects the whole subshell: other XDG-aware tools (for example Crush) may write data or credentials into the ephemeral session directory and lose them when the session exits. Also, OpenCode config channels (<code>OPENCODE_CONFIG_DIR</code>, <code>OPENCODE_CONFIG</code>, <code>OPENCODE_CONFIG_CONTENT</code>, project-local <code>opencode.json</code>/<code>.opencode</code>, or plaintext <code>apiKey</code> in config) can still bypass <code>auth.json</code> isolation.</li>
 <li><strong><code>SIGKILL</code> orphans</strong> the session directory (trap-impossible, same as <code>mat exec</code>); the next <code>mat session</code> call reaps it (owning process gone — PID-reuse-aware via the process start-time signature — <strong>and</strong> both the session&#39;s start time and its directory mtime older than 1h).</li>
 <li><strong>Parent-trust assumption:</strong> isolation assumes <code>~/.multi-account-tool</code> and its parent are trusted; a symlinked <code>~/.multi-account-tool</code> is out of scope.</li>
-<li><strong>Same profile, two concurrent sessions:</strong> re-capture is unsynchronized — single-credential CLIs are last-writer-wins; multi-credential CLIs (Qwen/Crush) may end up with files from different sessions. Both are always valid credentials of the <strong>same account</strong> (never wrong-account, never corrupted) and self-heal on next use. Prefer a distinct profile per terminal; per-profile locking is a follow-up.</li>
+<li><strong>Same profile, two concurrent sessions:</strong> re-capture uses a best-effort per-profile advisory lock (<code>locks/recapture/&lt;cli&gt;/&lt;profile&gt;.lock</code>) to serialize backup → stage → commit when available. If lock acquisition fails or times out, mat degrades to lock-free two-phase commit rather than blocking session shutdown; single-credential CLIs become last-writer-wins, and multi-credential CLIs (Qwen/Crush) can temporarily mix files from different sessions of the <strong>same account</strong>. It never writes a wrong-account credential and self-heals on next use. Prefer a distinct profile per terminal for deterministic re-capture.</li>
 <li><strong><code>mat session stop</code></strong> sends <code>SIGTERM</code> only when it can confirm the owning process&#39;s identity (PID + start-time signature). If that can&#39;t be verified (rare — e.g. <code>ps</code> unavailable), it leaves the session untouched and asks you to retry, rather than risk killing an unrelated process that reused the PID.</li>
 </ul>
 <h3 id="mat-freshness-pre-swap-safety-check"><code>mat freshness</code> — pre-swap safety check</h3>
-<pre><code class="language-bash">mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]
+<pre><code class="language-bash">mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json] [--check-only]
 </code></pre>
-<p>Compare live credentials with the active (or specified) profile snapshot and report drift before you swap. Useful in CI chains (<code>mat freshness &amp;&amp; deploy.sh</code>) to block stale-restore incidents (e.g., OAuth <code>refresh_token</code> revocation after wrong-profile restore).</p>
+<p>Compare live credentials with the active (or specified) profile snapshot and report drift before you swap. If <code>&lt;cli&gt;</code> is omitted, mat reports every built-in/plugin CLI that currently has an active profile. Useful in CI chains (<code>mat freshness &amp;&amp; deploy.sh</code>) to block stale-restore incidents (e.g., OAuth <code>refresh_token</code> revocation after wrong-profile restore).</p>
 <pre><code class="language-bash"># Quick safety check before a long Claude session
 mat freshness claude
 
 # Inspect a specific profile (machine-readable JSON for CI)
 mat freshness codex --profile work --json
+
+# Statusline/dashboard mode: print the same report, but do not fail on unsafe states
+mat freshness --check-only
 </code></pre>
 <p>Each source is classified into one of four states — <code>fresh</code> (byte-identical), <code>rotated</code> (token rotated but identity preserved; safe to swap), <code>stale</code> (identity changed — a different account; <strong>swap will revoke</strong>), <code>inflight</code> (multi-source CLI partially updated — retry shortly).</p>
+<p><code>--check-only</code> is read-only monitoring mode: it still prints <code>stale</code> / low-confidence <code>rotated</code> / <code>inflight</code> results, but exits <code>0</code> so prompts, statuslines, and dashboards can display the warning without breaking the shell. Usage errors and source-read failures are not masked.</p>
 <p>Exit codes:</p>
 <div class="table-wrap"><table>
 <thead>
@@ -511,7 +515,7 @@ mat freshness codex --profile work --json
 </tr>
 <tr>
 <td><code>1</code></td>
-<td>One or more sources are <code>stale</code>, low-confidence <code>rotated</code>, or <code>inflight</code> — <strong>fix before swap</strong></td>
+<td>One or more sources are <code>stale</code>, low-confidence <code>rotated</code>, or <code>inflight</code> — <strong>fix before swap</strong> (unless <code>--check-only</code>)</td>
 </tr>
 <tr>
 <td><code>2</code></td>
@@ -527,10 +531,15 @@ mat freshness codex --profile work --json
 <h2 id="data-layout">Data layout</h2>
 <pre><code>~/.multi-account-tool/
 ├── config.json                   # active profile pointer + flags
+├── app.log                       # best-effort TUI warnings / diagnostic trail
 ├── cli-defs/                     # optional user plugins — see &quot;Adding a new CLI&quot;
 │   └── &lt;id&gt;.json
-├── locks/                        # per-CLI `mat exec` lock dirs (auto-recovered on stale)
-│   └── &lt;cli&gt;.lock/
+├── locks/
+│   ├── &lt;cli&gt;.lock/               # per-CLI `mat exec` lock dirs (auto-recovered on stale)
+│   └── recapture/
+│       └── &lt;cli&gt;/&lt;profile&gt;.lock/ # `mat session` profile recapture advisory locks
+├── sessions/
+│   └── &lt;session-id&gt;/             # ephemeral `mat session` dirs + session.json while running/orphaned
 └── profiles/
     ├── claude/                   # credentials.json (macOS Keychain backup, plaintext)
     │   ├── personal/
@@ -569,7 +578,7 @@ mat freshness codex --profile work --json
 <li>Profile names: <code>[a-zA-Z0-9가-힣_.-]{1,40}</code> + NFC normalization + explicit rejection of <code>.</code> / <code>..</code> / <code>/</code> / <code>\</code> / NUL</li>
 <li>Keychain swap: backup → exact-acct delete → add. If <code>add</code> fails, the backup is auto-restored; if the rollback also fails, both errors surface together.</li>
 <li>Restore is rollback-safe for multi-source CLIs (already-restored sources are reverted to the live backup on partial failure)</li>
-<li>Error messages are redacted (JWT pattern + 50+ char base64-like sequences → <code>[redacted]</code>)</li>
+<li>Error messages are redacted (JWT pattern + 50+ char base64-like sequences → <code>[redacted]</code>), and session allow-list paths are sanitized for terminal control characters before they can reach stderr</li>
 <li>Dependencies: <code>npm audit</code> clean</li>
 </ul>
 <h3 id="not-recommended-on">Not recommended on</h3>
