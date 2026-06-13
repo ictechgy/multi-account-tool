@@ -223,7 +223,11 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     name: 'Aider',
     sources: [
       { type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }
-    ]
+    ],
+    // `session start` 는 계속 미지원(세션 재배치 env 없음). `session run` 만 mat 이
+    // forced --config/--env-file 과 env/argv/dotenv/model-sidecar hard-stop 을 소유하는
+    // command-scoped partial support 로 연다.
+    sessionRun: { executable: 'aider' }
   },
   {
     // MoonshotAI 공식 Kimi Code CLI (https://github.com/MoonshotAI/kimi-cli).

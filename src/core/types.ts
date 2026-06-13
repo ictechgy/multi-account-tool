@@ -176,7 +176,8 @@ export interface CliDef {
   session?: SessionSpec;
   /**
    * 선택. command-scoped session run 지원 명세. `--` 뒤 인자는 이 builtin executable 의 argv 로만
-   * 전달된다. Aider/OpenCode 의 추가 hard-stop 정책은 별도 후속 PR 에서 이 경계를 확장한다.
+   * 전달된다. env root 가 없는 CLI(Aider 등)는 별도 hard-stop/forced-argv 정책으로만 partial support 를
+   * 열 수 있으며, `session start` 지원과 독립이다.
    */
   sessionRun?: SessionRunSpec;
 }

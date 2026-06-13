@@ -1,7 +1,7 @@
 # Command-scoped session run R&D — OpenCode/Aider/Antigravity follow-up
 
 - **날짜**: 2026-06-12
-- **상태**: 승인된 R&D/roadmap note (runtime 변경 없음)
+- **상태**: 승인된 R&D/roadmap note + OpenCode/Aider runtime 후속 구현 반영
 - **관련**: ROADMAP.md §2, `docs/superpowers/specs/2026-05-30-session-isolation-design.md`, `.omx/plans/g2-g3-session-unblock-rd.md`
 - **목표**: 기존 `mat session start` 를 과장하지 않고, OpenCode/Aider/Antigravity 의 격리 가능성을 제품화 가능한 경계로 재정리한다.
 
@@ -12,7 +12,7 @@
 | 대상 | 결론 | 다음 제품 경로 |
 | --- | --- | --- |
 | OpenCode | `mat session start opencode` 는 계속 **EXPERIMENTAL** | 새 `mat session run opencode <profile> -- [opencode-args...]` 로 command-scoped safer-run 도입 가능 |
-| Aider | `mat session start aider` 는 계속 **미지원** | `mat session run aider <profile> -- [aider-args...]` 는 config/dotenv suppression negative test 통과 후 partial support 가능 |
+| Aider | `mat session start aider` 는 계속 **미지원** | `mat session run aider <profile> -- [aider-args...]` 는 forced config/env-file + env/argv/dotenv/OAuth-key/provider-chain/model-sidecar hard-stop 기반 partial support 로 구현됨 |
 | Google Antigravity / `agy` | swap/session 제품 지원 **blocked** | upstream auth-store 계약 또는 별도 research spike 만 허용 |
 
 핵심 결정은 `session start` 의 범위를 넓히지 않는 것이다. `session start` 는 사용자의 `$SHELL` 을 열기 때문에 `PATH`, alias, absolute path, shell init file, project-local config, env var 를 전부 사용자가 우회할 수 있다. OpenCode/Aider 처럼 credential 채널이 config/env/CLI args 로 확장된 도구는 subshell 안에서 “무엇을 실행했는지”를 `mat` 이 통제할 수 없으므로 isolation claim 이 거짓이 된다.
@@ -106,35 +106,43 @@ Aider 공식 문서는 API key 입력 채널을 command line, environment variab
 
 따라서 `mat session start aider` 는 지원하지 않는다. subshell 안에서 사용자가 `OPENAI_API_KEY=... aider`, `aider --api-key provider=...`, project `.env` 등을 얼마든지 우회할 수 있기 때문이다.
 
-### 4.2 허용 가능한 제품 경로
+### 4.2 구현된 제품 경로 (partial support)
 
-`mat session run aider <profile> -- [aider-args...]` 를 추가하되, 최초 PR 에서는 **partial support** 로 문서화한다.
+`mat session run aider <profile> -- [aider-args...]` 는 제품 지원하되 **partial support** 로 문서화한다. `mat session start aider` 는 여전히 미지원이다.
 
-- mat profile 의 `aider.yml` 을 세션 디렉토리에 0600 복사한다.
-- Aider 실행 argv 에 `--config <session/aider.yml>` 을 강제한다.
-- empty/controlled `.env` 를 세션에 만들고 `--env-file <session/.env>` 를 강제하는 방식을 검증한다.
-- provider API-key env 는 default-deny scrub list 로 제거하거나, 제거가 위험하면 hard refusal 한다.
-- `--` 뒤 사용자가 넘긴 key-bearing args 는 hard refusal 한다.
+- mat profile 의 `aider.yml` 을 `<session>/command/aider.yml` 에 0600 command-only 격리본으로 복사한다.
+- Aider 실행 argv 앞에 `--config <session>/command/aider.yml` 을 강제한다.
+- `<session>/command/.env` 를 빈 0600 파일로 만들고 `--env-file <session>/command/.env` 를 강제한다.
+- env root 를 열지 않는다. 즉 Aider home/config tree 전체를 격리한다고 주장하지 않고, mat 이 소유한 builtin `aider` 한 프로세스의 credential 입력 채널만 command-scoped 로 좁힌다. child env 에서는 AWS shared credentials/config/profile/container/metadata/web-identity 와 Google ADC/Cloud SDK credential fallback 을 `/dev/null` 또는 unset 으로 scrub 한다.
+- command-only `aider.yml` 은 기존 세션 lifecycle 과 같은 재캡처 경로를 타며, `.env` 보조 파일은 재캡처하지 않고 폐기한다.
 
 ### 4.3 Hard-stop 기본값
 
-아래 argv/env 는 기본값으로 **거부**한다.
+아래 argv/env/ambient 파일은 기본값으로 **거부**한다.
 
-- `--openai-api-key`, `--anthropic-api-key`
-- `--api-key` 및 `--api-key=provider=value`
-- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, 그 외 `/.*_API_KEY$/` provider key env
-- `AIDER_OPENAI_API_KEY`, `AIDER_ANTHROPIC_API_KEY`, `AIDER_API_KEY`, `AIDER_ENV_FILE`, `AIDER_CONFIG` 등 Aider 자체 override env
+- user argv 의 `--config`/`-c`, `--env`/`--env-file`, `--set-env` 및 이들의 argparse long-option 축약형
+- `--openai-api-key`, `--anthropic-api-key`, `--api-key` 및 `--api-key=provider=value`
+- provider endpoint/base override argv (`--openai-api-base`, `--openai-base-url`, `--api-base`, `--base-url` 등)
+- model sidecar argv (`--model-settings-file`, `--model-metadata-file`)
+- 모든 `AIDER_*` env
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `OPENAI_API_BASE`, `OPENAI_BASE_URL` 등 provider credential/endpoint env, AWS/Google/Vertex credential-chain env(`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, `GOOGLE_APPLICATION_CREDENTIALS`, `VERTEXAI_PROJECT` 등), generic `*_API_KEY`, `*_TOKEN`, `*_SECRET_KEY` 계열 env
+- home/project/git-root 탐색 범위의 `.env` 중 credential/provider/AWS/Google/Vertex assignment 를 담은 파일, symlink `.env`, unreadable `.env`
+- non-empty/symlinked/unreadable `~/.aider/oauth-keys.env` (OpenRouter OAuth key dotenv)
+- home/project/git-root 탐색 범위의 non-empty 또는 symlinked `.aider.model.settings.yml`, `.aider.model.metadata.json`
+- profile `aider.yml` 내부의 `model-settings-file` / `model-metadata-file` pointer 및 `set-env`
+- host AWS/Google credential chain 에 의존하는 Bedrock/Vertex model selector/listing 또는 alias target (`bedrock/...`, `vertex_ai/...`)
 
-### 4.4 Blocking tests before support
+### 4.4 Blocking tests now covered
 
-Aider partial-run 은 다음 negative test 없이는 제품 지원으로 표시하지 않는다.
+Aider partial-run 제품 표시는 아래 회귀 테스트 통과를 전제로 한다.
 
-- home `.aider.conf.yml` 이 존재해도 forced `--config <session/aider.yml>` 만 적용된다.
-- repo root `.aider.conf.yml` 이 존재해도 forced config 만 적용된다.
-- current directory `.aider.conf.yml` 이 존재해도 forced config 만 적용된다.
-- home/repo/current `.env` 가 존재해도 forced `--env-file <session/.env>` 만 적용된다. 만약 Aider 가 docs 와 달리 여러 `.env` 를 함께 load 하면 support 는 blocked 로 유지한다.
-- key-bearing argv 는 모두 hard refusal.
-- provider API-key env 는 scrub 또는 hard refusal 로 deterministic 하게 처리된다.
+- forced `--config <session>/command/aider.yml` 와 forced empty `--env-file <session>/command/.env` 가 argv 앞에 주입된다.
+- `session start aider` 는 계속 UsageError 로 막힌다.
+- key-bearing/config/env/model-sidecar argv(축약 long-option 포함)는 profile lookup/read/spawn 전에 hard-stop 된다.
+- provider/Aider/AWS/Google/Vertex ambient env 는 profile lookup/read/spawn 전에 hard-stop 되고, child env 는 AWS/Google credential-chain fallback 을 scrub 한다.
+- home/current/parent `.env` credential/provider-chain assignment, symlink `.env`, unreadable `.env` 는 hard-stop 된다.
+- `~/.aider/oauth-keys.env`, home/project model sidecar 후보와 symlink sidecar 는 hard-stop 된다.
+- profile 내부 model-sidecar pointer/set-env 및 Bedrock/Vertex model selector/listing/alias 는 materialize 후 spawn 전에 hard-stop 되고 session dir 가 cleanup 된다.
 
 ---
 
@@ -170,7 +178,7 @@ Linux private keyring/D-Bus/gnome-keyring sandbox 실험은 이 두 조건 중 �
 1. **Docs/R&D note** — 이 문서와 ROADMAP/README pointer 만 추가. runtime 변경 없음.
 2. **`mat session run` framework** — built-in CLI executable allow-list, lifecycle, env materialize/recapture reuse, no arbitrary shell.
 3. **OpenCode safer-run** — risk probe + hard-stop + tests.
-4. **Aider partial-run** — forced config/env-file + env/argv hard-stop + negative tests.
+4. ✅ **Aider partial-run** — forced config/env-file + env/argv/dotenv/OAuth-key/provider-chain/model-sidecar hard-stop + profile pointer cleanup tests.
 5. **Antigravity research spike** — Linux private keyring 또는 upstream issue/RFC 조사. 제품 runtime 변경 없음.
 
 ---
@@ -185,4 +193,4 @@ Linux private keyring/D-Bus/gnome-keyring sandbox 실험은 이 두 조건 중 �
   - Antigravity HOME redirect: 거부. 너무 광범위하고 native keyring auth 를 격리하지 못한다.
 - **Why chosen**: command-scoped run 은 mat 이 executable, env, argv, project probe 를 시작 전에 검증할 수 있는 가장 좁은 경계다.
 - **Consequences**: 새 명령이 필요하지만 기존 session semantics 를 오염시키지 않는다. Aider/OpenCode 는 더 엄격한 hard-stop UX 를 갖는다. Antigravity 는 blocked 상태가 명확해진다.
-- **Follow-ups**: OpenCode upstream `OPENCODE_DATA_DIR` 요청, Aider config/dotenv bypass test, Antigravity auth-store contract 조사/RFC.
+- **Follow-ups**: OpenCode upstream `OPENCODE_DATA_DIR` 요청, Aider upstream config/dotenv/OAuth-key/provider-chain/model-sidecar drift monitor, Antigravity auth-store contract 조사/RFC.

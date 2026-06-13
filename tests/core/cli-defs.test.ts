@@ -414,8 +414,9 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
     }
   );
 
-  it('sessionRun executable 은 builtin session-capable CLI 에만 정의된다 (plugin/user 주입 아님)', () => {
+  it('sessionRun executable 은 command-scoped builtin allow-list 에만 정의된다 (plugin/user 주입 아님)', () => {
     expect(Object.fromEntries(BUILTIN_CLI_DEFS.map((c) => [c.id, c.sessionRun?.executable]))).toMatchObject({
+      aider: 'aider',
       claude: 'claude',
       codex: 'codex',
       gemini: 'gemini',
@@ -424,7 +425,6 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
       crush: 'crush',
       opencode: 'opencode'
     });
-    expect(find('aider').sessionRun).toBeUndefined();
     expect(find('goose').sessionRun).toBeUndefined();
   });
 
