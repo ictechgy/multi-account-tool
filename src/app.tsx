@@ -21,6 +21,7 @@ import React, { useEffect, useReducer, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
 import { findCliDef, getAllCliDefs } from './core/cli-defs.js';
+import { withCliMutationLock } from './core/cli-mutation-lock.js';
 import {
   cleanupTmpFiles,
   getActiveProfile,
@@ -38,6 +39,7 @@ import {
   topOf,
   type Action,
   type AppData,
+  type FirstImportExpectedState,
   type MessageTone,
   type Screen,
   type State
@@ -129,10 +131,32 @@ async function initialize(dispatch: React.Dispatch<Action>): Promise<void> {
     .filter((id) => (data.profilesByCli[id] ?? []).length === 0);
 
   if (!data.firstImportPromptShown && importable.length > 0) {
-    dispatch({ type: 'replace', screen: { kind: 'firstImport', targets: importable } });
+    dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'firstImport',
+        targets: importable,
+        expectedByCli: buildFirstImportExpectedByCli(importable, data)
+      }
+    });
   } else {
     dispatch({ type: 'replace', screen: { kind: 'home' } });
   }
+}
+
+function buildFirstImportExpectedByCli(
+  targets: string[],
+  data: AppData
+): Record<string, FirstImportExpectedState> {
+  return Object.fromEntries(
+    targets.map((cliId) => [
+      cliId,
+      {
+        active: data.activeByCli[cliId],
+        profiles: profileNames(data.profilesByCli[cliId] ?? [])
+      }
+    ])
+  );
 }
 
 async function loadAllData(): Promise<AppData> {
@@ -165,6 +189,14 @@ async function loadProfilesByCli(): Promise<AppData['profilesByCli']> {
     })
   );
   return result;
+}
+
+function sortedProfileNames(names: string[]): string[] {
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+function profileNames(profiles: { name: string }[]): string[] {
+  return sortedProfileNames(profiles.map((p) => p.name));
 }
 
 // --- 화면 렌더링 ---
@@ -339,7 +371,7 @@ function renderFirstImport(
       body={formatFirstImportBody(targets)}
       yesLabel="모두 가져오기"
       noLabel="건너뛰기"
-      onYes={() => void onFirstImport(screen.targets, dispatch, refresh)}
+      onYes={() => void onFirstImport(screen.targets, screen.expectedByCli, dispatch, refresh)}
       onNo={() => void declineFirstImport(dispatch)}
     />
   );
@@ -377,6 +409,13 @@ async function runBusyAction<T>(cfg: BusyActionConfig<T>): Promise<void> {
       screen: { kind: 'message', tone: tone ?? 'success', title, body }
     });
   } catch (err) {
+    if (err instanceof ActiveProfileChangedError) {
+      cfg.dispatch({
+        type: 'replace',
+        screen: { kind: 'message', tone: 'error', title: err.title, body: err.body }
+      });
+      return;
+    }
     cfg.dispatch({
       type: 'replace',
       screen: { kind: 'message', tone: 'error', title: cfg.errorTitle, body: describeError(err) }
@@ -397,6 +436,7 @@ async function declineFirstImport(dispatch: React.Dispatch<Action>): Promise<voi
 
 async function onFirstImport(
   targets: string[],
+  expectedByCli: Record<string, FirstImportExpectedState>,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
@@ -404,8 +444,15 @@ async function onFirstImport(
   const summary: FirstImportSummary = { successes: [], failures: [] };
   for (const cliId of targets) {
     try {
-      const snap = await snapshotLiveToProfile(cliId, 'default');
-      await setActiveProfile(cliId, 'default');
+      const snap = await withCliMutationLock(
+        { cliId, profileName: 'default', execMode: 'foreground', affectsCliIds: [cliId] },
+        async () => {
+          await assertFirstImportStateUnchanged(cliId, expectedByCli[cliId]);
+          const captured = await snapshotLiveToProfile(cliId, 'default');
+          await setActiveProfile(cliId, 'default');
+          return captured;
+        }
+      );
       summary.successes.push({ cliId, captured: snap.captured });
     } catch (err) {
       summary.failures.push({ cliId, err: errorMessage(err) });
@@ -441,19 +488,11 @@ function onSwitchAction(
   refresh: () => Promise<void>
 ): void {
   if (currentActive === to) {
-    dispatch({
-      type: 'push',
-      screen: {
-        kind: 'message',
-        tone: 'info',
-        title: '이미 활성 프로필입니다',
-        body: `현재 '${to}' 가 활성 상태입니다.`
-      }
-    });
+    void doSwitch(cli, to, dispatch, refresh, currentActive);
     return;
   }
   // PR-G: 활성 프로필이 있을 때만 freshness 체크 의미 있음 — 없으면 백업 불필요.
-  // current === to 케이스는 위에서 차단됨.
+  // current === to 케이스도 stale render 방지를 위해 doSwitch 내부 lock 에서 재검증.
   if (currentActive != null) {
     void checkFreshnessThenSwitch(cli, currentActive, to, data, dispatch, refresh);
     return;
@@ -465,7 +504,7 @@ function onSwitchAction(
       kind: 'confirm',
       title: `${cli.name} 프로필 전환`,
       body: formatSwitchConfirmBody(currentActive, to),
-      onYes: () => void doSwitch(cli, to, dispatch, refresh)
+      onYes: () => void doSwitch(cli, to, dispatch, refresh, currentActive)
     }
   });
 }
@@ -496,7 +535,7 @@ function checkFreshnessThenSwitch(
         kind: 'confirm',
         title: `${cli.name} 프로필 전환`,
         body: formatSwitchConfirmBody(currentActive, to),
-        onYes: () => void doSwitch(cli, to, dispatch, refresh)
+        onYes: () => void doSwitch(cli, to, dispatch, refresh, currentActive)
       }
     }),
     buildDialog: (report) => ({
@@ -618,43 +657,92 @@ async function persistFirstFreshnessPromptIfNeeded(data: AppData): Promise<void>
  * 의도하지 않은 프로필에 라이브 자격증명을 저장하거나 폐기하게 된다. 본 함수가
  * 진입 직전 active 를 재검증해 mismatch 시 swap/snapshot 전체를 중단한다.
  *
- * 반환: 일치하면 true (진행), 불일치하면 false 와 함께 error message screen 을
- * dispatch (호출자는 즉시 return).
+ * 불일치하면 ActiveProfileChangedError 를 throw 한다. runBusyAction 이 이 타입을
+ * 별도 처리해 성공 UI 로 덮지 않고 기존 취소 안내를 표시한다.
  */
-async function reAssertActiveProfile(
+class ActiveProfileChangedError extends Error {
+  readonly title = '활성 프로필 변경 감지 — 작업 취소';
+  readonly body: string;
+
+  constructor(expected: string | undefined, current: string | undefined) {
+    const body =
+      `dialog 표시 중 다른 도구가 활성 프로필을 변경했습니다.\n` +
+      `예상: '${expected ?? '(없음)'}' / 현재: '${current ?? '(없음)'}'\n\n` +
+      `라이브 자격증명이 의도와 다른 프로필에 쓰일 수 있어 작업을 취소했습니다.\n` +
+      `프로필 목록을 다시 확인 후 재시도하세요.`;
+    super(body);
+    this.name = 'ActiveProfileChangedError';
+    this.body = body;
+  }
+}
+
+class FirstImportStateChangedError extends Error {
+  constructor(
+    cliId: string,
+    expectedProfiles: string[],
+    currentProfiles: string[]
+  ) {
+    super(
+      `초기 가져오기 dialog 표시 중 ${cliId} 프로필 목록이 변경되었습니다.\n` +
+      `예상: ${formatProfileList(expectedProfiles)} / 현재: ${formatProfileList(currentProfiles)}\n\n` +
+      `다른 작업이 먼저 프로필 상태를 변경해 stale 가져오기를 취소했습니다.\n` +
+      `프로필 목록을 다시 확인 후 재시도하세요.`
+    );
+    this.name = 'FirstImportStateChangedError';
+  }
+}
+
+async function assertActiveProfileUnchanged(
   cliId: string,
-  expected: string,
-  dispatch: React.Dispatch<Action>
-): Promise<boolean> {
+  expected: string | undefined
+): Promise<string | undefined> {
   const current = await getActiveProfile(cliId);
-  if (current === expected) return true;
-  dispatch({
-    type: 'replace',
-    screen: {
-      kind: 'message',
-      tone: 'error',
-      title: '활성 프로필 변경 감지 — 작업 취소',
-      body:
-        `dialog 표시 중 다른 도구가 활성 프로필을 변경했습니다.\n` +
-        `예상: '${expected}' / 현재: '${current ?? '(없음)'}'\n\n` +
-        `라이브 자격증명이 의도와 다른 프로필에 쓰일 수 있어 작업을 취소했습니다.\n` +
-        `프로필 목록을 다시 확인 후 재시도하세요.`
-    }
-  });
-  return false;
+  if (current !== expected) throw new ActiveProfileChangedError(expected, current);
+  return current;
+}
+
+async function assertFirstImportStateUnchanged(
+  cliId: string,
+  expected: FirstImportExpectedState | undefined
+): Promise<void> {
+  if (!expected) {
+    throw new FirstImportStateChangedError(cliId, [], await listProfiles(cliId));
+  }
+  await assertActiveProfileUnchanged(cliId, expected.active);
+  const expectedProfiles = sortedProfileNames(expected.profiles);
+  const currentProfiles = sortedProfileNames(await listProfiles(cliId));
+  if (!sameProfileNames(currentProfiles, expectedProfiles)) {
+    throw new FirstImportStateChangedError(cliId, expectedProfiles, currentProfiles);
+  }
+}
+
+function sameProfileNames(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((name, idx) => name === b[idx]);
+}
+
+function formatProfileList(names: string[]): string {
+  return names.length === 0 ? '(없음)' : names.join(', ');
 }
 
 async function doSwitch(
   cli: CliDef,
   to: string,
   dispatch: React.Dispatch<Action>,
-  refresh: () => Promise<void>
+  refresh: () => Promise<void>,
+  expectedActive: string | undefined
 ): Promise<void> {
   await runBusyAction({
     dispatch,
     refresh,
     busyMessage: '전환 중...',
-    work: () => switchProfile(cli.id, to),
+    work: () =>
+      withCliMutationLock(
+        { cliId: cli.id, profileName: to, execMode: 'foreground', affectsCliIds: [cli.id] },
+        async () => {
+          await assertActiveProfileUnchanged(cli.id, expectedActive);
+          return switchProfile(cli.id, to);
+        }
+      ),
     buildSuccess: (result) => ({
       title: '전환 완료',
       body: formatSwitchResult(result, to)
@@ -678,16 +766,25 @@ async function doSwitchWithRecapture(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  // #1 fix: dialog 표시 중 active 가 외부에서 변경됐다면 race — 작업 중단.
-  if (!(await reAssertActiveProfile(cli.id, currentActive, dispatch))) return;
   await runBusyAction({
     dispatch,
     refresh,
     busyMessage: '라이브 재캡처 후 전환 중...',
-    work: async () => {
-      await snapshotLiveToProfile(cli.id, currentActive);
-      return await switchProfile(cli.id, to, { skipPreSwapSnapshot: true });
-    },
+    work: () =>
+      withCliMutationLock(
+        {
+          cliId: cli.id,
+          profileName: to,
+          execMode: 'foreground',
+          previousActive: currentActive,
+          affectsCliIds: [cli.id]
+        },
+        async () => {
+          await assertActiveProfileUnchanged(cli.id, currentActive);
+          await snapshotLiveToProfile(cli.id, currentActive);
+          return await switchProfile(cli.id, to, { skipPreSwapSnapshot: true });
+        }
+      ),
     buildSuccess: (result) => ({
       title: '재캡처 + 전환 완료',
       body:
@@ -710,12 +807,24 @@ async function doSwitchDiscardingLive(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  if (!(await reAssertActiveProfile(cli.id, currentActive, dispatch))) return;
   await runBusyAction({
     dispatch,
     refresh,
     busyMessage: '라이브 폐기 후 전환 중...',
-    work: () => switchProfile(cli.id, to, { skipPreSwapSnapshot: true }),
+    work: () =>
+      withCliMutationLock(
+        {
+          cliId: cli.id,
+          profileName: to,
+          execMode: 'foreground',
+          previousActive: currentActive,
+          affectsCliIds: [cli.id]
+        },
+        async () => {
+          await assertActiveProfileUnchanged(cli.id, currentActive);
+          return switchProfile(cli.id, to, { skipPreSwapSnapshot: true });
+        }
+      ),
     buildSuccess: (result) => ({
       title: '폐기 + 전환 완료',
       tone: 'warning' as MessageTone,
@@ -738,8 +847,8 @@ async function onAddSubmit(
   // 프로필 소유인지 정의되지 않으므로 단순 캡처로 진행 (기존 동작 보존).
   const currentActive = data.activeByCli[cli.id];
   if (currentActive == null || currentActive === name) {
-    // 활성 미설정 / 자기 자신 캡처 — race 가드 불필요 (expectedActive=undefined).
-    await doCreateProfile(cli, name, undefined, dispatch, refresh);
+    // 활성 미설정 / 자기 자신 캡처도 render 시점의 active 를 lock 안에서 재검증한다.
+    await doCreateProfile(cli, name, currentActive, dispatch, refresh);
     return;
   }
   // create-mode 의 분기는 switch-mode 와 동일 helper 재사용 (#9 fix).
@@ -770,9 +879,8 @@ async function onAddSubmit(
 /**
  * PR-G create-mode 의 "폐기" 분기 + 단순 캡처 진입점.
  *
- * expectedActive 가 명시되면 #1 fix 의 race 가드를 적용 — dialog 표시 ~ 사용자 결정
- * 사이에 active 가 외부에서 변경됐다면 작업 중단. expectedActive 가 undefined 면
- * (active 미설정 / fresh 경로) 가드 skip.
+ * dialog 표시/렌더 시점의 active 를 lock 내부에서 재검증한다. `undefined` 도
+ * "활성 프로필 없음" 이라는 기대 상태이므로 active 가 외부에서 생기면 작업 중단.
  *
  * 활성 프로필은 변경되지 않음 — 사용자가 명시 전환할 때까지 그대로 유지.
  */
@@ -783,14 +891,24 @@ async function doCreateProfile(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  if (expectedActive != null) {
-    if (!(await reAssertActiveProfile(cli.id, expectedActive, dispatch))) return;
-  }
   await runBusyAction({
     dispatch,
     refresh,
     busyMessage: '프로필 생성 중...',
-    work: () => snapshotLiveToProfile(cli.id, name),
+    work: () =>
+      withCliMutationLock(
+        {
+          cliId: cli.id,
+          profileName: name,
+          execMode: 'foreground',
+          previousActive: expectedActive,
+          affectsCliIds: [cli.id]
+        },
+        async () => {
+          await assertActiveProfileUnchanged(cli.id, expectedActive);
+          return snapshotLiveToProfile(cli.id, name);
+        }
+      ),
     buildSuccess: (snap) => ({
       title: '프로필 생성 완료',
       body:
@@ -822,15 +940,25 @@ async function doCreateWithRecapture(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  if (!(await reAssertActiveProfile(cli.id, currentActive, dispatch))) return;
   await runBusyAction({
     dispatch,
     refresh,
     busyMessage: '라이브 재캡처 후 프로필 생성 중...',
-    work: async () => {
-      await snapshotLiveToProfile(cli.id, currentActive);
-      return await snapshotLiveToProfile(cli.id, newName);
-    },
+    work: () =>
+      withCliMutationLock(
+        {
+          cliId: cli.id,
+          profileName: newName,
+          execMode: 'foreground',
+          previousActive: currentActive,
+          affectsCliIds: [cli.id]
+        },
+        async () => {
+          await assertActiveProfileUnchanged(cli.id, currentActive);
+          await snapshotLiveToProfile(cli.id, currentActive);
+          return await snapshotLiveToProfile(cli.id, newName);
+        }
+      ),
     buildSuccess: (snap) => ({
       title: '재캡처 + 프로필 생성 완료',
       body:
@@ -855,11 +983,21 @@ async function onRenameSubmit(
     dispatch,
     refresh,
     busyMessage: '이름 변경 중...',
-    work: async () => {
-      await renameProfile(cliId, oldName, newName);
-      const cur = await getActiveProfile(cliId);
-      if (cur === oldName) await setActiveProfile(cliId, newName);
-    },
+    work: () =>
+      withCliMutationLock(
+        {
+          cliId,
+          profileName: newName,
+          execMode: 'foreground',
+          previousActive: oldName,
+          affectsCliIds: [cliId]
+        },
+        async () => {
+          await renameProfile(cliId, oldName, newName);
+          const cur = await getActiveProfile(cliId);
+          if (cur === oldName) await setActiveProfile(cliId, newName);
+        }
+      ),
     buildSuccess: () => ({
       title: '이름 변경 완료',
       body: `${oldName} → ${newName}`
@@ -894,7 +1032,7 @@ function onDeleteAction(
       title: '프로필 삭제',
       body: `'${name}' 프로필을 영구 삭제합니다. 되돌릴 수 없습니다.`,
       dangerous: true,
-      onYes: () => void doDelete(cli.id, name, dispatch, refresh)
+      onYes: () => void doDelete(cli.id, name, active, dispatch, refresh)
     }
   });
 }
@@ -902,6 +1040,7 @@ function onDeleteAction(
 async function doDelete(
   cliId: string,
   name: string,
+  expectedActive: string | undefined,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
@@ -909,7 +1048,15 @@ async function doDelete(
     dispatch,
     refresh,
     busyMessage: '삭제 중...',
-    work: () => deleteProfile(cliId, name),
+    work: () =>
+      withCliMutationLock(
+        { cliId, profileName: name, execMode: 'foreground', affectsCliIds: [cliId] },
+        async () => {
+          const current = await assertActiveProfileUnchanged(cliId, expectedActive);
+          if (current === name) throw new ActiveProfileChangedError(expectedActive, current);
+          return deleteProfile(cliId, name);
+        }
+      ),
     buildSuccess: () => ({
       title: '삭제 완료',
       body: `'${name}' 프로필이 삭제되었습니다.`
@@ -932,7 +1079,7 @@ function onCaptureAction(
       title: '현재 라이브 자격증명을 캡처',
       body: formatCaptureWarning(name, active),
       dangerous: name !== active,
-      onYes: () => void doCapture(cli.id, name, dispatch, refresh)
+      onYes: () => void doCapture(cli.id, name, active, dispatch, refresh)
     }
   });
 }
@@ -940,6 +1087,7 @@ function onCaptureAction(
 async function doCapture(
   cliId: string,
   name: string,
+  expectedActive: string | undefined,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
@@ -947,7 +1095,14 @@ async function doCapture(
     dispatch,
     refresh,
     busyMessage: '캡처 중...',
-    work: () => snapshotLiveToProfile(cliId, name),
+    work: () =>
+      withCliMutationLock(
+        { cliId, profileName: name, execMode: 'foreground', affectsCliIds: [cliId] },
+        async () => {
+          await assertActiveProfileUnchanged(cliId, expectedActive);
+          return snapshotLiveToProfile(cliId, name);
+        }
+      ),
     buildSuccess: (snap) => ({
       title: '캡처 완료',
       body:
@@ -958,3 +1113,12 @@ async function doCapture(
     errorTitle: '캡처 실패'
   });
 }
+
+export const __testHooks = {
+  assertActiveProfileUnchanged,
+  doCapture,
+  doCreateProfile,
+  doDelete,
+  doSwitch,
+  onFirstImport
+};

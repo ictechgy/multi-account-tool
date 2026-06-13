@@ -28,7 +28,12 @@ import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { writeFileAtomic } from './io-atomic.js';
-import { cliLockPath, recaptureLockPath } from './paths.js';
+import {
+  cliLockPath,
+  recaptureLockPath,
+  validateCliId,
+  validateProfileName
+} from './paths.js';
 
 const INFO_FILENAME = 'info.json';
 
@@ -56,7 +61,7 @@ export type LockExecMode = 'foreground' | 'exec';
  * 로 처리한다. stale recovery 경로 (handleConflict) 가 이 부재를 명시 분기해
  * 사용자에게 "옛 버전 lock" 임을 안내 (정책 B — warn + drop).
  */
-interface LockBody {
+export interface LockBody {
   pid: number;
   startedAt: string;
   profile: string;
@@ -92,6 +97,28 @@ export interface AcquireLockOptions {
   previousActive?: string;
   /** 본 lock 의 영향을 받는 cliId 목록 (현재는 단일 [cliId] — 추후 cross-cli 확장 예약). */
   affectsCliIds?: string[];
+  /**
+   * lock 획득 이후, lock 안에서 계산해야 하는 metadata.
+   *
+   * `mat exec` 의 previousActive 는 lock 밖에서 읽으면 foreground swap 과 TOCTOU 가
+   * 발생하므로, acquire 직후 본 callback 으로 읽고 info.json 을 최종 갱신한다.
+   */
+  prepareMetadata?: () => Promise<{ previousActive?: string }>;
+}
+
+export interface CliLockLease {
+  /** 획득자가 보유한 최종 lock body. release 는 token 으로 ownership 을 재검증한다. */
+  body: LockBody;
+  release: () => Promise<void>;
+}
+
+interface NormalizedAcquireLockOptions {
+  cliId: string;
+  profileName: string;
+  execMode: LockExecMode;
+  previousActive?: string;
+  affectsCliIds: string[];
+  prepareMetadata?: () => Promise<{ previousActive?: string }>;
 }
 
 /** lock 이 이미 살아있는 다른 프로세스에 의해 점유 중일 때 throw. */
@@ -117,39 +144,125 @@ export async function acquireCliLock(
   profileName: string,
   options?: AcquireLockOptions
 ): Promise<() => Promise<void>> {
-  const lockDir = cliLockPath(cliId);
+  const lease = await acquireCliLockLease(cliId, profileName, options);
+  return lease.release;
+}
+
+/**
+ * cli 별 lock 을 획득하고 최종 LockBody 를 반환한다.
+ *
+ * `prepareMetadata` 가 주어지면 lock directory 를 먼저 획득하고 유효한 pending
+ * info.json 을 쓴 뒤, callback 을 lock 안에서 실행해 metadata 를 final write 한다.
+ * callback 실패/metadata 검증 실패/final write 실패 시 방금 획득한 lock directory 를
+ * 제거하고 원본 에러를 전파한다. static 입력(cli/profile/previousActive/affectsCliIds)
+ * 은 mkdir 전 모두 검증해 invalid input 이 durable lock artifact 를 남기지 않게 한다.
+ */
+export async function acquireCliLockLease(
+  cliId: string,
+  profileName: string,
+  options?: AcquireLockOptions
+): Promise<CliLockLease> {
+  const normalized = normalizeAcquireLockOptions(cliId, profileName, options);
+  const lockDir = cliLockPath(normalized.cliId);
   await fs.mkdir(dirname(lockDir), { recursive: true, mode: 0o700 });
 
-  const body = makeLockBody(cliId, profileName, options);
+  const body = makeLockBody(normalized);
 
   // 최대 2회 시도: 1회차 conflict → stale 회수 후 2회차에서 mkdir 재시도.
   for (let attempt = 0; attempt < 2; attempt++) {
     const acquired = await tryAcquire(lockDir, body);
-    if (acquired) return () => releaseIfOwned(lockDir, body.token);
-    await handleConflict(lockDir, cliId);
+    if (acquired) return finalizeLease(lockDir, body, normalized);
+    await handleConflict(lockDir, normalized.cliId);
   }
 
   // 2회 모두 실패 — 마지막으로 보인 holder 정보를 가능한 한 정확히 보고.
   const holder = await readInfo(lockDir);
-  if (holder) throw new LockHeldError(cliId, holder);
-  throw new Error(`lock 획득 실패 (${cliId}): 반복된 race`);
+  if (holder) throw new LockHeldError(normalized.cliId, holder);
+  throw new Error(`lock 획득 실패 (${normalized.cliId}): 반복된 race`);
 }
 
-/** acquireCliLock 호출 옵션 + process state 를 LockBody 로 합성. */
-function makeLockBody(
+function normalizeAcquireLockOptions(
   cliId: string,
   profileName: string,
   options: AcquireLockOptions | undefined
-): LockBody {
+): NormalizedAcquireLockOptions {
+  const safeCli = validateCliId(cliId);
+  const safeProfile = validateProfileName(profileName);
+  const execMode = normalizeExecMode(options?.execMode);
+  const previousActive =
+    options?.previousActive == null ? undefined : validateProfileName(options.previousActive);
+  const affectsCliIds = normalizeAffectsCliIds(options?.affectsCliIds, safeCli);
+  return {
+    cliId: safeCli,
+    profileName: safeProfile,
+    execMode,
+    previousActive,
+    affectsCliIds,
+    prepareMetadata: options?.prepareMetadata
+  };
+}
+
+function normalizeExecMode(value: LockExecMode | undefined): LockExecMode {
+  if (value == null) return 'exec';
+  if (value === 'exec' || value === 'foreground') return value;
+  throw new Error(`알 수 없는 lock execMode: ${String(value)}`);
+}
+
+function normalizeAffectsCliIds(value: string[] | undefined, fallbackCli: string): string[] {
+  const raw = value ?? [fallbackCli];
+  const safe = [...new Set(raw.map((v) => validateCliId(v)))];
+  if (safe.length === 0) throw new Error('lock affectsCliIds 는 비어 있을 수 없습니다');
+  return safe;
+}
+
+/** acquireCliLock 호출 옵션 + process state 를 LockBody 로 합성. */
+function makeLockBody(options: NormalizedAcquireLockOptions): LockBody {
   return {
     pid: process.pid,
     startedAt: new Date().toISOString(),
-    profile: profileName,
+    profile: options.profileName,
     token: randomBytes(16).toString('hex'),
-    execMode: options?.execMode ?? 'exec',
-    previousActive: options?.previousActive,
-    affectsCliIds: options?.affectsCliIds ?? [cliId]
+    execMode: options.execMode,
+    previousActive: options.previousActive,
+    affectsCliIds: options.affectsCliIds
   };
+}
+
+async function finalizeLease(
+  lockDir: string,
+  body: LockBody,
+  options: NormalizedAcquireLockOptions
+): Promise<CliLockLease> {
+  try {
+    const finalized = await finalizeLockBody(lockDir, body, options);
+    return {
+      body: finalized,
+      release: () => releaseIfOwned(lockDir, body.token)
+    };
+  } catch (err) {
+    await fs.rm(lockDir, { recursive: true, force: true }).catch(() => { /* best-effort */ });
+    throw err;
+  }
+}
+
+async function finalizeLockBody(
+  lockDir: string,
+  body: LockBody,
+  options: NormalizedAcquireLockOptions
+): Promise<LockBody> {
+  if (!options.prepareMetadata) return body;
+
+  const prepared = await options.prepareMetadata();
+  const previousActive =
+    prepared.previousActive == null
+      ? body.previousActive
+      : validateProfileName(prepared.previousActive);
+  const finalized: LockBody = {
+    ...body,
+    previousActive
+  };
+  await writeFileAtomic(join(lockDir, INFO_FILENAME), JSON.stringify(finalized));
+  return finalized;
 }
 
 /** mkdir → writeFileAtomic 으로 lock 시도. 성공 시 true. EEXIST 시 false. 그 외 throw. */
@@ -415,7 +528,7 @@ function makeRecaptureBody(profileName: string): LockBody {
   return {
     pid: process.pid,
     startedAt: new Date().toISOString(),
-    profile: profileName,
+    profile: validateProfileName(profileName),
     token: randomBytes(16).toString('hex')
   };
 }

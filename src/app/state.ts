@@ -20,10 +20,19 @@ import type { Profile } from '../core/types.js';
 
 export type MessageTone = 'info' | 'success' | 'error' | 'warning';
 
+export interface FirstImportExpectedState {
+  active: string | undefined;
+  profiles: string[];
+}
+
 export type Screen =
   | { kind: 'loading' }
   | { kind: 'home' }
-  | { kind: 'firstImport'; targets: string[] }
+  | {
+      kind: 'firstImport';
+      targets: string[];
+      expectedByCli: Record<string, FirstImportExpectedState>;
+    }
   | { kind: 'profiles'; cliId: string }
   | { kind: 'add'; cliId: string }
   | { kind: 'rename'; cliId: string; oldName: string }
