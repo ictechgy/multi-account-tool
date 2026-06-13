@@ -333,7 +333,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
           warning: OPENCODE_SESSION_WARNING
         }
       ]
-    }
+    },
+    sessionRun: { executable: 'opencode' }
   },
   {
     // Block 의 오픈소스 AI agent (https://github.com/block/goose).

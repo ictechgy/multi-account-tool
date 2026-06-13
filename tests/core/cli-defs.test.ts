@@ -421,10 +421,9 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
       gemini: 'gemini',
       kimi: 'kimi',
       qwen: 'qwen',
-      crush: 'crush'
+      crush: 'crush',
+      opencode: 'opencode'
     });
-    // OpenCode requires dedicated config/env/project hard-stop probes before command-scoped run is enabled.
-    expect(find('opencode').sessionRun).toBeUndefined();
     expect(find('aider').sessionRun).toBeUndefined();
     expect(find('goose').sessionRun).toBeUndefined();
   });
