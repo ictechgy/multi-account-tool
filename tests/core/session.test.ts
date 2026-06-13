@@ -160,6 +160,24 @@ let tmp: TmpHome;
 let originalCwd: string;
 let originalEnv: Record<string, string | undefined>;
 let envKeysToRestore: string[] = [];
+const SESSION_CHILD_FIXED_TEST_ENV_KEYS = [
+  'AICORE_SERVICE_KEY',
+  'ANTHROPIC_API_KEY',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_CONFIG_FILE',
+  'AWS_EC2_METADATA_DISABLED',
+  'AWS_PROFILE',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SHARED_CREDENTIALS_FILE',
+  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'CODEX_HOME',
+  'GITHUB_TOKEN',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_CLOUD_PROJECT',
+  'MAT_SESSION',
+  'NO_GCE_CHECK',
+  'OPENAI_API_KEY'
+] as const;
 const OPENCODE_BLOCK_ENV_KEYS = [
   'OPENCODE_AUTH_CONTENT',
   'OPENCODE_CONFIG',
@@ -323,6 +341,7 @@ beforeEach(async () => {
     new Set([
       ...OPENCODE_FIXED_TEST_ENV_KEYS,
       ...AIDER_FIXED_TEST_ENV_KEYS,
+      ...SESSION_CHILD_FIXED_TEST_ENV_KEYS,
       ...Object.keys(process.env).filter((name) =>
         name.startsWith('AIDER_') ||
         isOpenCodeProviderCredentialEnvForTest(name) ||
@@ -385,6 +404,48 @@ describe('runSession', () => {
     expect(mockStage).toHaveBeenCalledWith('codex', 'work', 'auth.json', 'TOK');
     expect(mockCommit).toHaveBeenCalled();
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('session start child env 는 provider/AWS/GCP credential env 를 상속하지 않고 root env 를 마지막에 주입한다', async () => {
+    process.env.CODEX_HOME = '/host/codex-home';
+    process.env.MAT_SESSION = 'host-session';
+    process.env.OPENAI_API_KEY = 'sk-host';
+    process.env.ANTHROPIC_API_KEY = 'anthropic-host';
+    process.env.AWS_ACCESS_KEY_ID = 'akid';
+    process.env.AWS_PROFILE = 'prod';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+    process.env.AWS_SHARED_CREDENTIALS_FILE = '/host/aws/credentials';
+    process.env.AWS_CONFIG_FILE = '/host/aws/config';
+    process.env.AWS_EC2_METADATA_DISABLED = 'false';
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = '/host/gcp.json';
+    process.env.GOOGLE_CLOUD_PROJECT = 'host-project';
+    process.env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = '/host/cloudsdk.json';
+    process.env.NO_GCE_CHECK = 'false';
+    process.env.GITHUB_TOKEN = 'non-provider-token';
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSession({ cliId: 'codex', profileName: 'work' });
+
+    const env = (mockSpawn.mock.calls[0][2] as { env: Record<string, string | undefined> }).env;
+    expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
+    expect(env.MAT_SESSION).not.toBe('host-session');
+    expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
+    expect(env.CODEX_HOME).not.toBe('/host/codex-home');
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.AWS_PROFILE).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(env.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+    expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe('/dev/null');
+    expect(env.AWS_CONFIG_FILE).toBe('/dev/null');
+    expect(env.AWS_EC2_METADATA_DISABLED).toBe('true');
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe('/dev/null');
+    expect(env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE).toBe('/dev/null');
+    expect(env.NO_GCE_CHECK).toBe('true');
+    // 이번 PR 은 고신뢰 provider deny-list 만 처리한다. 일반 토큰명 broad scrub 은 별도 후속.
+    expect(env.GITHUB_TOKEN).toBe('non-provider-token');
   });
 
   it('미지원 CLI (session 미정의) → UsageError, spawn/materialize 미실행', async () => {
@@ -513,6 +574,37 @@ describe('runSessionCommand', () => {
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(mockAcquire).not.toHaveBeenCalled();
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('generic session run child env 도 provider/AWS/GCP credential env 를 scrub 하고 root env 를 보존한다', async () => {
+    process.env.CODEX_HOME = '/host/codex-home';
+    process.env.OPENAI_API_KEY = 'sk-host';
+    process.env.AWS_ACCESS_KEY_ID = 'akid';
+    process.env.AWS_PROFILE = 'prod';
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = '/host/gcp.json';
+    process.env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = '/host/cloudsdk.json';
+    process.env.GITHUB_TOKEN = 'non-provider-token';
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSessionCommand({ cliId: 'codex', profileName: 'work', args: ['run'] });
+
+    const [cmd, args, options] = mockSpawn.mock.calls[0];
+    expect(cmd).toBe('codex');
+    expect(args).toEqual(['run']);
+    const env = (options as { env: Record<string, string | undefined> }).env;
+    expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
+    expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
+    expect(env.CODEX_HOME).not.toBe('/host/codex-home');
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.AWS_PROFILE).toBeUndefined();
+    expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe('/dev/null');
+    expect(env.AWS_CONFIG_FILE).toBe('/dev/null');
+    expect(env.AWS_EC2_METADATA_DISABLED).toBe('true');
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe('/dev/null');
+    expect(env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE).toBe('/dev/null');
+    expect(env.NO_GCE_CHECK).toBe('true');
+    expect(env.GITHUB_TOKEN).toBe('non-provider-token');
   });
 
   it('빈 argv 도 builtin executable 에 그대로 전달한다', async () => {
