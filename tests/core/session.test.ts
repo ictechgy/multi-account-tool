@@ -112,6 +112,25 @@ const AIDER_DEF = {
   sessionRun: { executable: 'aider' }
 } satisfies CliDef;
 
+const KIMI_DEF = {
+  id: 'kimi',
+  name: 'Kimi (fixture)',
+  sources: [{ type: 'file', path: '~/.kimi/config.toml', saveAs: 'kimi.toml' }],
+  session: { roots: [{ env: 'KIMI_SHARE_DIR', base: '~/.kimi' }] },
+  sessionRun: { executable: 'kimi' }
+} satisfies CliDef;
+
+const QWEN_DEF = {
+  id: 'qwen',
+  name: 'Qwen (fixture)',
+  sources: [
+    { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' },
+    { type: 'file', path: '~/.qwen/.env', saveAs: 'qwen.env' }
+  ],
+  session: { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] },
+  sessionRun: { executable: 'qwen' }
+} satisfies CliDef;
+
 type FakeChildProcess = EventEmitter & {
   pid?: number;
   exitCode: number | null;
@@ -160,6 +179,45 @@ let tmp: TmpHome;
 let originalCwd: string;
 let originalEnv: Record<string, string | undefined>;
 let envKeysToRestore: string[] = [];
+const SESSION_CHILD_FIXED_TEST_ENV_KEYS = [
+  'AICORE_SERVICE_KEY',
+  'ANTHROPIC_API_KEY',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_CONFIG_FILE',
+  'AWS_EC2_METADATA_DISABLED',
+  'AWS_PROFILE',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SHARED_CREDENTIALS_FILE',
+  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CODEX_HOME',
+  'DASHSCOPE_API_KEY',
+  'GITHUB_TOKEN',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_CLOUD_PROJECT',
+  'KIMI_API_KEY',
+  'KIMI_SHARE_DIR',
+  'MAT_SESSION',
+  'MOONSHOT_API_KEY',
+  'MOONSHOT_API_BASE',
+  'MOONSHOT_BASE_URL',
+  'NO_GCE_CHECK',
+  'OPENCODE_AUTH_CONTENT',
+  'OPENCODE_CONFIG',
+  'OPENCODE_CONFIG_CONTENT',
+  'OPENCODE_CONFIG_DIR',
+  'OPENCODE_DB',
+  'OPENCODE_MODELS_PATH',
+  'OPENCODE_MODELS_URL',
+  'OPENCODE_PERMISSION',
+  'OPENCODE_TEST_HOME',
+  'OPENCODE_TEST_MANAGED_CONFIG_DIR',
+  'OPENCODE_TUI_CONFIG',
+  'QWEN_API_KEY',
+  'QWEN_HOME',
+  'OPENAI_API_KEY',
+  'XDG_DATA_HOME'
+] as const;
 const OPENCODE_BLOCK_ENV_KEYS = [
   'OPENCODE_AUTH_CONTENT',
   'OPENCODE_CONFIG',
@@ -323,6 +381,7 @@ beforeEach(async () => {
     new Set([
       ...OPENCODE_FIXED_TEST_ENV_KEYS,
       ...AIDER_FIXED_TEST_ENV_KEYS,
+      ...SESSION_CHILD_FIXED_TEST_ENV_KEYS,
       ...Object.keys(process.env).filter((name) =>
         name.startsWith('AIDER_') ||
         isOpenCodeProviderCredentialEnvForTest(name) ||
@@ -386,6 +445,88 @@ describe('runSession', () => {
     expect(mockCommit).toHaveBeenCalled();
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
   });
+
+  it('session start child env 는 provider/AWS/GCP credential env 를 상속하지 않고 root env 를 마지막에 주입한다', async () => {
+    process.env.CODEX_HOME = '/host/codex-home';
+    process.env.MAT_SESSION = 'host-session';
+    process.env.OPENAI_API_KEY = 'sk-host';
+    process.env.ANTHROPIC_API_KEY = 'anthropic-host';
+    process.env.AWS_ACCESS_KEY_ID = 'akid';
+    process.env.AWS_PROFILE = 'prod';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret';
+    process.env.AWS_SHARED_CREDENTIALS_FILE = '/host/aws/credentials';
+    process.env.AWS_CONFIG_FILE = '/host/aws/config';
+    process.env.AWS_EC2_METADATA_DISABLED = 'false';
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = '/host/gcp.json';
+    process.env.GOOGLE_CLOUD_PROJECT = 'host-project';
+    process.env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = '/host/cloudsdk.json';
+    process.env.NO_GCE_CHECK = 'false';
+    process.env.GITHUB_TOKEN = 'non-provider-token';
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSession({ cliId: 'codex', profileName: 'work' });
+
+    const env = (mockSpawn.mock.calls[0][2] as { env: Record<string, string | undefined> }).env;
+    expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
+    expect(env.MAT_SESSION).not.toBe('host-session');
+    expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
+    expect(env.CODEX_HOME).not.toBe('/host/codex-home');
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.AWS_PROFILE).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(env.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+    expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe('/dev/null');
+    expect(env.AWS_CONFIG_FILE).toBe('/dev/null');
+    expect(env.AWS_EC2_METADATA_DISABLED).toBe('true');
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe('/dev/null');
+    expect(env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE).toBe('/dev/null');
+    expect(env.NO_GCE_CHECK).toBe('true');
+    // 이번 PR 은 고신뢰 provider deny-list 만 처리한다. 일반 토큰명 broad scrub 은 별도 후속.
+    expect(env.GITHUB_TOKEN).toBe('non-provider-token');
+  });
+
+  it.each([
+    {
+      cliId: 'kimi',
+      def: KIMI_DEF,
+      rootEnv: 'KIMI_SHARE_DIR',
+      hostRoot: '/host/kimi',
+      denied: ['MOONSHOT_API_KEY', 'MOONSHOT_BASE_URL', 'MOONSHOT_API_BASE', 'KIMI_API_KEY']
+    },
+    {
+      cliId: 'qwen',
+      def: QWEN_DEF,
+      rootEnv: 'QWEN_HOME',
+      hostRoot: '/host/qwen',
+      denied: ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']
+    },
+    {
+      cliId: 'opencode',
+      def: OPENCODE_DEF,
+      rootEnv: 'XDG_DATA_HOME',
+      hostRoot: '/host/xdg-data',
+      denied: ['OPENCODE_AUTH_CONTENT', 'OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG_DIR']
+    }
+  ])(
+    'session start: $cliId built-in credential bypass env 를 scrub 하고 root env 를 session 값으로 덮어쓴다',
+    async ({ cliId, def, rootEnv, hostRoot, denied }) => {
+      mockFindCliDef.mockReturnValue(def);
+      process.env[rootEnv] = hostRoot;
+      for (const name of denied) process.env[name] = `${name}-host`;
+      mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+      await runSession({ cliId, profileName: 'work' });
+
+      const env = (mockSpawn.mock.calls[0][2] as { env: Record<string, string | undefined> }).env;
+      expect(env.MAT_SESSION).toMatch(new RegExp(`^${cliId}-work-[0-9a-f]{8}$`));
+      expect(env[rootEnv]).toContain(join('.multi-account-tool', 'sessions'));
+      expect(env[rootEnv]).not.toBe(hostRoot);
+      for (const name of denied) expect(env[name]).toBeUndefined();
+    }
+  );
 
   it('미지원 CLI (session 미정의) → UsageError, spawn/materialize 미실행', async () => {
     mockFindCliDef.mockReturnValue({ id: 'gemini', name: 'Gemini', sources: [] });
@@ -514,6 +655,71 @@ describe('runSessionCommand', () => {
     expect(mockAcquire).not.toHaveBeenCalled();
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
   });
+
+  it('generic session run child env 도 provider/AWS/GCP credential env 를 scrub 하고 root env 를 보존한다', async () => {
+    process.env.CODEX_HOME = '/host/codex-home';
+    process.env.OPENAI_API_KEY = 'sk-host';
+    process.env.AWS_ACCESS_KEY_ID = 'akid';
+    process.env.AWS_PROFILE = 'prod';
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = '/host/gcp.json';
+    process.env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE = '/host/cloudsdk.json';
+    process.env.GITHUB_TOKEN = 'non-provider-token';
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSessionCommand({ cliId: 'codex', profileName: 'work', args: ['run'] });
+
+    const [cmd, args, options] = mockSpawn.mock.calls[0];
+    expect(cmd).toBe('codex');
+    expect(args).toEqual(['run']);
+    const env = (options as { env: Record<string, string | undefined> }).env;
+    expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
+    expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
+    expect(env.CODEX_HOME).not.toBe('/host/codex-home');
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.AWS_PROFILE).toBeUndefined();
+    expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe('/dev/null');
+    expect(env.AWS_CONFIG_FILE).toBe('/dev/null');
+    expect(env.AWS_EC2_METADATA_DISABLED).toBe('true');
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe('/dev/null');
+    expect(env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE).toBe('/dev/null');
+    expect(env.NO_GCE_CHECK).toBe('true');
+    expect(env.GITHUB_TOKEN).toBe('non-provider-token');
+  });
+
+  it.each([
+    {
+      cliId: 'kimi',
+      def: KIMI_DEF,
+      command: 'kimi',
+      rootEnv: 'KIMI_SHARE_DIR',
+      denied: ['MOONSHOT_API_KEY', 'MOONSHOT_BASE_URL']
+    },
+    {
+      cliId: 'qwen',
+      def: QWEN_DEF,
+      command: 'qwen',
+      rootEnv: 'QWEN_HOME',
+      denied: ['DASHSCOPE_API_KEY', 'QWEN_API_KEY']
+    }
+  ])(
+    'session run: $cliId built-in credential bypass env 를 scrub 한다',
+    async ({ cliId, def, command, rootEnv, denied }) => {
+      mockFindCliDef.mockReturnValue(def);
+      for (const name of denied) process.env[name] = `${name}-host`;
+      mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+      await runSessionCommand({ cliId, profileName: 'work', args: ['--version'] });
+
+      const [cmd, args, options] = mockSpawn.mock.calls[0];
+      expect(cmd).toBe(command);
+      expect(args).toEqual(['--version']);
+      const env = (options as { env: Record<string, string | undefined> }).env;
+      expect(env.MAT_SESSION).toMatch(new RegExp(`^${cliId}-work-[0-9a-f]{8}$`));
+      expect(env[rootEnv]).toContain(join('.multi-account-tool', 'sessions'));
+      for (const name of denied) expect(env[name]).toBeUndefined();
+    }
+  );
 
   it('빈 argv 도 builtin executable 에 그대로 전달한다', async () => {
     mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));

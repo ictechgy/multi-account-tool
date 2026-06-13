@@ -772,6 +772,84 @@ type SessionSpawnTarget =
   | { kind: 'shell' }
   | { kind: 'command'; executable: string; args: string[]; env?: Record<string, string | undefined> };
 
+const SESSION_CHILD_CREDENTIAL_ENV_DENY = new Set([
+  // Provider/API credential and endpoint envs that can bypass profile copy-isolation.
+  'AICORE_SERVICE_KEY',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'DASHSCOPE_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'DEEPSEEK_API_BASE',
+  'DEEPSEEK_BASE_URL',
+  'GEMINI_API_KEY',
+  'GEMINI_API_BASE',
+  'GEMINI_BASE_URL',
+  'KIMI_API_KEY',
+  'MOONSHOT_API_KEY',
+  'MOONSHOT_API_BASE',
+  'MOONSHOT_BASE_URL',
+  'OPENAI_API_KEY',
+  'OPENAI_API_BASE',
+  'OPENAI_API_HOST',
+  'OPENAI_API_TYPE',
+  'OPENAI_API_VERSION',
+  'OPENAI_API_DEPLOYMENT_ID',
+  'OPENAI_BASE_URL',
+  'OPENAI_ORGANIZATION_ID',
+  'OPENROUTER_API_KEY',
+  'OPENROUTER_API_BASE',
+  'OPENROUTER_BASE_URL',
+  'QWEN_API_KEY',
+  'SNOWFLAKE_CORTEX_PAT',
+  // OpenCode session start can also bypass auth.json via env/config content.
+  'OPENCODE_AUTH_CONTENT',
+  'OPENCODE_CONFIG',
+  'OPENCODE_CONFIG_CONTENT',
+  'OPENCODE_CONFIG_DIR',
+  'OPENCODE_DB',
+  'OPENCODE_MODELS_PATH',
+  'OPENCODE_MODELS_URL',
+  'OPENCODE_PERMISSION',
+  'OPENCODE_TEST_HOME',
+  'OPENCODE_TEST_MANAGED_CONFIG_DIR',
+  'OPENCODE_TUI_CONFIG',
+  // AWS credential/provider chains.
+  'AWS_ACCESS_KEY_ID',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'AWS_CONFIG_FILE',
+  'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+  'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+  'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  'AWS_DEFAULT_PROFILE',
+  'AWS_PROFILE',
+  'AWS_ROLE_ARN',
+  'AWS_ROLE_SESSION_NAME',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_SHARED_CREDENTIALS_FILE',
+  'AWS_WEB_IDENTITY_TOKEN_FILE',
+  // GCP / Vertex credential/provider chains.
+  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_CLOUD_QUOTA_PROJECT',
+  'GOOGLE_PROJECT',
+  'VERTEXAI_LOCATION',
+  'VERTEXAI_PROJECT'
+] as const);
+
+const SESSION_CHILD_CREDENTIAL_ENV_HARDENING: Record<string, string> = {
+  AWS_CONFIG_FILE: '/dev/null',
+  AWS_EC2_METADATA_DISABLED: 'true',
+  AWS_SHARED_CREDENTIALS_FILE: '/dev/null',
+  CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '/dev/null',
+  GOOGLE_APPLICATION_CREDENTIALS: '/dev/null',
+  NO_GCE_CHECK: 'true'
+};
+
 /** session.json 스키마 (세션 디렉토리에 기록 — list/orphan 이 읽음). */
 interface SessionMeta {
   id: string;
@@ -2077,6 +2155,30 @@ function makeSessionId(cliId: string, profileName: string): string {
   return validateSessionId(id); // 방어 — 위 sanitize 로 항상 통과
 }
 
+function buildSessionChildEnv(plan: SessionPlan, target: SessionSpawnTarget): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  // session child 는 profile copy-isolate 를 우회할 수 있는 host provider credential env 를
+  // 기본 상속하지 않는다. 광범위한 TOKEN/PAT 패턴 삭제는 호환성 영향이 커서 고신뢰 목록만 처리한다.
+  for (const name of SESSION_CHILD_CREDENTIAL_ENV_DENY) delete env[name];
+
+  // AWS/GCP SDK fallback 이 host shared credential/config/metadata 를 읽지 않게 한다.
+  Object.assign(env, SESSION_CHILD_CREDENTIAL_ENV_HARDENING);
+
+  if (target.kind === 'command' && target.env) {
+    for (const [name, value] of Object.entries(target.env)) {
+      if (value === undefined) delete env[name];
+      else env[name] = value;
+    }
+  }
+
+  // 내부 invariant 는 마지막에 주입한다. hostile inherited env 나 target.env 충돌이 있어도
+  // MAT_SESSION 과 CLI-specific root redirect 가 항상 실제 세션을 가리켜야 한다.
+  env.MAT_SESSION = plan.id;
+  for (const root of plan.roots) env[root.env] = root.dir; // 격리 디렉토리 주입 (토큰 미포함, 경로만)
+  return env;
+}
+
 /**
  * session child spawn (stdio inherit, env 에 root env + MAT_SESSION 주입, 셸 미경유 argv).
  *
@@ -2106,14 +2208,7 @@ function spawnSessionTarget(
   return new Promise((resolve, reject) => {
     const command = target.kind === 'shell' ? (process.env.SHELL || '/bin/sh') : target.executable;
     const args = target.kind === 'shell' ? [] : target.args;
-    const env: NodeJS.ProcessEnv = { ...process.env, MAT_SESSION: plan.id };
-    for (const root of plan.roots) env[root.env] = root.dir; // 격리 디렉토리 주입 (토큰 미포함, 경로만)
-    if (target.kind === 'command' && target.env) {
-      for (const [name, value] of Object.entries(target.env)) {
-        if (value === undefined) delete env[name];
-        else env[name] = value;
-      }
-    }
+    const env = buildSessionChildEnv(plan, target);
     const child = spawn(command, args, { stdio: 'inherit', env });
     childRef.current = child;
 
