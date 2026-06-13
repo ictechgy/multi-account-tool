@@ -455,19 +455,11 @@ function onSwitchAction(
   refresh: () => Promise<void>
 ): void {
   if (currentActive === to) {
-    dispatch({
-      type: 'push',
-      screen: {
-        kind: 'message',
-        tone: 'info',
-        title: '이미 활성 프로필입니다',
-        body: `현재 '${to}' 가 활성 상태입니다.`
-      }
-    });
+    void doSwitch(cli, to, dispatch, refresh, currentActive);
     return;
   }
   // PR-G: 활성 프로필이 있을 때만 freshness 체크 의미 있음 — 없으면 백업 불필요.
-  // current === to 케이스는 위에서 차단됨.
+  // current === to 케이스도 stale render 방지를 위해 doSwitch 내부 lock 에서 재검증.
   if (currentActive != null) {
     void checkFreshnessThenSwitch(cli, currentActive, to, data, dispatch, refresh);
     return;
@@ -479,7 +471,7 @@ function onSwitchAction(
       kind: 'confirm',
       title: `${cli.name} 프로필 전환`,
       body: formatSwitchConfirmBody(currentActive, to),
-      onYes: () => void doSwitch(cli, to, dispatch, refresh)
+      onYes: () => void doSwitch(cli, to, dispatch, refresh, currentActive)
     }
   });
 }
@@ -639,10 +631,10 @@ class ActiveProfileChangedError extends Error {
   readonly title = '활성 프로필 변경 감지 — 작업 취소';
   readonly body: string;
 
-  constructor(expected: string, current: string | undefined) {
+  constructor(expected: string | undefined, current: string | undefined) {
     const body =
       `dialog 표시 중 다른 도구가 활성 프로필을 변경했습니다.\n` +
-      `예상: '${expected}' / 현재: '${current ?? '(없음)'}'\n\n` +
+      `예상: '${expected ?? '(없음)'}' / 현재: '${current ?? '(없음)'}'\n\n` +
       `라이브 자격증명이 의도와 다른 프로필에 쓰일 수 있어 작업을 취소했습니다.\n` +
       `프로필 목록을 다시 확인 후 재시도하세요.`;
     super(body);
@@ -653,10 +645,11 @@ class ActiveProfileChangedError extends Error {
 
 async function assertActiveProfileUnchanged(
   cliId: string,
-  expected: string
-): Promise<void> {
+  expected: string | undefined
+): Promise<string | undefined> {
   const current = await getActiveProfile(cliId);
   if (current !== expected) throw new ActiveProfileChangedError(expected, current);
+  return current;
 }
 
 async function doSwitch(
@@ -664,7 +657,7 @@ async function doSwitch(
   to: string,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>,
-  expectedActive?: string
+  expectedActive: string | undefined
 ): Promise<void> {
   await runBusyAction({
     dispatch,
@@ -674,9 +667,7 @@ async function doSwitch(
       withCliMutationLock(
         { cliId: cli.id, profileName: to, execMode: 'foreground', affectsCliIds: [cli.id] },
         async () => {
-          if (expectedActive != null) {
-            await assertActiveProfileUnchanged(cli.id, expectedActive);
-          }
+          await assertActiveProfileUnchanged(cli.id, expectedActive);
           return switchProfile(cli.id, to);
         }
       ),
@@ -784,8 +775,8 @@ async function onAddSubmit(
   // 프로필 소유인지 정의되지 않으므로 단순 캡처로 진행 (기존 동작 보존).
   const currentActive = data.activeByCli[cli.id];
   if (currentActive == null || currentActive === name) {
-    // 활성 미설정 / 자기 자신 캡처 — race 가드 불필요 (expectedActive=undefined).
-    await doCreateProfile(cli, name, undefined, dispatch, refresh);
+    // 활성 미설정 / 자기 자신 캡처도 render 시점의 active 를 lock 안에서 재검증한다.
+    await doCreateProfile(cli, name, currentActive, dispatch, refresh);
     return;
   }
   // create-mode 의 분기는 switch-mode 와 동일 helper 재사용 (#9 fix).
@@ -816,9 +807,8 @@ async function onAddSubmit(
 /**
  * PR-G create-mode 의 "폐기" 분기 + 단순 캡처 진입점.
  *
- * expectedActive 가 명시되면 #1 fix 의 race 가드를 적용 — dialog 표시 ~ 사용자 결정
- * 사이에 active 가 외부에서 변경됐다면 작업 중단. expectedActive 가 undefined 면
- * (active 미설정 / fresh 경로) 가드 skip.
+ * dialog 표시/렌더 시점의 active 를 lock 내부에서 재검증한다. `undefined` 도
+ * "활성 프로필 없음" 이라는 기대 상태이므로 active 가 외부에서 생기면 작업 중단.
  *
  * 활성 프로필은 변경되지 않음 — 사용자가 명시 전환할 때까지 그대로 유지.
  */
@@ -843,9 +833,7 @@ async function doCreateProfile(
           affectsCliIds: [cli.id]
         },
         async () => {
-          if (expectedActive != null) {
-            await assertActiveProfileUnchanged(cli.id, expectedActive);
-          }
+          await assertActiveProfileUnchanged(cli.id, expectedActive);
           return snapshotLiveToProfile(cli.id, name);
         }
       ),
@@ -972,7 +960,7 @@ function onDeleteAction(
       title: '프로필 삭제',
       body: `'${name}' 프로필을 영구 삭제합니다. 되돌릴 수 없습니다.`,
       dangerous: true,
-      onYes: () => void doDelete(cli.id, name, dispatch, refresh)
+      onYes: () => void doDelete(cli.id, name, active, dispatch, refresh)
     }
   });
 }
@@ -980,6 +968,7 @@ function onDeleteAction(
 async function doDelete(
   cliId: string,
   name: string,
+  expectedActive: string | undefined,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
@@ -990,7 +979,11 @@ async function doDelete(
     work: () =>
       withCliMutationLock(
         { cliId, profileName: name, execMode: 'foreground', affectsCliIds: [cliId] },
-        () => deleteProfile(cliId, name)
+        async () => {
+          const current = await assertActiveProfileUnchanged(cliId, expectedActive);
+          if (current === name) throw new ActiveProfileChangedError(expectedActive, current);
+          return deleteProfile(cliId, name);
+        }
       ),
     buildSuccess: () => ({
       title: '삭제 완료',
@@ -1014,7 +1007,7 @@ function onCaptureAction(
       title: '현재 라이브 자격증명을 캡처',
       body: formatCaptureWarning(name, active),
       dangerous: name !== active,
-      onYes: () => void doCapture(cli.id, name, dispatch, refresh)
+      onYes: () => void doCapture(cli.id, name, active, dispatch, refresh)
     }
   });
 }
@@ -1022,6 +1015,7 @@ function onCaptureAction(
 async function doCapture(
   cliId: string,
   name: string,
+  expectedActive: string | undefined,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
@@ -1032,7 +1026,10 @@ async function doCapture(
     work: () =>
       withCliMutationLock(
         { cliId, profileName: name, execMode: 'foreground', affectsCliIds: [cliId] },
-        () => snapshotLiveToProfile(cliId, name)
+        async () => {
+          await assertActiveProfileUnchanged(cliId, expectedActive);
+          return snapshotLiveToProfile(cliId, name);
+        }
       ),
     buildSuccess: (snap) => ({
       title: '캡처 완료',
@@ -1044,3 +1041,11 @@ async function doCapture(
     errorTitle: '캡처 실패'
   });
 }
+
+export const __testHooks = {
+  assertActiveProfileUnchanged,
+  doCapture,
+  doCreateProfile,
+  doDelete,
+  doSwitch
+};
