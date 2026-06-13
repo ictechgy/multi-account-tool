@@ -772,8 +772,8 @@ type SessionSpawnTarget =
   | { kind: 'shell' }
   | { kind: 'command'; executable: string; args: string[]; env?: Record<string, string | undefined> };
 
-const SESSION_CHILD_CREDENTIAL_ENV_DENY = new Set([
-  // Provider/API credential and endpoint envs that can bypass profile copy-isolation.
+// Provider/API credential and endpoint envs that can bypass profile copy-isolation.
+const SESSION_CHILD_PROVIDER_ENV_DENY_NAMES = [
   'AICORE_SERVICE_KEY',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_BASE_URL',
@@ -801,8 +801,11 @@ const SESSION_CHILD_CREDENTIAL_ENV_DENY = new Set([
   'OPENROUTER_API_BASE',
   'OPENROUTER_BASE_URL',
   'QWEN_API_KEY',
-  'SNOWFLAKE_CORTEX_PAT',
-  // OpenCode session start can also bypass auth.json via env/config content.
+  'SNOWFLAKE_CORTEX_PAT'
+] as const;
+
+// OpenCode session start can also bypass auth.json via env/config content.
+const OPENCODE_BYPASS_ENV_NAMES = [
   'OPENCODE_AUTH_CONTENT',
   'OPENCODE_CONFIG',
   'OPENCODE_CONFIG_CONTENT',
@@ -812,9 +815,11 @@ const SESSION_CHILD_CREDENTIAL_ENV_DENY = new Set([
   'OPENCODE_MODELS_URL',
   'OPENCODE_PERMISSION',
   'OPENCODE_TEST_HOME',
-  'OPENCODE_TEST_MANAGED_CONFIG_DIR',
   'OPENCODE_TUI_CONFIG',
-  // AWS credential/provider chains.
+  'OPENCODE_TEST_MANAGED_CONFIG_DIR'
+] as const;
+
+const AWS_CREDENTIAL_CHAIN_ENV_NAMES = [
   'AWS_ACCESS_KEY_ID',
   'AWS_BEARER_TOKEN_BEDROCK',
   'AWS_CONFIG_FILE',
@@ -829,8 +834,10 @@ const SESSION_CHILD_CREDENTIAL_ENV_DENY = new Set([
   'AWS_SECRET_ACCESS_KEY',
   'AWS_SESSION_TOKEN',
   'AWS_SHARED_CREDENTIALS_FILE',
-  'AWS_WEB_IDENTITY_TOKEN_FILE',
-  // GCP / Vertex credential/provider chains.
+  'AWS_WEB_IDENTITY_TOKEN_FILE'
+] as const;
+
+const GCP_VERTEX_CREDENTIAL_CHAIN_ENV_NAMES = [
   'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
   'GOOGLE_APPLICATION_CREDENTIALS',
   'GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS',
@@ -839,7 +846,16 @@ const SESSION_CHILD_CREDENTIAL_ENV_DENY = new Set([
   'GOOGLE_PROJECT',
   'VERTEXAI_LOCATION',
   'VERTEXAI_PROJECT'
-] as const);
+] as const;
+
+const SESSION_CHILD_CREDENTIAL_ENV_DENY_NAMES = [
+  ...SESSION_CHILD_PROVIDER_ENV_DENY_NAMES,
+  ...OPENCODE_BYPASS_ENV_NAMES,
+  ...AWS_CREDENTIAL_CHAIN_ENV_NAMES,
+  ...GCP_VERTEX_CREDENTIAL_CHAIN_ENV_NAMES
+] as const;
+
+const SESSION_CHILD_CREDENTIAL_ENV_DENY = new Set(SESSION_CHILD_CREDENTIAL_ENV_DENY_NAMES);
 
 const SESSION_CHILD_CREDENTIAL_ENV_HARDENING: Record<string, string> = {
   AWS_CONFIG_FILE: '/dev/null',
@@ -849,6 +865,56 @@ const SESSION_CHILD_CREDENTIAL_ENV_HARDENING: Record<string, string> = {
   GOOGLE_APPLICATION_CREDENTIALS: '/dev/null',
   NO_GCE_CHECK: 'true'
 };
+
+const GENERIC_CREDENTIAL_ENV_PATTERN =
+  /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i;
+
+const AIDER_PROVIDER_ENDPOINT_ENV_NAMES = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'DEEPSEEK_API_KEY',
+  'DEEPSEEK_API_BASE',
+  'DEEPSEEK_BASE_URL',
+  'GEMINI_API_KEY',
+  'GEMINI_API_BASE',
+  'GEMINI_BASE_URL',
+  'OPENAI_API_BASE',
+  'OPENAI_API_HOST',
+  'OPENAI_API_KEY',
+  'OPENAI_API_TYPE',
+  'OPENAI_API_VERSION',
+  'OPENAI_API_DEPLOYMENT_ID',
+  'OPENAI_BASE_URL',
+  'OPENAI_ORGANIZATION_ID',
+  'OPENROUTER_API_KEY',
+  'OPENROUTER_API_BASE',
+  'OPENROUTER_BASE_URL'
+] as const;
+
+const AIDER_EXPLICIT_PROVIDER_CREDENTIAL_ENV_NAMES = [
+  ...AIDER_PROVIDER_ENDPOINT_ENV_NAMES,
+  ...AWS_CREDENTIAL_CHAIN_ENV_NAMES,
+  ...GCP_VERTEX_CREDENTIAL_CHAIN_ENV_NAMES
+] as const;
+
+const OPENCODE_EXPLICIT_PROVIDER_CREDENTIAL_ENV_NAMES = [
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_PROFILE',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'AWS_WEB_IDENTITY_TOKEN_FILE',
+  'AWS_ROLE_ARN',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+  'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'SNOWFLAKE_CORTEX_PAT',
+  'AICORE_SERVICE_KEY'
+] as const;
+
+function isGenericCredentialLikeEnv(name: string): boolean {
+  return GENERIC_CREDENTIAL_ENV_PATTERN.test(name);
+}
 
 /** session.json 스키마 (세션 디렉토리에 기록 — list/orphan 이 읽음). */
 interface SessionMeta {
@@ -1338,55 +1404,10 @@ function preflightAiderEnv(): void {
 }
 
 function isAiderProviderCredentialEnv(name: string): boolean {
-  if (
-    [
-      'ANTHROPIC_API_KEY',
-      'ANTHROPIC_BASE_URL',
-      'AWS_ACCESS_KEY_ID',
-      'AWS_BEARER_TOKEN_BEDROCK',
-      'AWS_CONFIG_FILE',
-      'AWS_CONTAINER_AUTHORIZATION_TOKEN',
-      'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
-      'AWS_CONTAINER_CREDENTIALS_FULL_URI',
-      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
-      'AWS_DEFAULT_PROFILE',
-      'AWS_PROFILE',
-      'AWS_ROLE_ARN',
-      'AWS_ROLE_SESSION_NAME',
-      'AWS_SECRET_ACCESS_KEY',
-      'AWS_SESSION_TOKEN',
-      'AWS_SHARED_CREDENTIALS_FILE',
-      'AWS_WEB_IDENTITY_TOKEN_FILE',
-      'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
-      'DEEPSEEK_API_KEY',
-      'DEEPSEEK_API_BASE',
-      'DEEPSEEK_BASE_URL',
-      'GEMINI_API_KEY',
-      'GEMINI_API_BASE',
-      'GEMINI_BASE_URL',
-      'GOOGLE_APPLICATION_CREDENTIALS',
-      'GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS',
-      'GOOGLE_CLOUD_PROJECT',
-      'GOOGLE_CLOUD_QUOTA_PROJECT',
-      'GOOGLE_PROJECT',
-      'OPENAI_API_BASE',
-      'OPENAI_API_HOST',
-      'OPENAI_API_KEY',
-      'OPENAI_API_TYPE',
-      'OPENAI_API_VERSION',
-      'OPENAI_API_DEPLOYMENT_ID',
-      'OPENAI_BASE_URL',
-      'OPENAI_ORGANIZATION_ID',
-      'OPENROUTER_API_KEY',
-      'OPENROUTER_API_BASE',
-      'OPENROUTER_BASE_URL',
-      'VERTEXAI_LOCATION',
-      'VERTEXAI_PROJECT'
-    ].includes(name)
-  ) {
-    return true;
-  }
-  return /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i.test(name);
+  return (
+    (AIDER_EXPLICIT_PROVIDER_CREDENTIAL_ENV_NAMES as readonly string[]).includes(name) ||
+    isGenericCredentialLikeEnv(name)
+  );
 }
 
 function aiderOAuthKeysPath(): string {
@@ -1519,20 +1540,6 @@ function findAiderHostCredentialChainAlias(text: string): string | null {
   return match ? match[2] : null;
 }
 
-const OPENCODE_BLOCK_ENV = [
-  'OPENCODE_AUTH_CONTENT',
-  'OPENCODE_CONFIG',
-  'OPENCODE_CONFIG_CONTENT',
-  'OPENCODE_CONFIG_DIR',
-  'OPENCODE_DB',
-  'OPENCODE_MODELS_PATH',
-  'OPENCODE_MODELS_URL',
-  'OPENCODE_PERMISSION',
-  'OPENCODE_TEST_HOME',
-  'OPENCODE_TUI_CONFIG',
-  'OPENCODE_TEST_MANAGED_CONFIG_DIR'
-] as const;
-
 const OPENCODE_GLOBAL_CONFIG_FILE_NAMES = ['config', 'config.json', 'opencode.json', 'opencode.jsonc', 'tui.json', 'tui.jsonc'] as const;
 const OPENCODE_PROJECT_CONFIG_FILE_NAMES = ['opencode.json', 'opencode.jsonc', 'tui.json', 'tui.jsonc'] as const;
 
@@ -1547,7 +1554,7 @@ const OPENCODE_PROJECT_CONFIG_FILE_NAMES = ['opencode.json', 'opencode.jsonc', '
 async function preflightOpenCodeSessionRun(args: readonly string[]): Promise<void> {
   await preflightOpenCodeArgs(args);
 
-  for (const name of OPENCODE_BLOCK_ENV) {
+  for (const name of OPENCODE_BYPASS_ENV_NAMES) {
     if (process.env[name] !== undefined) {
       throw new UsageError(
         `opencode session run 차단: ${name} env 가 설정되어 있어 auth.json 격리를 우회할 수 있습니다.`
@@ -1868,25 +1875,10 @@ function openCodeManagedPreferenceCandidates(): string[] {
 }
 
 function isOpenCodeProviderCredentialEnv(name: string): boolean {
-  if (
-    [
-      'AWS_ACCESS_KEY_ID',
-      'AWS_SECRET_ACCESS_KEY',
-      'AWS_SESSION_TOKEN',
-      'AWS_PROFILE',
-      'AWS_BEARER_TOKEN_BEDROCK',
-      'AWS_WEB_IDENTITY_TOKEN_FILE',
-      'AWS_ROLE_ARN',
-      'AWS_CONTAINER_CREDENTIALS_FULL_URI',
-      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
-      'GOOGLE_APPLICATION_CREDENTIALS',
-      'SNOWFLAKE_CORTEX_PAT',
-      'AICORE_SERVICE_KEY'
-    ].includes(name)
-  ) {
-    return true;
-  }
-  return /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i.test(name);
+  return (
+    (OPENCODE_EXPLICIT_PROVIDER_CREDENTIAL_ENV_NAMES as readonly string[]).includes(name) ||
+    isGenericCredentialLikeEnv(name)
+  );
 }
 
 async function inspectOpenCodeEnvCandidate(path: string): Promise<void> {
@@ -1919,7 +1911,7 @@ function findOpenCodeCredentialEnvAssignment(text: string): string | null {
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
     if (!match) continue;
     const name = match[1];
-    if ((OPENCODE_BLOCK_ENV as readonly string[]).includes(name) || isOpenCodeProviderCredentialEnv(name)) {
+    if ((OPENCODE_BYPASS_ENV_NAMES as readonly string[]).includes(name) || isOpenCodeProviderCredentialEnv(name)) {
       return name;
     }
   }

@@ -179,29 +179,35 @@ let tmp: TmpHome;
 let originalCwd: string;
 let originalEnv: Record<string, string | undefined>;
 let envKeysToRestore: string[] = [];
-const SESSION_CHILD_FIXED_TEST_ENV_KEYS = [
+const SESSION_CHILD_CREDENTIAL_ENV_DENY_KEYS = [
   'AICORE_SERVICE_KEY',
   'ANTHROPIC_API_KEY',
-  'AWS_ACCESS_KEY_ID',
-  'AWS_CONFIG_FILE',
-  'AWS_EC2_METADATA_DISABLED',
-  'AWS_PROFILE',
-  'AWS_SECRET_ACCESS_KEY',
-  'AWS_SHARED_CREDENTIALS_FILE',
-  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_OAUTH_TOKEN',
-  'CODEX_HOME',
   'DASHSCOPE_API_KEY',
-  'GITHUB_TOKEN',
-  'GOOGLE_APPLICATION_CREDENTIALS',
-  'GOOGLE_CLOUD_PROJECT',
+  'DEEPSEEK_API_KEY',
+  'DEEPSEEK_API_BASE',
+  'DEEPSEEK_BASE_URL',
+  'GEMINI_API_KEY',
+  'GEMINI_API_BASE',
+  'GEMINI_BASE_URL',
   'KIMI_API_KEY',
-  'KIMI_SHARE_DIR',
-  'MAT_SESSION',
   'MOONSHOT_API_KEY',
   'MOONSHOT_API_BASE',
   'MOONSHOT_BASE_URL',
-  'NO_GCE_CHECK',
+  'OPENAI_API_KEY',
+  'OPENAI_API_BASE',
+  'OPENAI_API_HOST',
+  'OPENAI_API_TYPE',
+  'OPENAI_API_VERSION',
+  'OPENAI_API_DEPLOYMENT_ID',
+  'OPENAI_BASE_URL',
+  'OPENAI_ORGANIZATION_ID',
+  'OPENROUTER_API_KEY',
+  'OPENROUTER_API_BASE',
+  'OPENROUTER_BASE_URL',
+  'QWEN_API_KEY',
+  'SNOWFLAKE_CORTEX_PAT',
   'OPENCODE_AUTH_CONTENT',
   'OPENCODE_CONFIG',
   'OPENCODE_CONFIG_CONTENT',
@@ -211,13 +217,54 @@ const SESSION_CHILD_FIXED_TEST_ENV_KEYS = [
   'OPENCODE_MODELS_URL',
   'OPENCODE_PERMISSION',
   'OPENCODE_TEST_HOME',
-  'OPENCODE_TEST_MANAGED_CONFIG_DIR',
   'OPENCODE_TUI_CONFIG',
-  'QWEN_API_KEY',
-  'QWEN_HOME',
-  'OPENAI_API_KEY',
-  'XDG_DATA_HOME'
+  'OPENCODE_TEST_MANAGED_CONFIG_DIR',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'AWS_CONFIG_FILE',
+  'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+  'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+  'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  'AWS_DEFAULT_PROFILE',
+  'AWS_PROFILE',
+  'AWS_ROLE_ARN',
+  'AWS_ROLE_SESSION_NAME',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_SHARED_CREDENTIALS_FILE',
+  'AWS_WEB_IDENTITY_TOKEN_FILE',
+  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_CLOUD_QUOTA_PROJECT',
+  'GOOGLE_PROJECT',
+  'VERTEXAI_LOCATION',
+  'VERTEXAI_PROJECT'
 ] as const;
+
+const SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST: Record<string, string> = {
+  AWS_CONFIG_FILE: '/dev/null',
+  AWS_EC2_METADATA_DISABLED: 'true',
+  AWS_SHARED_CREDENTIALS_FILE: '/dev/null',
+  CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '/dev/null',
+  GOOGLE_APPLICATION_CREDENTIALS: '/dev/null',
+  NO_GCE_CHECK: 'true'
+};
+
+const SESSION_CHILD_FIXED_TEST_ENV_KEYS = Array.from(
+  new Set([
+    ...SESSION_CHILD_CREDENTIAL_ENV_DENY_KEYS,
+    ...Object.keys(SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST),
+    'CODEX_HOME',
+    'GITHUB_TOKEN',
+    'KIMI_SHARE_DIR',
+    'MAT_SESSION',
+    'QWEN_HOME',
+    'XDG_DATA_HOME'
+  ])
+);
 const OPENCODE_BLOCK_ENV_KEYS = [
   'OPENCODE_AUTH_CONTENT',
   'OPENCODE_CONFIG',
@@ -228,8 +275,8 @@ const OPENCODE_BLOCK_ENV_KEYS = [
   'OPENCODE_MODELS_URL',
   'OPENCODE_PERMISSION',
   'OPENCODE_TEST_HOME',
-  'OPENCODE_TEST_MANAGED_CONFIG_DIR',
-  'OPENCODE_TUI_CONFIG'
+  'OPENCODE_TUI_CONFIG',
+  'OPENCODE_TEST_MANAGED_CONFIG_DIR'
 ] as const;
 const OPENCODE_FIXED_TEST_ENV_KEYS = [
   ...OPENCODE_BLOCK_ENV_KEYS,
@@ -374,6 +421,12 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function sessionChildHardeningValueForTest(name: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST, name)
+    ? SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST[name]
+    : undefined;
+}
+
 beforeEach(async () => {
   tmp = await setupTmpHome();
   originalCwd = process.cwd();
@@ -485,6 +538,33 @@ describe('runSession', () => {
     expect(env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE).toBe('/dev/null');
     expect(env.NO_GCE_CHECK).toBe('true');
     // 이번 PR 은 고신뢰 provider deny-list 만 처리한다. 일반 토큰명 broad scrub 은 별도 후속.
+    expect(env.GITHUB_TOKEN).toBe('non-provider-token');
+  });
+
+  it('session start child env 는 전체 deny/hardening 정책을 적용하고 broad token env 는 보존한다', async () => {
+    process.env.CODEX_HOME = '/host/codex-home';
+    process.env.MAT_SESSION = 'host-session';
+    process.env.GITHUB_TOKEN = 'non-provider-token';
+    for (const name of SESSION_CHILD_CREDENTIAL_ENV_DENY_KEYS) process.env[name] = `${name}-host`;
+    for (const name of Object.keys(SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST)) {
+      process.env[name] = `${name}-host`;
+    }
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSession({ cliId: 'codex', profileName: 'work' });
+
+    const env = (mockSpawn.mock.calls[0][2] as { env: Record<string, string | undefined> }).env;
+    expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
+    expect(env.MAT_SESSION).not.toBe('host-session');
+    expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
+    expect(env.CODEX_HOME).not.toBe('/host/codex-home');
+    for (const [name, value] of Object.entries(SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST)) {
+      expect(env[name]).toBe(value);
+    }
+    for (const name of SESSION_CHILD_CREDENTIAL_ENV_DENY_KEYS) {
+      if (sessionChildHardeningValueForTest(name) !== undefined) continue;
+      expect(env[name]).toBeUndefined();
+    }
     expect(env.GITHUB_TOKEN).toBe('non-provider-token');
   });
 
@@ -687,6 +767,36 @@ describe('runSessionCommand', () => {
     expect(env.GITHUB_TOKEN).toBe('non-provider-token');
   });
 
+  it('session run child env 도 전체 deny/hardening 정책을 적용하고 broad token env 는 보존한다', async () => {
+    process.env.CODEX_HOME = '/host/codex-home';
+    process.env.MAT_SESSION = 'host-session';
+    process.env.GITHUB_TOKEN = 'non-provider-token';
+    for (const name of SESSION_CHILD_CREDENTIAL_ENV_DENY_KEYS) process.env[name] = `${name}-host`;
+    for (const name of Object.keys(SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST)) {
+      process.env[name] = `${name}-host`;
+    }
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSessionCommand({ cliId: 'codex', profileName: 'work', args: ['run'] });
+
+    const [cmd, args, options] = mockSpawn.mock.calls[0];
+    expect(cmd).toBe('codex');
+    expect(args).toEqual(['run']);
+    const env = (options as { env: Record<string, string | undefined> }).env;
+    expect(env.MAT_SESSION).toMatch(/^codex-work-[0-9a-f]{8}$/);
+    expect(env.MAT_SESSION).not.toBe('host-session');
+    expect(env.CODEX_HOME).toContain(join('.multi-account-tool', 'sessions'));
+    expect(env.CODEX_HOME).not.toBe('/host/codex-home');
+    for (const [name, value] of Object.entries(SESSION_CHILD_CREDENTIAL_ENV_HARDENING_FOR_TEST)) {
+      expect(env[name]).toBe(value);
+    }
+    for (const name of SESSION_CHILD_CREDENTIAL_ENV_DENY_KEYS) {
+      if (sessionChildHardeningValueForTest(name) !== undefined) continue;
+      expect(env[name]).toBeUndefined();
+    }
+    expect(env.GITHUB_TOKEN).toBe('non-provider-token');
+  });
+
   it.each([
     {
       cliId: 'kimi',
@@ -837,6 +947,31 @@ describe('runSessionCommand', () => {
       expect(env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS).toBe('true');
       expect(mockStage).toHaveBeenCalledWith('opencode', 'work', 'opencode-auth.json', 'TOK');
       await expect(fs.readFile(liveAuth, 'utf8')).resolves.toBe('GLOBAL-LIVE-AUTH');
+    });
+
+    it('target.env 와 root env 가 충돌해도 root env 를 마지막에 주입한다', async () => {
+      mockFindCliDef.mockReturnValue({
+        ...OPENCODE_DEF,
+        session: {
+          roots: [
+            {
+              env: 'OPENCODE_DISABLE_CLAUDE_CODE',
+              base: '~/.local/share/opencode',
+              envSubdir: 'opencode'
+            }
+          ]
+        }
+      });
+      mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+      await runSessionCommand({ cliId: 'opencode', profileName: 'work', args: ['run', 'hello'] });
+
+      const env = (mockSpawn.mock.calls[0][2] as { env: Record<string, string | undefined> }).env;
+      expect(env.MAT_SESSION).toMatch(/^opencode-work-[0-9a-f]{8}$/);
+      expect(env.OPENCODE_DISABLE_CLAUDE_CODE).toContain(join('.multi-account-tool', 'sessions'));
+      expect(env.OPENCODE_DISABLE_CLAUDE_CODE).not.toBe('true');
+      expect(env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT).toBe('true');
+      expect(env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS).toBe('true');
     });
 
     it.each(OPENCODE_BLOCK_ENV_KEYS)(
