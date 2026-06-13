@@ -34,9 +34,9 @@
 import { ChildProcess, spawn } from 'node:child_process';
 
 import { findCliDef } from './cli-defs.js';
+import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile } from './config.js';
 import { UsageError, errorMessage } from './errors.js';
-import { acquireCliLock } from './lockfile.js';
 import { profileExists, validateProfileName } from './profile-store.js';
 import { snapshotLiveToProfile, switchProfile } from './switcher.js';
 import { getRecaptureTimeoutMs, withTimeout } from './timeout.js';
@@ -69,7 +69,6 @@ const FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
  */
 export async function runExec(opts: ExecOptions): Promise<ExecResult> {
   const profileName = validateInputs(opts);
-  const previousActive = await loadPreviousActive(opts.cliId);
 
   // 신호 forwarder: spawn 전후, restore 중 시그널 모두 흡수해 finally 가 완료되도록.
   // 자식이 존재하면 forward, 아니면 무시. 받은 시그널은 cli.tsx 가 재발생시킨다.
@@ -77,18 +76,29 @@ export async function runExec(opts: ExecOptions): Promise<ExecResult> {
   const forwarders = registerForwarders(childRef);
 
   try {
-    // PR-I*: previousActive 를 LockBody 에 기록 → 비정상 종료 후 다음 mat 호출의
-    // stale recovery 가 "라이브가 어떤 swap 의 결과물인지" 사용자에게 안내 가능.
-    const release = await acquireCliLock(opts.cliId, profileName, {
-      execMode: 'exec',
-      previousActive,
-      affectsCliIds: [opts.cliId]
-    });
-    try {
-      return await runUnderLock(opts, profileName, previousActive, childRef);
-    } finally {
-      await release();
-    }
+    return await withCliMutationLock(
+      {
+        cliId: opts.cliId,
+        profileName,
+        execMode: 'exec',
+        affectsCliIds: [opts.cliId],
+        prepareMetadata: async () => {
+          // profileExists + previousActive 모두 lock 안에서 읽어 foreground mutation 과의
+          // TOCTOU 를 차단한다. LockBody.previousActive 도 이 locked read 와 일치한다.
+          if (!(await profileExists(opts.cliId, profileName))) {
+            throw new UsageError(`프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
+          }
+          return { previousActive: await loadPreviousActive(opts.cliId) };
+        }
+      },
+      async ({ body }) => {
+        const previousActive = body.previousActive;
+        if (!previousActive) {
+          throw new Error('exec lock metadata 에 previousActive 가 없습니다');
+        }
+        return runUnderLock(opts, profileName, previousActive, childRef);
+      }
+    );
   } finally {
     forwarders.dispose();
   }

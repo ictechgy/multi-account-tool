@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LockHeldError,
   acquireCliLock,
+  acquireCliLockLease,
   acquireRecaptureLock,
   isProcessAlive,
   sanitizeForStderr
@@ -155,6 +156,50 @@ describe('lockfile.acquireCliLock', () => {
 
   it('cliId 가 path traversal 형식이면 cliLockPath 단계에서 throw', async () => {
     await expect(acquireCliLock('../../etc/passwd', 'p')).rejects.toThrow(/path segment/);
+  });
+
+  it('invalid profileName / previousActive / affectsCliIds 는 lock artifact 를 남기지 않는다', async () => {
+    await expect(acquireCliLock('codex', '../bad')).rejects.toThrow();
+    expect(existsSync(cliLockPath('codex'))).toBe(false);
+
+    await expect(acquireCliLock('codex', 'work', {
+      previousActive: '../bad'
+    })).rejects.toThrow();
+    expect(existsSync(cliLockPath('codex'))).toBe(false);
+
+    await expect(acquireCliLock('codex', 'work', {
+      affectsCliIds: ['../../bad']
+    })).rejects.toThrow();
+    expect(existsSync(cliLockPath('codex'))).toBe(false);
+  });
+
+  it('prepareMetadata 실패/invalid previousActive 는 방금 만든 lock 을 정리한다', async () => {
+    await expect(acquireCliLockLease('codex', 'work', {
+      execMode: 'exec',
+      prepareMetadata: async () => {
+        throw new Error('prepare boom');
+      }
+    })).rejects.toThrow('prepare boom');
+    expect(existsSync(cliLockPath('codex'))).toBe(false);
+
+    await expect(acquireCliLockLease('codex', 'work', {
+      execMode: 'exec',
+      prepareMetadata: async () => ({ previousActive: '../bad' })
+    })).rejects.toThrow();
+    expect(existsSync(cliLockPath('codex'))).toBe(false);
+  });
+
+  it('prepareMetadata 는 live holder 충돌 시 호출되지 않는다', async () => {
+    const release = await acquireCliLock('codex', 'holder');
+    const prepare = vi.fn();
+    try {
+      await expect(acquireCliLockLease('codex', 'work', {
+        prepareMetadata: prepare
+      })).rejects.toBeInstanceOf(LockHeldError);
+      expect(prepare).not.toHaveBeenCalled();
+    } finally {
+      await release();
+    }
   });
 
   it('readInfo: pid=0 경계값 → isProcessAlive `pid <= 0` 분기 (line 156) + startedAt/profile 부재 시 빈 문자열 fallback (lines 145-146)', async () => {

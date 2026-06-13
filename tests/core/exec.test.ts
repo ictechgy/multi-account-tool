@@ -4,8 +4,8 @@
  * Mock 전략:
  *  - cli-defs / config / profile-store / switcher / node:child_process: 전부 mock
  *  - lockfile: **partial mock** — 진짜 `LockHeldError` 는 그대로 export 하고
- *    `acquireCliLock` 만 vi.fn() 으로 교체. exec.test.ts 가 실제 LockHeldError contract
- *    (exitCode, holder 시그니처) 를 그대로 검증하도록 보장.
+ *    legacy `acquireCliLock` 를 vi.fn() 으로 교체. cli-mutation-lock mock 이 이 spy 를
+ *    호출해 release/order 검증과 실제 LockHeldError contract 검증을 유지한다.
  *
  * 시나리오 (Quad-review 합의 후 보강):
  *  - 기본: success / already-active / child non-zero / child signal /
@@ -38,6 +38,9 @@ vi.mock('../../src/core/switcher.js', () => ({
   // PR-I*: runExec 의 종료 시점 재캡처가 snapshotLiveToProfile 를 직접 호출하므로 mock 필요.
   snapshotLiveToProfile: vi.fn()
 }));
+const { mockWithCliMutationLock } = vi.hoisted(() => ({
+  mockWithCliMutationLock: vi.fn()
+}));
 // Partial mock: 진짜 LockHeldError 를 보존하고 acquireCliLock 만 spy.
 // 가짜 LockHeldError 를 재정의하면 `instanceof` 검증이 mock 클래스에 대해서만 동작하는
 // false-positive 가 발생 (Quad-review Finding A).
@@ -47,6 +50,9 @@ vi.mock('../../src/core/lockfile.js', async () => {
   );
   return { ...actual, acquireCliLock: vi.fn() };
 });
+vi.mock('../../src/core/cli-mutation-lock.js', () => ({
+  withCliMutationLock: mockWithCliMutationLock
+}));
 vi.mock('node:child_process', () => ({
   spawn: vi.fn()
 }));
@@ -158,6 +164,37 @@ describe('runExec', () => {
     vi.clearAllMocks();
     release = vi.fn().mockResolvedValue(undefined);
     mockAcquire.mockResolvedValue(release as () => Promise<void>);
+    mockWithCliMutationLock.mockImplementation(async (opts, fn) => {
+      const releaseFn = await mockAcquire(opts.cliId, opts.profileName, {
+        execMode: opts.execMode,
+        affectsCliIds: opts.affectsCliIds
+      });
+      let previousActive = opts.previousActive;
+      try {
+        if (opts.prepareMetadata) {
+          const prepared = await opts.prepareMetadata();
+          previousActive = prepared.previousActive ?? previousActive;
+        }
+      } catch (err) {
+        await releaseFn();
+        throw err;
+      }
+      try {
+        return await fn({
+          body: {
+            pid: process.pid,
+            startedAt: 'test-now',
+            profile: opts.profileName,
+            token: 'test-token',
+            execMode: opts.execMode,
+            previousActive,
+            affectsCliIds: opts.affectsCliIds
+          }
+        });
+      } finally {
+        await releaseFn();
+      }
+    });
     mockFindCliDef.mockReturnValue(FAKE_CLI_DEF);
     mockGetActive.mockResolvedValue('default');
     mockProfileExists.mockResolvedValue(true);
@@ -234,14 +271,15 @@ describe('runExec', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('활성 프로필 미설정: UsageError, lock/swap/spawn 모두 호출 안 됨', async () => {
+  it('활성 프로필 미설정: lock 안 previousActive 준비 단계에서 UsageError + cleanup release', async () => {
     mockGetActive.mockResolvedValue(undefined);
 
     await expect(runExec({
       cliId: 'codex', profileName: 'work', command: 'echo', args: []
     })).rejects.toThrow(UsageError);
 
-    expect(mockAcquire).not.toHaveBeenCalled();
+    expect(mockAcquire).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -447,15 +485,33 @@ describe('runExec', () => {
 
   // ---- PR-I* — rotation 재캡처 + LockBody.previousActive 전달 ----
 
-  it('PR-I*: acquireCliLock 가 execMode/previousActive/affectsCliIds 옵션과 함께 호출됨', async () => {
+  it('PR-I*: lock 획득 후 previousActive 를 준비하고 execMode/affectsCliIds 를 전달', async () => {
     mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
     await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
 
     expect(mockAcquire).toHaveBeenCalledWith('codex', 'work', {
       execMode: 'exec',
-      previousActive: 'default',
       affectsCliIds: ['codex']
     });
+    expect(mockGetActive).toHaveBeenCalled();
+  });
+
+  it('previousActive 는 lock 획득 이후 읽은 값으로 metadata/restore 에 사용된다 (TOCTOU 회귀)', async () => {
+    mockGetActive.mockResolvedValue('personal');
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runExec({ cliId: 'codex', profileName: 'work', command: 'echo', args: [] });
+
+    expect(mockAcquire.mock.invocationCallOrder[0]).toBeLessThan(
+      mockGetActive.mock.invocationCallOrder[0]
+    );
+    expect(mockSwitch).toHaveBeenNthCalledWith(1, 'codex', 'work');
+    expect(mockSwitch).toHaveBeenNthCalledWith(
+      2,
+      'codex',
+      'personal',
+      { skipPreSwapSnapshot: true }
+    );
   });
 
   it('PR-I*: swap 성공 후 cmd 종료 시 snapshotLiveToProfile(cliId, swap-target) 가 호출되어 라이브 재캡처', async () => {

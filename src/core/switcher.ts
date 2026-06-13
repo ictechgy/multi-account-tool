@@ -13,6 +13,7 @@
  */
 
 import { findCliDef } from './cli-defs.js';
+import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile, setActiveProfile } from './config.js';
 import { UnknownCliError } from './errors.js';
 import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
@@ -40,6 +41,17 @@ export interface SnapshotResult {
  * 프로필이 없으면 자동 생성한다.
  */
 export async function snapshotLiveToProfile(
+  cliId: string,
+  profileName: string
+): Promise<SnapshotResult> {
+  mustFindCli(cliId);
+  return withCliMutationLock(
+    { cliId, profileName, execMode: 'foreground', affectsCliIds: [cliId] },
+    () => snapshotLiveToProfileUnlocked(cliId, profileName)
+  );
+}
+
+async function snapshotLiveToProfileUnlocked(
   cliId: string,
   profileName: string
 ): Promise<SnapshotResult> {
@@ -83,6 +95,17 @@ interface RestorePlan {
  * 부분 실패 시 이미 적용된 source 들을 라이브 백업으로 원복 (best-effort).
  */
 export async function restoreProfileToLive(
+  cliId: string,
+  profileName: string
+): Promise<RestoreResult> {
+  mustFindCli(cliId);
+  return withCliMutationLock(
+    { cliId, profileName, execMode: 'foreground', affectsCliIds: [cliId] },
+    () => restoreProfileToLiveUnlocked(cliId, profileName)
+  );
+}
+
+async function restoreProfileToLiveUnlocked(
   cliId: string,
   profileName: string
 ): Promise<RestoreResult> {
@@ -198,6 +221,18 @@ export async function switchProfile(
   toProfile: string,
   options?: SwitchOptions
 ): Promise<SwitchResult> {
+  mustFindCli(cliId);
+  return withCliMutationLock(
+    { cliId, profileName: toProfile, execMode: 'foreground', affectsCliIds: [cliId] },
+    () => switchProfileUnlocked(cliId, toProfile, options)
+  );
+}
+
+async function switchProfileUnlocked(
+  cliId: string,
+  toProfile: string,
+  options?: SwitchOptions
+): Promise<SwitchResult> {
   const current = await getActiveProfile(cliId);
   // quad-review HIGH fix (#2): current === toProfile 일 때 무조건 no-op.
   // skipPreSwapSnapshot 이 true 면 restore 가 라이브를 동일 stored 로 덮어쓰면서
@@ -227,9 +262,9 @@ export async function switchProfile(
     // 결과 불일치 가능. info-only PR-F* 의 의미상 race 는 알려진 한계 — 정합성 보장은
     // PR-I* 의 LockBody 일관화 후 보강 예정 (plan Scenario 4).
     preSwapLiveFreshness = await safeInspectFreshness(cliId, current);
-    fromSnapshot = await snapshotLiveToProfile(cliId, current);
+    fromSnapshot = await snapshotLiveToProfileUnlocked(cliId, current);
   }
-  const restore = await restoreProfileToLive(cliId, toProfile);
+  const restore = await restoreProfileToLiveUnlocked(cliId, toProfile);
   await setActiveProfile(cliId, toProfile);
   await touchProfile(cliId, toProfile);
   return { fromSnapshot, restore, preSwapLiveFreshness };

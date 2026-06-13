@@ -64,6 +64,7 @@ vi.mock('../../src/core/cli-defs.js', async (importOriginal) => {
 });
 
 import { getActiveProfile, setActiveProfile } from '../../src/core/config.js';
+import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import {
   createProfile,
   deleteProfile,
@@ -327,6 +328,19 @@ describe('switcher', () => {
   });
 
   describe('switchProfile', () => {
+    it('current === toProfile no-op 도 live cli lock 을 우회하지 않는다', async () => {
+      await setupProfile('codex', 'work');
+      await setActiveProfile('codex', 'work');
+      const release = await acquireCliLock('codex', 'exec-holder');
+      try {
+        await expect(switchProfile('codex', 'work')).rejects.toBeInstanceOf(LockHeldError);
+        expect(mockReadSource).not.toHaveBeenCalled();
+        expect(mockWriteSource).not.toHaveBeenCalled();
+      } finally {
+        await release();
+      }
+    });
+
     it('정상: current 가 있고 다른 toProfile → snapshot + restore + setActive + touch', async () => {
       await setupProfile('codex', 'work');
       await setupProfile('codex', 'home');
@@ -429,6 +443,33 @@ describe('switcher', () => {
 
     it('알 수 없는 cli → throw', async () => {
       await expect(switchProfile('unknown-cli', 'p')).rejects.toThrow(/알 수 없는 CLI/);
+    });
+  });
+
+  describe('foreground mutation lock conflicts', () => {
+    it('snapshotLiveToProfile: live cli lock 충돌 시 profile 생성/readSource 전에 중단', async () => {
+      const release = await acquireCliLock('codex', 'exec-holder');
+      try {
+        await expect(snapshotLiveToProfile('codex', 'new-profile'))
+          .rejects.toBeInstanceOf(LockHeldError);
+        expect(mockReadSource).not.toHaveBeenCalled();
+        expect(await profileExists('codex', 'new-profile')).toBe(false);
+      } finally {
+        await release();
+      }
+    });
+
+    it('restoreProfileToLive: live cli lock 충돌 시 writeSource 전에 중단', async () => {
+      await setupProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'stored');
+      const release = await acquireCliLock('codex', 'exec-holder');
+      try {
+        await expect(restoreProfileToLive('codex', 'work'))
+          .rejects.toBeInstanceOf(LockHeldError);
+        expect(mockWriteSource).not.toHaveBeenCalled();
+      } finally {
+        await release();
+      }
     });
   });
 
