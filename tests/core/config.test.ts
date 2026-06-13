@@ -11,7 +11,7 @@
 import { promises as fs, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cleanupTmpFiles,
@@ -289,6 +289,53 @@ describe('config', () => {
       expect(existsSync(join(nested, 'auth.json.tmp'))).toBe(true);
       expect(existsSync(join(nested, 'auth.json.tmp-456-0123456789abcdef'))).toBe(true);
       expect(existsSync(join(nested, '.mat-atomic@99999992-0123456789abcdef.tmp'))).toBe(false);
+    });
+
+    it('dataDir 자체가 symlink 여도 real target 을 cleanup root 로 청소한다', async () => {
+      const link = dataDir();
+      const real = join(tmp.home, 'real-mat-data');
+      await fs.mkdir(real, { recursive: true, mode: 0o700 });
+      await fs.symlink(real, link);
+      await fs.writeFile(join(real, 'config.json.tmp'), 'legacy config tmp');
+      await fs.writeFile(join(real, '.mat-atomic@99999996-abcdefabcdefabcd.tmp'), 'atomic tmp');
+
+      await cleanupTmpFiles();
+
+      expect(existsSync(join(real, 'config.json.tmp'))).toBe(false);
+      expect(existsSync(join(real, '.mat-atomic@99999996-abcdefabcdefabcd.tmp'))).toBe(false);
+      expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    });
+
+    it('readdir 이후 디렉토리가 symlink 로 바뀌면 out-of-root tmp 를 삭제하지 않는다', async () => {
+      const base = dataDir();
+      const nested = join(base, 'profiles', 'codex');
+      const outside = join(tmp.home, 'outside-race-target');
+      await fs.mkdir(nested, { recursive: true, mode: 0o700 });
+      await fs.mkdir(outside, { recursive: true, mode: 0o700 });
+      await fs.writeFile(join(nested, '.mat-atomic@99999997-abcdefabcdefabcd.tmp'), 'inside tmp');
+      await fs.writeFile(join(outside, '.mat-atomic@99999998-abcdefabcdefabcd.tmp'), 'outside tmp');
+      const nestedReal = await fs.realpath(nested);
+
+      const realReaddir = fs.readdir.bind(fs) as typeof fs.readdir;
+      let swapped = false;
+      const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation((async (path: string, options?: unknown) => {
+        if (!swapped && path === nestedReal) {
+          swapped = true;
+          await fs.rm(nestedReal, { recursive: true, force: true });
+          await fs.symlink(outside, nestedReal);
+        }
+        return realReaddir(path, options as never);
+      }) as typeof fs.readdir);
+
+      try {
+        await cleanupTmpFiles();
+      } finally {
+        readdirSpy.mockRestore();
+      }
+
+      expect(swapped).toBe(true);
+      expect(existsSync(join(outside, '.mat-atomic@99999998-abcdefabcdefabcd.tmp'))).toBe(true);
+      expect((await fs.lstat(nestedReal)).isSymbolicLink()).toBe(true);
     });
 
     it('symlink 는 추적하지 않음 (out-of-scope 보호) + symlink 자체도 잔존', async () => {

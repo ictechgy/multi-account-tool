@@ -115,7 +115,7 @@ export async function markFirstFreshnessPromptShown(): Promise<void> {
 export async function cleanupTmpFiles(): Promise<void> {
   const root = dataDir();
   const rootReal = await fs.realpath(root).catch(() => root);
-  await walkAndCleanTmp(root, rootReal).catch(() => { /* best-effort */ });
+  await walkAndCleanTmp(rootReal, rootReal).catch(() => { /* best-effort */ });
 }
 
 function isWithinRoot(rootReal: string, candidateReal: string): boolean {
@@ -140,6 +140,11 @@ async function isStaleLivePidAtomicTmp(path: string, now: number): Promise<boole
   return !!stat && now - stat.mtimeMs > LIVE_PID_ATOMIC_TMP_MAX_AGE_MS;
 }
 
+async function isCandidateStillWithinRoot(path: string, rootReal: string): Promise<boolean> {
+  const candidateReal = await fs.realpath(path).catch(() => null);
+  return !!candidateReal && isWithinRoot(rootReal, candidateReal);
+}
+
 async function walkAndCleanTmp(dir: string, rootReal: string): Promise<void> {
   const dirStat = await fs.lstat(dir).catch(() => null);
   if (!dirStat?.isDirectory() || dirStat.isSymbolicLink()) return;
@@ -151,6 +156,8 @@ async function walkAndCleanTmp(dir: string, rootReal: string): Promise<void> {
   } catch {
     return;
   }
+  const dirRealAfterRead = await fs.realpath(dir).catch(() => null);
+  if (dirRealAfterRead !== dirReal) return;
   for (const e of entries) {
     // symlink 는 따라가지 않는다 (loop 방지 + scope 보호).
     if (e.isSymbolicLink()) continue;
@@ -158,8 +165,10 @@ async function walkAndCleanTmp(dir: string, rootReal: string): Promise<void> {
     if (e.isDirectory()) {
       await walkAndCleanTmp(full, rootReal);
     } else if (e.isFile() && isLegacyRootConfigTmp(dirReal, rootReal, e.name)) {
+      if (!(await isCandidateStillWithinRoot(full, rootReal))) continue;
       await fs.rm(full, { force: true }).catch(() => { /* best-effort */ });
     } else if (e.isFile() && isAtomicTmpFileName(e.name)) {
+      if (!(await isCandidateStillWithinRoot(full, rootReal))) continue;
       const pid = atomicTmpFilePid(e.name);
       if (pid !== null && isProcessProbablyAlive(pid) && !(await isStaleLivePidAtomicTmp(full, Date.now()))) continue;
       await fs.rm(full, { force: true }).catch(() => { /* best-effort */ });
