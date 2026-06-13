@@ -393,6 +393,23 @@ describe('switcher', () => {
       expect(await getActiveProfile('codex')).toBe('work');
     });
 
+    it('current === toProfile 이지만 profile 디렉토리 삭제됨 → no-op 성공으로 zombie active 를 숨기지 않는다', async () => {
+      await setupProfile('codex', 'work');
+      await setActiveProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'value');
+      await deleteProfile('codex', 'work');  // 좀비 active
+
+      mockReadSource.mockResolvedValue('live-should-not-read');
+      mockWriteSource.mockResolvedValue(undefined);
+
+      await expect(switchProfile('codex', 'work')).rejects.toThrow(/프로필.*찾을 수 없습니다/);
+
+      expect(mockReadSource).not.toHaveBeenCalled();
+      expect(mockWriteSource).not.toHaveBeenCalled();
+      expect(await profileExists('codex', 'work')).toBe(false);  // 부활 안 함
+      expect(await getActiveProfile('codex')).toBe('work');  // 자동 repair 하지 않음
+    });
+
     it('current 프로필 디렉토리 외부 삭제 (좀비) → snapshot skip, restore 만 진행', async () => {
       await setupProfile('codex', 'work');
       await setupProfile('codex', 'home');
