@@ -108,9 +108,21 @@ describe('redactMessage', () => {
 
   it('standalone provider/JWT 토큰이 control 문자로 split 되어도 tail 을 남기지 않는다', () => {
     const provider = redactMessage('failed token sk-proj-\nabcdefghijklmnop');
+    const providerAfterPrefix = redactMessage('failed token sk-\nabcdefghijklmnop');
+    const providerEarly = redactMessage('failed token sk-p\nrojabcdefghijklmnop');
+    const googleAfterPrefix = redactMessage('failed token ya29.\nabcdefghijklmnop');
+    const slackAfterPrefix = redactMessage('failed token xoxb-\nabcdefghijklmnop');
     const jwt = redactMessage('failed token eyJhbGciOi\nJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadsig');
+    const jwtAfterPrefix = redactMessage('failed token eyJ\nabcdefghijklmnop1234567890');
+    const jwtEarly = redactMessage('failed token eyJab\n1234567890abcdef');
     expect(provider).toBe('failed token [redacted]');
+    expect(providerAfterPrefix).toBe('failed token [redacted]');
+    expect(providerEarly).toBe('failed token [redacted]');
+    expect(googleAfterPrefix).toBe('failed token [redacted]');
+    expect(slackAfterPrefix).toBe('failed token [redacted]');
     expect(jwt).toBe('failed token [redacted-jwt]');
+    expect(jwtAfterPrefix).toBe('failed token [redacted-jwt]');
+    expect(jwtEarly).toBe('failed token [redacted-jwt]');
   });
 
   it('제어 문자는 사용자 표시 전 치환한다', () => {

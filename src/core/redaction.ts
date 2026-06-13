@@ -15,9 +15,14 @@ const SECRET_FIELD =
 const AUTH_KEY = String.raw`["']?\bauthorization\b["']?`;
 const SEP = String.raw`[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]*`;
 const TOKEN_BREAK = String.raw`[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+`;
-const SPLIT_JWT_RE = new RegExp(String.raw`eyJ[A-Za-z0-9+/=._-]{3,}(?:${TOKEN_BREAK}[A-Za-z0-9+/=._-]{6,})+`, 'giu');
-const SPLIT_PROVIDER_TOKEN_RE =
-  new RegExp(String.raw`\b(?:sk-[A-Za-z0-9._-]{4,}|ya29\.[A-Za-z0-9._-]{4,}|gh[pousr]_[A-Za-z0-9_]{4,}|xox[baprs]-[A-Za-z0-9-]{4,})(?:${TOKEN_BREAK}[A-Za-z0-9._-]{4,})+`, 'giu');
+const SPLIT_JWT_RE = new RegExp(
+  String.raw`\beyJ(?:[A-Za-z0-9+/=._-]*${TOKEN_BREAK})+(?:[A-Za-z0-9+/=._-]+${TOKEN_BREAK})*[A-Za-z0-9+/=._-]{6,}`,
+  'giu'
+);
+const SPLIT_PROVIDER_TOKEN_RE = new RegExp(
+  String.raw`\b(?:sk-|ya29\.|gh[pousr]_|xox[baprs]-)(?:[A-Za-z0-9._-]*${TOKEN_BREAK})+(?:[A-Za-z0-9._-]+${TOKEN_BREAK})*[A-Za-z0-9._-]{4,}`,
+  'giu'
+);
 const DQ_VALUE = String.raw`((?:\\.|[^"\\])*)`;
 const SQ_VALUE = String.raw`((?:\\.|[^'\\])*)`;
 const UNQUOTED_VALUE = String.raw`([^\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}"',}\[\]<][^"',}\[\]<]*)`;
