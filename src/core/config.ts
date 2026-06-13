@@ -16,6 +16,9 @@ import { atomicTmpFilePid, isAtomicTmpFileName, writeFileAtomic } from './io-ato
 import { configPath, dataDir } from './paths.js';
 import type { Config } from './types.js';
 
+const LIVE_PID_ATOMIC_TMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const LEGACY_ROOT_CONFIG_TMP_RE = /^config\.json\.tmp(?:-\d+-[0-9a-f]{16})?$/i;
+
 async function ensureDataDir(): Promise<void> {
   await fs.mkdir(dataDir(), { recursive: true, mode: 0o700 });
 }
@@ -104,6 +107,8 @@ export async function markFirstFreshnessPromptShown(): Promise<void> {
  * 데이터 디렉토리 전체에서 앱 소유 atomic tmp 잔존 파일을 정리한다 (앱 시작 시 호출).
  * 이전 실행에서 비정상 종료로 남은 `.mat-atomic@...tmp` 임시 파일을 제거한다.
  * 사용자 profile `saveAs` 로 합법적인 `*.tmp` / `*.tmp-*` 이름은 삭제하지 않는다.
+ * 루트 `config.json.tmp*` 는 과거 deterministic config atomic-write 잔재로 안전하게 식별 가능하므로
+ * upgrade cleanup 에서 제거한다 (profile 하위 tmp-like 파일은 사용자 파일일 수 있어 보존).
  * symlink 는 추적하지 않는다 (loop / out-of-scope 디렉토리 보호).
  * 실패는 무시 (best-effort).
  */
@@ -126,6 +131,15 @@ function isProcessProbablyAlive(pid: number): boolean {
   }
 }
 
+function isLegacyRootConfigTmp(dirReal: string, rootReal: string, name: string): boolean {
+  return dirReal === rootReal && LEGACY_ROOT_CONFIG_TMP_RE.test(name);
+}
+
+async function isStaleLivePidAtomicTmp(path: string, now: number): Promise<boolean> {
+  const stat = await fs.stat(path).catch(() => null);
+  return !!stat && now - stat.mtimeMs > LIVE_PID_ATOMIC_TMP_MAX_AGE_MS;
+}
+
 async function walkAndCleanTmp(dir: string, rootReal: string): Promise<void> {
   const dirStat = await fs.lstat(dir).catch(() => null);
   if (!dirStat?.isDirectory() || dirStat.isSymbolicLink()) return;
@@ -143,9 +157,11 @@ async function walkAndCleanTmp(dir: string, rootReal: string): Promise<void> {
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       await walkAndCleanTmp(full, rootReal);
+    } else if (e.isFile() && isLegacyRootConfigTmp(dirReal, rootReal, e.name)) {
+      await fs.rm(full, { force: true }).catch(() => { /* best-effort */ });
     } else if (e.isFile() && isAtomicTmpFileName(e.name)) {
       const pid = atomicTmpFilePid(e.name);
-      if (pid !== null && isProcessProbablyAlive(pid)) continue;
+      if (pid !== null && isProcessProbablyAlive(pid) && !(await isStaleLivePidAtomicTmp(full, Date.now()))) continue;
       await fs.rm(full, { force: true }).catch(() => { /* best-effort */ });
     }
   }

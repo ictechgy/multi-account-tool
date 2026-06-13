@@ -6,7 +6,8 @@
  *  - lockfile: partial mock — isProcessAlive/sanitizeForStderr 는 실제, acquireCliLock 만 spy
  *    (전역 무간섭 단언용).
  *  - switcher/config: mock — runSession 이 절대 호출하지 않음을 단언(전역 회귀 0, driver 2).
- *  - paths/io-atomic/session 자체: 실제 — 임시 HOME 에 진짜 세션 디렉토리/격리본 생성.
+ *  - paths/session 자체: 실제 — 임시 HOME 에 진짜 세션 디렉토리/격리본 생성.
+ *  - io-atomic: call-through mock — 실제 fs 쓰기를 유지하면서 session.json durability 옵션 회귀를 관측.
  */
 
 import { ChildProcess } from 'node:child_process';
@@ -39,11 +40,18 @@ vi.mock('../../src/core/lockfile.js', async () => {
   );
   return { ...actual, acquireCliLock: vi.fn(), acquireRecaptureLock: vi.fn() };
 });
+vi.mock('../../src/core/io-atomic.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/core/io-atomic.js')>(
+    '../../src/core/io-atomic.js'
+  );
+  return { ...actual, writeFileAtomic: vi.fn(actual.writeFileAtomic) };
+});
 
 import { spawn } from 'node:child_process';
 
 import { findCliDef } from '../../src/core/cli-defs.js';
 import { UsageError } from '../../src/core/errors.js';
+import { writeFileAtomic } from '../../src/core/io-atomic.js';
 import { acquireCliLock, acquireRecaptureLock } from '../../src/core/lockfile.js';
 import { sessionDir, sessionsDir } from '../../src/core/paths.js';
 import {
@@ -79,6 +87,7 @@ const mockSpawn = vi.mocked(spawn);
 const mockSwitch = vi.mocked(switchProfile);
 const mockAcquire = vi.mocked(acquireCliLock);
 const mockAcquireRecapture = vi.mocked(acquireRecaptureLock);
+const mockWriteFileAtomic = vi.mocked(writeFileAtomic);
 
 const DEF = {
   id: 'codex',
@@ -345,6 +354,20 @@ afterEach(async () => {
 });
 
 describe('runSession', () => {
+  it('recovery-critical session.json 은 durable 기본 write 로 기록한다', async () => {
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSession({ cliId: 'codex', profileName: 'work' });
+
+    const sessionMetaWrites = mockWriteFileAtomic.mock.calls.filter(([path]) =>
+      String(path).endsWith('/session.json')
+    );
+    expect(sessionMetaWrites.length).toBeGreaterThan(0);
+    for (const call of sessionMetaWrites) {
+      expect(call[2]?.durable).not.toBe(false);
+    }
+  });
+
   it('성공: subshell spawn(env 에 CODEX_HOME + MAT_SESSION) → exit 0 → 재캡처 → 세션 디렉토리 삭제', async () => {
     mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
 

@@ -156,6 +156,13 @@ describe('writeFileAtomic', () => {
       expect(mkdir).toHaveBeenCalledWith('/tmp', { recursive: true, mode: 0o700 });
       expect(open).toHaveBeenCalledOnce();
       expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
+      expect(open.mock.calls[0][1]).toBe(
+        realFs.constants.O_WRONLY |
+          realFs.constants.O_CREAT |
+          realFs.constants.O_EXCL |
+          realFs.constants.O_NOFOLLOW
+      );
+      expect(open.mock.calls[0][2]).toBe(0o600);
       expect(handle.writeFile).toHaveBeenCalledWith('secret');
       expect(handle.close).toHaveBeenCalledOnce();
       expect(rmMock.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
@@ -199,6 +206,14 @@ describe('writeFileAtomic', () => {
       const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
 
       await mockedWriteFileAtomic('/tmp/mat-secret.json', 'secret');
+      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
+      expect(open.mock.calls[0][1]).toBe(
+        realFs.constants.O_WRONLY |
+          realFs.constants.O_CREAT |
+          realFs.constants.O_EXCL |
+          realFs.constants.O_NOFOLLOW
+      );
+      expect(open.mock.calls[0][2]).toBe(0o600);
       expect(fileHandle.writeFile).toHaveBeenCalledWith('secret');
       expect(fileHandle.sync).toHaveBeenCalledOnce();
       expect(fileHandle.close).toHaveBeenCalledOnce();
@@ -211,6 +226,56 @@ describe('writeFileAtomic', () => {
       expect(fileHandle.sync.mock.invocationCallOrder[0]).toBeLessThan(fileHandle.close.mock.invocationCallOrder[0]);
       expect(fileHandle.close.mock.invocationCallOrder[0]).toBeLessThan(rename.mock.invocationCallOrder[0]);
       expect(rename.mock.invocationCallOrder[0]).toBeLessThan(dirHandle.sync.mock.invocationCallOrder[0]);
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
+  });
+
+  it('durable:false 는 atomic rename/권한은 유지하되 file/parent fsync 를 건너뛴다', async () => {
+    vi.resetModules();
+    const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const fileHandle = {
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      sync: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    const mkdir = vi.fn().mockResolvedValue(undefined);
+    const open = vi.fn().mockResolvedValue(fileHandle);
+    const rename = vi.fn().mockResolvedValue(undefined);
+    const rmMock = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('node:fs', () => ({
+      ...realFs,
+      constants: realFs.constants,
+      promises: {
+        mkdir,
+        open,
+        rename,
+        rm: rmMock
+      }
+    }));
+
+    try {
+      const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
+
+      await mockedWriteFileAtomic('/tmp/mat-scratch.json', 'scratch', { durable: false });
+
+      expect(open).toHaveBeenCalledOnce();
+      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
+      expect(open.mock.calls[0][1]).toBe(
+        realFs.constants.O_WRONLY |
+          realFs.constants.O_CREAT |
+          realFs.constants.O_EXCL |
+          realFs.constants.O_NOFOLLOW
+      );
+      expect(open.mock.calls[0][2]).toBe(0o600);
+      expect(fileHandle.writeFile).toHaveBeenCalledWith('scratch');
+      expect(fileHandle.sync).not.toHaveBeenCalled();
+      expect(fileHandle.close).toHaveBeenCalledOnce();
+      expect(rename).toHaveBeenCalledOnce();
+      expect(open).not.toHaveBeenCalledWith('/tmp', realFs.constants.O_RDONLY);
+      expect(rmMock).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock('node:fs');
       vi.resetModules();

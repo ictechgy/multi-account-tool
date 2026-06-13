@@ -60,6 +60,47 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.def?.sources).toHaveLength(1);
   });
 
+  it('plugin name/service 는 정확한 최대 길이(80/128자)를 허용한다', () => {
+    const name = 'N'.repeat(80);
+    const service = 's'.repeat(128);
+
+    const r = validateCliDefRaw({
+      id: 'boundary-cli',
+      name,
+      sources: [{ type: 'keychain', service, saveAs: 'credentials.json' }]
+    });
+
+    expect(r.error).toBeUndefined();
+    expect(r.def?.name).toBe(name);
+    expect(r.def?.sources[0]).toMatchObject({ type: 'keychain', service });
+  });
+
+  it('plugin warning redaction 은 24자 opaque 값을 threshold 에서 redacts 한다', async () => {
+    const tmp = await setupTmpHome();
+    try {
+      const opaque = 'A'.repeat(24);
+      await writePlugin('a-threshold.json', {
+        id: opaque,
+        name: 'A',
+        sources: [{ type: 'file', path: '/a', saveAs: 'a.json' }]
+      });
+      await writePlugin('b-threshold.json', {
+        id: opaque,
+        name: 'B',
+        sources: [{ type: 'file', path: '/b', saveAs: 'b.json' }]
+      });
+
+      const r = loadUserCliDefs();
+      expect(r.defs.map((d) => d.id)).toEqual([opaque]);
+      expect(r.warnings).toHaveLength(1);
+      expect(r.warnings[0]).toContain('[redacted]');
+      expect(r.warnings[0]).not.toContain(opaque);
+    } finally {
+      resetCliDefCache();
+      await tmp.cleanup();
+    }
+  });
+
   it.each([
     [null, '최상위'],
     [42, '최상위'],

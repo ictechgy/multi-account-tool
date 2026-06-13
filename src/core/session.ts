@@ -2182,7 +2182,7 @@ async function recaptureBestEffort(plan: SessionPlan): Promise<Error | undefined
 
 /** session.json 기록 (writeFileAtomic, 0600). */
 async function writeSessionMeta(id: string, meta: SessionMeta): Promise<void> {
-  await writeFileAtomic(join(sessionDir(id), 'session.json'), JSON.stringify(meta, null, 2), { durable: false });
+  await writeFileAtomic(join(sessionDir(id), 'session.json'), JSON.stringify(meta, null, 2));
 }
 
 /** session.json 읽기. 없거나 손상되면 null. */

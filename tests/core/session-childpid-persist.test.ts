@@ -120,7 +120,7 @@ describe('recordChildPid — 2단계 persist (childPid 가 ps 전에 기록, #71
     for (let i = 0; i < 2000; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       metaDuringPs = await readOnlySessionMeta();
-      if (metaDuringPs && metaDuringPs.childPid != null) break;
+      if (metaDuringPs && metaDuringPs.childPid != null && pendingChildPsCallbacks.length >= 1) break;
     }
 
     // 핵심 단언: 자식 서명 조회(ps)가 보류 중인데 session.json 에 childPid 가 이미 있다(1단계 완결).

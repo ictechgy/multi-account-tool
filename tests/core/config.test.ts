@@ -230,10 +230,11 @@ describe('config', () => {
       await expect(cleanupTmpFiles()).resolves.toBeUndefined();
     });
 
-    it('앱 소유 atomic tmp 파일만 삭제하고 합법 tmp-like 파일은 보존', async () => {
+    it('앱 소유 atomic tmp 와 root legacy config tmp 만 삭제하고 합법 tmp-like 파일은 보존', async () => {
       const base = dataDir();
       await fs.mkdir(base, { recursive: true, mode: 0o700 });
       await fs.writeFile(join(base, 'stale.tmp'), 'tmp data');
+      await fs.writeFile(join(base, 'config.json.tmp'), 'legacy config tmp data');
       await fs.writeFile(join(base, 'config.json.tmp-123-abcdefabcdefabcd'), 'secret tmp data');
       await fs.writeFile(join(base, '.mat-atomic@99999991-abcdefabcdefabcd.tmp'), 'secret tmp data');
       await fs.writeFile(join(base, 'config.json'), '{}');
@@ -242,7 +243,8 @@ describe('config', () => {
       await cleanupTmpFiles();
 
       expect(existsSync(join(base, 'stale.tmp'))).toBe(true);
-      expect(existsSync(join(base, 'config.json.tmp-123-abcdefabcdefabcd'))).toBe(true);
+      expect(existsSync(join(base, 'config.json.tmp'))).toBe(false);
+      expect(existsSync(join(base, 'config.json.tmp-123-abcdefabcdefabcd'))).toBe(false);
       expect(existsSync(join(base, '.mat-atomic@99999991-abcdefabcdefabcd.tmp'))).toBe(false);
       expect(existsSync(join(base, 'config.json'))).toBe(true);
       expect(existsSync(join(base, 'keep.tmp-notatomic'))).toBe(true);
@@ -257,6 +259,19 @@ describe('config', () => {
       await cleanupTmpFiles();
 
       expect(existsSync(liveTmp)).toBe(true);
+    });
+
+    it('살아있는 pid 여도 24h 넘은 atomic tmp 는 stale 로 보고 정리한다', async () => {
+      const base = dataDir();
+      await fs.mkdir(base, { recursive: true, mode: 0o700 });
+      const staleLiveTmp = join(base, `.mat-atomic@${process.pid}-abcdefabcdefabcd.tmp`);
+      await fs.writeFile(staleLiveTmp, 'stale live tmp data');
+      const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
+      await fs.utimes(staleLiveTmp, oldTime, oldTime);
+
+      await cleanupTmpFiles();
+
+      expect(existsSync(staleLiveTmp)).toBe(false);
     });
 
     it('서브 디렉토리도 재귀로 앱 소유 atomic tmp 만 정리', async () => {
