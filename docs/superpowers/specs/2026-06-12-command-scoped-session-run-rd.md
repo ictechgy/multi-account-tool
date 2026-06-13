@@ -60,8 +60,15 @@ OpenCode 공식 config 문서는 config source 를 merge 하며, global config, 
 - `OPENCODE_CONFIG`
 - `OPENCODE_CONFIG_CONTENT`
 - `OPENCODE_CONFIG_DIR`
-- current project 의 `opencode.json`, `opencode.jsonc`, `.opencode/*` 중 plaintext `apiKey`, provider env reference, auth/content/config override 로 credential source 를 바꾸는 설정
-- shell env 의 provider key 가 OpenCode config 에서 참조되는 경우
+- `OPENCODE_DB`, `OPENCODE_MODELS_PATH`, `OPENCODE_MODELS_URL`, `OPENCODE_PERMISSION`, `OPENCODE_TEST_HOME`, `OPENCODE_TUI_CONFIG`, `OPENCODE_TEST_MANAGED_CONFIG_DIR`
+- `attach`, `pr`, `--dangerously-skip-permissions`, `--share`, `--command`, `--file`/`-f`, cwd/project-directory argv (`--dir`, `--cwd`, path-like/existing directory/symlink args)
+- provider credential env vars that OpenCode/provider integrations can consume directly (for example `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, `GOOGLE_APPLICATION_CREDENTIALS`, `SNOWFLAKE_CORTEX_PAT`, and generic `*_API_KEY`/token/secret/PAT patterns)
+- project `.env` assignments for those provider credential env vars
+- global/managed/home `.opencode`/project `config`, `config.json`, `opencode.json{,c}`, `tui.json{,c}`, `.opencode/*` 중 `{file:...}` substitution, plaintext `apiKey`, credential-bearing `headers`/`Authorization`, auth/service/bearer/access/refresh token options, AWS profile/credential-chain options, provider endpoint override, provider `npm`, `instructions`, `skills`, `reference(s)`, `share`, deprecated `mode`, agent `prompt`/`permission`/`tools`, `plugin`, `mcp`, `shell`, `formatter`/`lsp`/`command`, provider env reference, auth/content/config override 로 credential source 를 바꾸는 설정
+- local plugin/tool/command/mode/agent/skill directories (`~/.config/opencode/plugin{s}/`, `~/.config/opencode/tool{s}/`, `~/.config/opencode/command{s}/`, `~/.config/opencode/mode{s}/`, `~/.config/opencode/agent{s}/`, `~/.config/opencode/skill{s}/`, `~/.agents/skills`, `~/.claude/skills`, home/project `.opencode/plugin{s}/`, home/project `.opencode/tool{s}/`, home/project `.opencode/command{s}/`, home/project `.opencode/mode{s}/`, home/project `.opencode/agent{s}/`, home/project `.opencode/skill{s}/`, project `.agents/skills`, project `.claude/skills`) with executable, shell-capable, prompt, permission, or SKILL.md files, because plugins/tools/commands/modes/agents/skills can inject env, execute hooks, override tools/permissions, read prompts, or run shell output at startup/use
+- OpenCode `package.json` manifests in global/home/project config roots, because plugin/tool dependencies may be installed at startup
+- symlinked/unreadable config candidates or macOS managed preference candidates whose contents cannot be proven safe
+- Amazon Bedrock 의 AWS SDK shared-credential/metadata chain 과 Google ADC fallback 은 child env 에서 scrub (`AWS_SHARED_CREDENTIALS_FILE=/dev/null`, `AWS_CONFIG_FILE=/dev/null`, `AWS_EC2_METADATA_DISABLED=true`, `GOOGLE_APPLICATION_CREDENTIALS=/dev/null`) 하고, OpenCode `.claude` prompt/skills loading 은 `OPENCODE_DISABLE_CLAUDE_CODE* = true` 로 disable
 
 향후 explicit override 를 추가하더라도, 그 실행은 “mat isolation guarantee 밖”으로 downgrade 해야 한다.
 
@@ -69,8 +76,20 @@ OpenCode 공식 config 문서는 config source 를 merge 하며, global config, 
 
 - `OPENCODE_AUTH_CONTENT` 가 있으면 hard refusal.
 - `OPENCODE_CONFIG`/`OPENCODE_CONFIG_CONTENT` 가 있으면 hard refusal 또는 deterministic scrub; 어느 쪽이든 테스트로 고정.
-- project `opencode.json` 의 plaintext `apiKey` 는 hard refusal.
-- project `opencode.json` 의 env-backed provider key 는 hard refusal 또는 explicit no-isolation downgrade.
+- provider credential env (`AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `SNOWFLAKE_CORTEX_PAT` 등), provider endpoint override, 또는 `OPENCODE_PERMISSION` 이 있으면 hard refusal.
+- project `.env` 의 provider credential assignment 는 hard refusal.
+- config `instructions`, `skills`, `reference(s)`, `share`, deprecated `mode`, agent `prompt`/`permission`/`tools`, `plugin`, and non-empty local plugin/agent/skill directories are hard refusals.
+- config `mcp` local server settings are hard refusals.
+- config command channels such as `shell`/`formatter`/`lsp`/`command` are hard refusals.
+- provider `npm` package selection is a hard refusal.
+- OpenCode `package.json` manifests in config roots are hard refusals.
+- `attach`, `pr`, `--dangerously-skip-permissions`, `--file`/`-f`, and cwd/project-directory argv are hard refusals.
+- global `$XDG_CONFIG_HOME`/`~/.config/opencode/{config,config.json,opencode.json{,c},tui.json{,c}}` 의 plaintext `apiKey` 또는 executable/plugin config 는 hard refusal.
+- project `opencode.json` 의 `{file:...}` substitution 또는 plaintext `apiKey` 는 current-to-git-root traversal 에서 hard refusal.
+- `Authorization`/credential header, auth/service/bearer/access token option 또는 Amazon Bedrock `profile` 설정은 hard refusal.
+- `.opencode/*.json{,c}` 의 env-backed provider key 는 hard refusal 또는 explicit no-isolation downgrade.
+- safe run child env 는 AWS shared credential/config 파일, AWS metadata credential source, Google ADC credential source 를 scrub 하고 OpenCode `.claude` prompt/skills loading 을 disable 한다.
+- symlinked/unreadable config candidates and unreadable/non-directory `.opencode` are hard refusals.
 - 실행 후 profile 의 `opencode-auth.json` 은 격리본 rotation 만 재캡처되고 OS-global `$XDG_DATA_HOME/opencode/auth.json` 은 손대지 않는다.
 
 ---

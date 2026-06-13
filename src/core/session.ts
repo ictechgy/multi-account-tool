@@ -33,6 +33,7 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
+import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 import { findCliDef } from './cli-defs.js';
@@ -722,7 +723,7 @@ export interface SessionResult {
 
 type SessionSpawnTarget =
   | { kind: 'shell' }
-  | { kind: 'command'; executable: string; args: string[] };
+  | { kind: 'command'; executable: string; args: string[]; env?: Record<string, string | undefined> };
 
 /** session.json 스키마 (세션 디렉토리에 기록 — list/orphan 이 읽음). */
 interface SessionMeta {
@@ -776,28 +777,30 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
  * 전역 swap/lock 없이 기존 session copy-isolate + 재캡처 lifecycle 을 그대로 쓴다.
  */
 export async function runSessionCommand(opts: SessionCommandOptions): Promise<SessionResult> {
-  return runSessionWithTarget(opts, (def) => {
+  return runSessionWithTarget(opts, async (def) => {
     if (!def.sessionRun) {
       throw new UsageError(`'${opts.cliId}' 는 session run 을 지원하지 않습니다 (builtin executable 미정의).`);
     }
+    await preflightSessionRun(def.id, opts.args);
     return {
       kind: 'command',
       executable: validateSessionRunExecutable(def.sessionRun.executable),
-      args: opts.args.slice()
+      args: opts.args.slice(),
+      env: sessionRunEnvOverrides(def.id)
     };
   });
 }
 
 async function runSessionWithTarget(
   opts: SessionStartOptions,
-  targetFor: (def: CliDef) => SessionSpawnTarget
+  targetFor: (def: CliDef) => SessionSpawnTarget | Promise<SessionSpawnTarget>
 ): Promise<SessionResult> {
   const def = findCliDef(opts.cliId);
   if (!def) throw new UsageError(`알 수 없는 CLI: ${opts.cliId}`);
   if (!def.session || def.session.roots.length === 0) {
     throw new UsageError(`'${opts.cliId}' 는 세션 격리를 지원하지 않습니다 (env override 미지원).`);
   }
-  const target = targetFor(def);
+  const target = await targetFor(def);
   const profileName = validateProfileName(opts.profileName);
   if (!(await profileExists(opts.cliId, profileName))) {
     throw new UsageError(`프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
@@ -881,6 +884,585 @@ function validateSessionRunExecutable(executable: string): string {
     throw new UsageError(`session run executable 이 유효하지 않습니다: ${sanitizeForStderr(String(executable))}`);
   }
   return executable;
+}
+
+/** CLI별 command-scoped session run preflight. 실행 전 credential 우회 채널을 fail-closed 로 차단한다. */
+async function preflightSessionRun(cliId: string, args: readonly string[]): Promise<void> {
+  if (cliId === 'opencode') await preflightOpenCodeSessionRun(args);
+}
+
+function sessionRunEnvOverrides(cliId: string): Record<string, string | undefined> | undefined {
+  if (cliId !== 'opencode') return undefined;
+  return {
+    // OpenCode's Amazon Bedrock provider can fall back to the AWS SDK credential chain. A command-scoped
+    // opencode run should not silently read host AWS shared credentials or instance/container metadata.
+    AWS_CONFIG_FILE: '/dev/null',
+    AWS_EC2_METADATA_DISABLED: 'true',
+    AWS_SHARED_CREDENTIALS_FILE: '/dev/null',
+    GOOGLE_APPLICATION_CREDENTIALS: '/dev/null',
+    OPENCODE_DISABLE_CLAUDE_CODE: 'true',
+    OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: 'true',
+    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: 'true',
+    AWS_CONTAINER_AUTHORIZATION_TOKEN: undefined,
+    AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE: undefined,
+    AWS_CONTAINER_CREDENTIALS_FULL_URI: undefined,
+    AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: undefined
+  };
+}
+
+const OPENCODE_BLOCK_ENV = [
+  'OPENCODE_AUTH_CONTENT',
+  'OPENCODE_CONFIG',
+  'OPENCODE_CONFIG_CONTENT',
+  'OPENCODE_CONFIG_DIR',
+  'OPENCODE_DB',
+  'OPENCODE_MODELS_PATH',
+  'OPENCODE_MODELS_URL',
+  'OPENCODE_PERMISSION',
+  'OPENCODE_TEST_HOME',
+  'OPENCODE_TUI_CONFIG',
+  'OPENCODE_TEST_MANAGED_CONFIG_DIR'
+] as const;
+
+const OPENCODE_GLOBAL_CONFIG_FILE_NAMES = ['config', 'config.json', 'opencode.json', 'opencode.jsonc', 'tui.json', 'tui.jsonc'] as const;
+const OPENCODE_PROJECT_CONFIG_FILE_NAMES = ['opencode.json', 'opencode.jsonc', 'tui.json', 'tui.jsonc'] as const;
+
+/**
+ * OpenCode command-scoped run preflight.
+ *
+ * OpenCode credentials normally live in XDG data (`auth.json`), which mat can copy-isolate. But OpenCode also
+ * merges config from env, global/managed/project config files, and those configs can specify provider
+ * `apiKey` values that bypass `auth.json`. Warning-only would be a false isolation claim, so known local
+ * bypass channels hard-stop before profile lookup, materialization, or spawn.
+ */
+async function preflightOpenCodeSessionRun(args: readonly string[]): Promise<void> {
+  await preflightOpenCodeArgs(args);
+
+  for (const name of OPENCODE_BLOCK_ENV) {
+    if (process.env[name] !== undefined) {
+      throw new UsageError(
+        `opencode session run 차단: ${name} env 가 설정되어 있어 auth.json 격리를 우회할 수 있습니다.`
+      );
+    }
+  }
+  for (const name of Object.keys(process.env)) {
+    if (isOpenCodeProviderCredentialEnv(name)) {
+      throw new UsageError(
+        `opencode session run 차단: ${name} env 가 provider credential 로 동작해 auth.json 격리를 우회할 수 있습니다.`
+      );
+    }
+  }
+
+  for (const candidate of openCodeGlobalConfigCandidates()) {
+    await inspectOpenCodeConfigCandidate(candidate, 'global/managed config');
+  }
+  for (const candidate of await openCodeHomeDotOpenCodeConfigCandidates()) {
+    await inspectOpenCodeConfigCandidate(candidate, 'home .opencode config');
+  }
+  for (const candidate of await openCodeProjectConfigCandidates(process.cwd())) {
+    await inspectOpenCodeConfigCandidate(candidate, 'project config');
+  }
+  for (const candidate of await openCodeProjectEnvCandidates(process.cwd())) {
+    await inspectOpenCodeEnvCandidate(candidate);
+  }
+  for (const candidate of await openCodePluginDirectoryCandidates(process.cwd())) {
+    await failIfOpenCodePluginDirectoryExists(candidate.path, candidate.label);
+  }
+  for (const candidate of await openCodePackageManifestCandidates(process.cwd())) {
+    await failIfPathExists(candidate.path, candidate.label);
+  }
+  for (const candidate of openCodeManagedPreferenceCandidates()) {
+    await failIfPathExists(candidate, 'macOS managed preference');
+  }
+}
+
+async function preflightOpenCodeArgs(args: readonly string[]): Promise<void> {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? '';
+    if (arg === 'attach' || arg === '--attach' || arg.startsWith('--attach=')) {
+      throw new UsageError(
+        `opencode session run 차단: attach 인자는 이미 실행 중인 OpenCode backend credential 을 사용할 수 있습니다: ${arg}`
+      );
+    }
+    if (arg === 'pr') {
+      throw new UsageError(
+        `opencode session run 차단: pr 인자는 preflight 이후 project tree 를 변경할 수 있습니다: ${arg}`
+      );
+    }
+    if (arg === '--dir' || arg === '--cwd' || arg === '-C' || arg.startsWith('--dir=') || arg.startsWith('--cwd=')) {
+      throw new UsageError(
+        `opencode session run 차단: cwd/project directory 변경 인자는 preflight 범위를 우회할 수 있습니다: ${arg}`
+      );
+    }
+    if (arg === '--dangerously-skip-permissions' || arg.startsWith('--dangerously-skip-permissions=')) {
+      throw new UsageError(
+        `opencode session run 차단: dangerously-skip-permissions 인자는 permission prompt 를 우회할 수 있습니다: ${arg}`
+      );
+    }
+    if (arg === '--share' || arg.startsWith('--share=')) {
+      throw new UsageError(
+        `opencode session run 차단: share 인자는 대화 이력/메타데이터를 public link 로 동기화할 수 있습니다: ${arg}`
+      );
+    }
+    if (arg === '--command' || arg.startsWith('--command=')) {
+      throw new UsageError(
+        `opencode session run 차단: command 인자는 share/custom command 경로로 격리 범위를 우회할 수 있습니다: ${arg}`
+      );
+    }
+    if (arg === '--file' || arg.startsWith('--file=') || arg === '-f' || arg.startsWith('-f=')) {
+      throw new UsageError(
+        `opencode session run 차단: file attachment 인자는 host 파일을 prompt 에 첨부해 격리 범위를 우회할 수 있습니다: ${arg}`
+      );
+    }
+    if (arg.length > 2 && arg.startsWith('-f') && !arg.startsWith('--')) {
+      throw new UsageError(
+        `opencode session run 차단: file attachment 인자는 host 파일을 prompt 에 첨부해 격리 범위를 우회할 수 있습니다: ${arg}`
+      );
+    }
+    if (looksLikeOpenCodeProjectPathArg(arg)) {
+      throw new UsageError(
+        `opencode session run 차단: path-like project 인자는 preflight 범위를 우회할 수 있습니다: ${arg}`
+      );
+    }
+    if (await openCodeArgIsExistingDirectory(arg)) {
+      throw new UsageError(
+        `opencode session run 차단: project directory 인자는 preflight 범위를 우회할 수 있습니다: ${arg}`
+      );
+    }
+  }
+}
+
+function looksLikeOpenCodeProjectPathArg(arg: string): boolean {
+  if (arg.length === 0 || arg.startsWith('-')) return false;
+  return arg.startsWith('/') || arg.startsWith('./') || arg.startsWith('../') || arg.startsWith('~');
+}
+
+async function openCodeArgIsExistingDirectory(arg: string): Promise<boolean> {
+  if (arg.length === 0 || arg.startsWith('-') || arg.includes('\0')) return false;
+  const path = isAbsolute(arg) ? arg : join(process.cwd(), arg);
+  const stat = await lstatIfExists(path);
+  return stat?.isDirectory() === true || stat?.isSymbolicLink() === true;
+}
+
+function openCodeGlobalConfigCandidates(): string[] {
+  const out: string[] = [];
+  const addRoot = (root: string) => {
+    for (const name of OPENCODE_GLOBAL_CONFIG_FILE_NAMES) out.push(join(root, 'opencode', name));
+  };
+
+  addRoot(expandTilde('~/.config'));
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+  if (xdgConfigHome && xdgConfigHome.length > 0) addRoot(xdgConfigHome);
+  for (const name of OPENCODE_GLOBAL_CONFIG_FILE_NAMES) out.push(join('/etc/opencode', name));
+  if (process.platform === 'darwin') {
+    for (const name of OPENCODE_GLOBAL_CONFIG_FILE_NAMES) {
+      out.push(join('/Library/Application Support/opencode', name));
+    }
+  }
+  return Array.from(new Set(out));
+}
+
+async function openCodeHomeDotOpenCodeConfigCandidates(): Promise<string[]> {
+  const out: string[] = [];
+  const dotOpenCode = expandTilde('~/.opencode');
+  const dotStat = await lstatIfExists(dotOpenCode);
+  if (!dotStat) return out;
+  if (dotStat.isSymbolicLink()) {
+    throw new UsageError(`opencode session run 차단: home .opencode 디렉토리가 symlink 입니다: ${dotOpenCode}`);
+  }
+  if (!dotStat.isDirectory()) {
+    throw new UsageError(`opencode session run 차단: home .opencode 경로가 디렉토리가 아닙니다: ${dotOpenCode}`);
+  }
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dotOpenCode);
+  } catch (err) {
+    throw new UsageError(
+      `opencode session run 차단: home .opencode 디렉토리를 읽을 수 없습니다: ${dotOpenCode}: ${errorText(err)}`
+    );
+  }
+  for (const entry of entries) {
+    if (entry.endsWith('.json') || entry.endsWith('.jsonc')) out.push(join(dotOpenCode, entry));
+  }
+  return out;
+}
+
+async function openCodePackageManifestCandidates(
+  startDir: string
+): Promise<Array<{ path: string; label: string }>> {
+  const out: Array<{ path: string; label: string }> = [
+    { path: join(expandTilde('~/.config'), 'opencode', 'package.json'), label: 'global package manifest' },
+    { path: join(expandTilde('~/.opencode'), 'package.json'), label: 'home package manifest' },
+    { path: join('/etc/opencode', 'package.json'), label: 'managed package manifest' }
+  ];
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+  if (xdgConfigHome && xdgConfigHome.length > 0) {
+    out.push({ path: join(xdgConfigHome, 'opencode', 'package.json'), label: 'XDG global package manifest' });
+  }
+  if (process.platform === 'darwin') {
+    out.push({
+      path: join('/Library/Application Support/opencode', 'package.json'),
+      label: 'macOS managed package manifest'
+    });
+  }
+
+  let dir = startDir;
+  for (;;) {
+    out.push({ path: join(dir, '.opencode', 'package.json'), label: 'project package manifest' });
+    if (await pathExists(join(dir, '.git'))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return out;
+}
+
+async function openCodeProjectConfigCandidates(startDir: string): Promise<string[]> {
+  const out: string[] = [];
+  let dir = startDir;
+  for (;;) {
+    for (const name of OPENCODE_PROJECT_CONFIG_FILE_NAMES) out.push(join(dir, name));
+
+    const dotOpenCode = join(dir, '.opencode');
+    const dotStat = await lstatIfExists(dotOpenCode);
+    if (dotStat) {
+      if (dotStat.isSymbolicLink()) {
+        throw new UsageError(`opencode session run 차단: .opencode 디렉토리가 symlink 입니다: ${dotOpenCode}`);
+      }
+      if (!dotStat.isDirectory()) {
+        throw new UsageError(`opencode session run 차단: .opencode 경로가 디렉토리가 아닙니다: ${dotOpenCode}`);
+      }
+      let entries: string[];
+      try {
+        entries = await fs.readdir(dotOpenCode);
+      } catch (err) {
+        throw new UsageError(
+          `opencode session run 차단: .opencode 디렉토리를 읽을 수 없습니다: ${dotOpenCode}: ${errorText(err)}`
+        );
+      }
+      for (const entry of entries) {
+        if (entry.endsWith('.json') || entry.endsWith('.jsonc')) out.push(join(dotOpenCode, entry));
+      }
+    }
+
+    if (await pathExists(join(dir, '.git'))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return out;
+}
+
+async function openCodeProjectEnvCandidates(startDir: string): Promise<string[]> {
+  const out: string[] = [];
+  let dir = startDir;
+  for (;;) {
+    out.push(join(dir, '.env'));
+    if (await pathExists(join(dir, '.git'))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return out;
+}
+
+async function openCodePluginDirectoryCandidates(
+  startDir: string
+): Promise<Array<{ path: string; label: string }>> {
+  const out: Array<{ path: string; label: string }> = [
+    { path: join(expandTilde('~/.config'), 'opencode', 'plugins'), label: 'global plugin directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'plugin'), label: 'global plugin directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'tools'), label: 'global custom tools directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'tool'), label: 'global custom tools directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'commands'), label: 'global commands directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'command'), label: 'global commands directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'modes'), label: 'global modes directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'mode'), label: 'global modes directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'agents'), label: 'global agents directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'agent'), label: 'global agents directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'skills'), label: 'global skills directory' },
+    { path: join(expandTilde('~/.config'), 'opencode', 'skill'), label: 'global skills directory' },
+    { path: join(expandTilde('~/.agents'), 'skills'), label: 'global agent-compatible skills directory' },
+    { path: join(expandTilde('~/.agents'), 'skill'), label: 'global agent-compatible skills directory' },
+    { path: join(expandTilde('~/.claude'), 'skills'), label: 'global Claude-compatible skills directory' },
+    { path: join(expandTilde('~/.claude'), 'skill'), label: 'global Claude-compatible skills directory' },
+    { path: join(expandTilde('~/.opencode'), 'plugins'), label: 'home plugin directory' },
+    { path: join(expandTilde('~/.opencode'), 'plugin'), label: 'home plugin directory' },
+    { path: join(expandTilde('~/.opencode'), 'tools'), label: 'home custom tools directory' },
+    { path: join(expandTilde('~/.opencode'), 'tool'), label: 'home custom tools directory' },
+    { path: join(expandTilde('~/.opencode'), 'commands'), label: 'home commands directory' },
+    { path: join(expandTilde('~/.opencode'), 'command'), label: 'home commands directory' },
+    { path: join(expandTilde('~/.opencode'), 'modes'), label: 'home modes directory' },
+    { path: join(expandTilde('~/.opencode'), 'mode'), label: 'home modes directory' },
+    { path: join(expandTilde('~/.opencode'), 'agents'), label: 'home agents directory' },
+    { path: join(expandTilde('~/.opencode'), 'agent'), label: 'home agents directory' },
+    { path: join(expandTilde('~/.opencode'), 'skills'), label: 'home skills directory' },
+    { path: join(expandTilde('~/.opencode'), 'skill'), label: 'home skills directory' }
+  ];
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+  if (xdgConfigHome && xdgConfigHome.length > 0) {
+    out.push({ path: join(xdgConfigHome, 'opencode', 'plugins'), label: 'XDG global plugin directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'plugin'), label: 'XDG global plugin directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'tools'), label: 'XDG global custom tools directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'tool'), label: 'XDG global custom tools directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'commands'), label: 'XDG global commands directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'command'), label: 'XDG global commands directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'modes'), label: 'XDG global modes directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'mode'), label: 'XDG global modes directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'agents'), label: 'XDG global agents directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'agent'), label: 'XDG global agents directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'skills'), label: 'XDG global skills directory' });
+    out.push({ path: join(xdgConfigHome, 'opencode', 'skill'), label: 'XDG global skills directory' });
+  }
+
+  let dir = startDir;
+  for (;;) {
+    out.push({ path: join(dir, '.opencode', 'plugins'), label: 'project plugin directory' });
+    out.push({ path: join(dir, '.opencode', 'plugin'), label: 'project plugin directory' });
+    out.push({ path: join(dir, '.opencode', 'tools'), label: 'project custom tools directory' });
+    out.push({ path: join(dir, '.opencode', 'tool'), label: 'project custom tools directory' });
+    out.push({ path: join(dir, '.opencode', 'commands'), label: 'project commands directory' });
+    out.push({ path: join(dir, '.opencode', 'command'), label: 'project commands directory' });
+    out.push({ path: join(dir, '.opencode', 'modes'), label: 'project modes directory' });
+    out.push({ path: join(dir, '.opencode', 'mode'), label: 'project modes directory' });
+    out.push({ path: join(dir, '.opencode', 'agents'), label: 'project agents directory' });
+    out.push({ path: join(dir, '.opencode', 'agent'), label: 'project agents directory' });
+    out.push({ path: join(dir, '.opencode', 'skills'), label: 'project skills directory' });
+    out.push({ path: join(dir, '.opencode', 'skill'), label: 'project skills directory' });
+    out.push({ path: join(dir, '.agents', 'skills'), label: 'project agent-compatible skills directory' });
+    out.push({ path: join(dir, '.agents', 'skill'), label: 'project agent-compatible skills directory' });
+    out.push({ path: join(dir, '.claude', 'skills'), label: 'project Claude-compatible skills directory' });
+    out.push({ path: join(dir, '.claude', 'skill'), label: 'project Claude-compatible skills directory' });
+    if (await pathExists(join(dir, '.git'))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return out;
+}
+
+function openCodeManagedPreferenceCandidates(): string[] {
+  if (process.platform !== 'darwin') return [];
+  const out = ['/Library/Managed Preferences/ai.opencode.managed.plist'];
+  const usernames = new Set<string>();
+  try {
+    const username = userInfo().username;
+    usernames.add(username || 'user');
+  } catch {
+    // Match OpenCode's fallback candidate and keep fail-closed coverage even if os.userInfo() fails.
+    usernames.add('user');
+  }
+  if (process.env.USER) usernames.add(process.env.USER);
+  usernames.add('user');
+  for (const username of usernames) out.push(join('/Library/Managed Preferences', username, 'ai.opencode.managed.plist'));
+  return Array.from(new Set(out));
+}
+
+function isOpenCodeProviderCredentialEnv(name: string): boolean {
+  if (
+    [
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_SESSION_TOKEN',
+      'AWS_PROFILE',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'AWS_WEB_IDENTITY_TOKEN_FILE',
+      'AWS_ROLE_ARN',
+      'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      'SNOWFLAKE_CORTEX_PAT',
+      'AICORE_SERVICE_KEY'
+    ].includes(name)
+  ) {
+    return true;
+  }
+  return /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i.test(name);
+}
+
+async function inspectOpenCodeEnvCandidate(path: string): Promise<void> {
+  const stat = await lstatIfExists(path);
+  if (!stat) return;
+  if (stat.isSymbolicLink()) {
+    throw new UsageError(`opencode session run 차단: project .env 후보가 symlink 입니다: ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new UsageError(`opencode session run 차단: project .env 후보가 일반 파일이 아닙니다: ${path}`);
+  }
+  let text: string;
+  try {
+    text = await fs.readFile(path, 'utf8');
+  } catch (err) {
+    throw new UsageError(`opencode session run 차단: project .env 후보를 읽을 수 없습니다: ${path}: ${errorText(err)}`);
+  }
+  const envName = findOpenCodeCredentialEnvAssignment(text);
+  if (envName) {
+    throw new UsageError(
+      `opencode session run 차단: project .env 에 ${envName} credential 이 있어 auth.json 격리를 우회할 수 있습니다: ${path}`
+    );
+  }
+}
+
+function findOpenCodeCredentialEnvAssignment(text: string): string | null {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+    if (!match) continue;
+    const name = match[1];
+    if ((OPENCODE_BLOCK_ENV as readonly string[]).includes(name) || isOpenCodeProviderCredentialEnv(name)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+async function inspectOpenCodeConfigCandidate(path: string, label: string): Promise<void> {
+  const stat = await lstatIfExists(path);
+  if (!stat) return;
+  if (stat.isSymbolicLink()) {
+    throw new UsageError(`opencode session run 차단: ${label} 후보가 symlink 입니다: ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new UsageError(`opencode session run 차단: ${label} 후보가 일반 파일이 아닙니다: ${path}`);
+  }
+  let text: string;
+  try {
+    text = await fs.readFile(path, 'utf8');
+  } catch (err) {
+    throw new UsageError(`opencode session run 차단: ${label} 후보를 읽을 수 없습니다: ${path}: ${errorText(err)}`);
+  }
+  const credentialBypass = findOpenCodeCredentialBypass(text);
+  if (credentialBypass) {
+    throw new UsageError(
+      `opencode session run 차단: ${label} 에 ${credentialBypass} 설정이 있어 auth.json 격리를 우회할 수 있습니다: ${path}`
+    );
+  }
+}
+
+function findOpenCodeCredentialBypass(text: string): string | null {
+  const haystack = decodeJsonUnicodeEscapes(text);
+  if (/\{file\s*:/i.test(haystack)) return 'file substitution';
+  if (/\bapiKey\b/i.test(haystack)) return 'apiKey';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'plugin')) return 'plugin';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'npm')) return 'npm';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'mcp')) return 'mcp';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'instructions')) return 'instructions';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'skills')) return 'skills';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'reference')) return 'reference';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'references')) return 'references';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'share')) return 'share';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'agent')) return 'agent';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'mode')) return 'mode';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'permission')) return 'permission';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'tools')) return 'tools';
+  if (hasOpenCodeConfigKeyOrTable(haystack, 'prompt')) return 'prompt';
+  if (
+    ['formatter', 'lsp', 'command', 'shell'].some((key) => hasOpenCodeConfigKeyOrTable(haystack, key))
+  ) {
+    return 'command';
+  }
+  if (
+    /\bprovider\b/i.test(haystack) &&
+    ['baseURL', 'endpoint', 'enterpriseUrl', 'url', 'api'].some((key) => hasOpenCodeConfigKeyOrTable(haystack, key))
+  ) {
+    return 'provider endpoint';
+  }
+  if (/\bprovider\b/i.test(haystack) && hasOpenCodeConfigAssignment(haystack, 'env')) return 'provider env';
+  if (/\bheaders\b/i.test(haystack) && /\b(authorization|api[-_]?key|x-api-key|token|secret)\b/i.test(haystack)) {
+    return 'credential header';
+  }
+  if (hasOpenCodeConfigAssignment(haystack, 'Authorization')) return 'Authorization header';
+  if (/\b(amazon[-_]?bedrock|bedrock)\b/i.test(haystack) && /\bprofile\b/i.test(haystack)) return 'AWS profile';
+  if (
+    /\b(api[-_]?key|authToken|auth_token|serviceKey|service_key|clientSecret|client_secret|bearerToken|bearer_token|accessToken|refreshToken|accessKeyId|secretAccessKey|sessionToken|credentials)\b/i.test(
+      haystack
+    )
+  ) {
+    return 'credential option';
+  }
+  return null;
+}
+
+function hasOpenCodeConfigKeyOrTable(text: string, key: string): boolean {
+  return (
+    hasOpenCodeConfigAssignment(text, key) ||
+    hasOpenCodeTomlTable(text, key) ||
+    hasOpenCodeTomlDottedAssignmentPrefix(text, key)
+  );
+}
+
+function hasOpenCodeConfigAssignment(text: string, key: string): boolean {
+  return new RegExp(`${openCodeConfigKeyPattern(key)}\\s*[:=]`, 'i').test(text);
+}
+
+function hasOpenCodeTomlTable(text: string, key: string): boolean {
+  return new RegExp(`^\\s*\\[\\[?\\s*${openCodeConfigKeyPattern(key)}(?:\\s*\\]\\]?|\\s*\\.)`, 'im').test(text);
+}
+
+function hasOpenCodeTomlDottedAssignmentPrefix(text: string, key: string): boolean {
+  return new RegExp(`^\\s*${openCodeConfigKeyPattern(key)}\\s*\\.`, 'im').test(text);
+}
+
+function openCodeConfigKeyPattern(key: string): string {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `(?:["']${escaped}["']|\\b${escaped}\\b)`;
+}
+
+function decodeJsonUnicodeEscapes(text: string): string {
+  return text
+    .replace(/\\U([0-9a-fA-F]{8})/g, (match, hex: string) => {
+      const codePoint = Number.parseInt(hex, 16);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match;
+    })
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16))
+    );
+}
+
+async function failIfPathExists(path: string, label: string): Promise<void> {
+  if (await lstatIfExists(path)) {
+    throw new UsageError(`opencode session run 차단: ${label} 이 존재해 config 병합 여부를 배제할 수 없습니다: ${path}`);
+  }
+}
+
+async function failIfOpenCodePluginDirectoryExists(path: string, label: string): Promise<void> {
+  const stat = await lstatIfExists(path);
+  if (!stat) return;
+  if (stat.isSymbolicLink()) {
+    throw new UsageError(`opencode session run 차단: ${label} 후보가 symlink 입니다: ${path}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new UsageError(`opencode session run 차단: ${label} 후보가 디렉토리가 아닙니다: ${path}`);
+  }
+  let entries: string[];
+  try {
+    entries = await fs.readdir(path);
+  } catch (err) {
+    throw new UsageError(`opencode session run 차단: ${label} 후보를 읽을 수 없습니다: ${path}: ${errorText(err)}`);
+  }
+  if (entries.length > 0) {
+    throw new UsageError(
+      `opencode session run 차단: ${label} 에 local plugin/tool/command/mode/agent/skill 가 있어 auth.json 격리를 우회할 수 있습니다: ${path}`
+    );
+  }
+}
+
+async function lstatIfExists(path: string): Promise<import('node:fs').Stats | null> {
+  try {
+    return await fs.lstat(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new UsageError(`opencode session run 차단: config 후보 확인 실패: ${path}: ${errorText(err)}`);
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  return (await lstatIfExists(path)) != null;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** 세션 root 별 경고 출력 — OpenCode 의 XDG_DATA_HOME 같은 broad-env EXPERIMENTAL 경고용. */
@@ -984,6 +1566,12 @@ function spawnSessionTarget(
     const args = target.kind === 'shell' ? [] : target.args;
     const env: NodeJS.ProcessEnv = { ...process.env, MAT_SESSION: plan.id };
     for (const root of plan.roots) env[root.env] = root.dir; // 격리 디렉토리 주입 (토큰 미포함, 경로만)
+    if (target.kind === 'command' && target.env) {
+      for (const [name, value] of Object.entries(target.env)) {
+        if (value === undefined) delete env[name];
+        else env[name] = value;
+      }
+    }
     const child = spawn(command, args, { stdio: 'inherit', env });
     childRef.current = child;
 
