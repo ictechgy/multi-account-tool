@@ -635,6 +635,21 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
+    it('src.account 검증 오류는 opaque service 를 raw 로 노출하지 않는다', async () => {
+      const opaqueService = 'a'.repeat(32);
+      const badSrc: KeychainSource = {
+        type: 'keychain',
+        service: opaqueService,
+        account: '',
+        saveAs: 'a.json'
+      };
+      await expect(readSource(badSrc))
+        .rejects.toThrow(/service=\[redacted\]/);
+      await expect(readSource(badSrc))
+        .rejects.not.toThrow(opaqueService);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
     it('writeSource: stored.account 에 NUL 포함 시 hasAccount 가 거부 → USER fallback (NUL 일관성)', async () => {
       // 회귀 가드 (quad-review Codex-2 LOW 합의): stored.account 가 corrupt 로 NUL 포함시
       // 이전엔 hasAccount("\x00user") 가 truthy → spawn argv 에 NUL 전달 → 실패.

@@ -96,7 +96,8 @@ describe('redactMessage', () => {
     ['Authorization:\x1fBearer unit-secret', 'Authorization:?Bearer [redacted]'],
     ['Authorization:\x00Bearer nul-secret', 'Authorization:?Bearer [redacted]'],
     ['Authorization: Bearer sk-abcd\nefghijklmnop', 'Authorization: Bearer [redacted]'],
-    [String.raw`Authorization: Bearer sk-abcd\nefghijklmnop`, 'Authorization: Bearer [redacted]']
+    [String.raw`Authorization: Bearer sk-abcd\nefghijklmnop`, 'Authorization: Bearer [redacted]'],
+    [String.raw`Authorization: Bearer sk-\u{0a}abcdefghijklmnop`, 'Authorization: Bearer [redacted]']
   ])('Authorization Bearer 값을 redact: %s', (raw, expected) => {
     expect(redactMessage(raw)).toBe(expected);
   });

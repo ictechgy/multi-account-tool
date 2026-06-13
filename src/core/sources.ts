@@ -15,7 +15,7 @@
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
-import { KeychainAccountMissingError, redactMessage } from './errors.js';
+import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
 import { readOsKeyringSerialized, writeOsKeyringSerialized, osKeyringExists } from './os-keyring.js';
 import type { KeychainSource, KeychainStored, Source } from './types.js';
@@ -139,7 +139,7 @@ function hasAccount(account?: string): account is string {
 function assertValidKeychainSource(src: KeychainSource): void {
   if (src.account !== undefined && !hasAccount(src.account)) {
     throw new Error(
-      `KeychainSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${src.service}`
+      `KeychainSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${formatServiceForDisplay(src.service)}`
     );
   }
 }

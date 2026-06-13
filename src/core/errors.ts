@@ -170,7 +170,7 @@ export function redactMessage(s: string): string {
   });
 }
 
-function formatServiceForDisplay(service: string): string {
+export function formatServiceForDisplay(service: string): string {
   return redactSecretLikeText(service, {
     secretMarker: '[redacted]',
     jwtMarker: '[redacted-jwt]',

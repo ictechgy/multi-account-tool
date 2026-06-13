@@ -399,6 +399,13 @@ describe('os-keyring — sourceExists / 입력 검증', () => {
     const bad: OsKeyringSource = { type: 'os-keyring', service: 'mat-svc', account: 'a\x00b', saveAs: 'c.json' };
     await expect(readSource(bad)).rejects.toThrow(/유효하지 않습니다/);
   });
+
+  it('account 검증 오류는 opaque service 를 raw 로 노출하지 않는다', async () => {
+    const opaqueService = 'a'.repeat(32);
+    const bad: OsKeyringSource = { type: 'os-keyring', service: opaqueService, account: '', saveAs: 'c.json' };
+    await expect(readSource(bad)).rejects.toThrow(/service=\[redacted\]/);
+    await expect(readSource(bad)).rejects.not.toThrow(opaqueService);
+  });
 });
 
 describe('os-keyring — 미설치 경고 가드 (모듈 1회) (#73)', () => {

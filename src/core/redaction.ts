@@ -28,13 +28,14 @@ const SPLIT_PROVIDER_TOKEN_RE = new RegExp(
 const DQ_VALUE = String.raw`((?:\\.|[^"\\])*)`;
 const SQ_VALUE = String.raw`((?:\\.|[^'\\])*)`;
 const UNQUOTED_VALUE = String.raw`([^\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}"',}\[\]<][^"',}\[\]<]*)`;
+const AUTH_UNQUOTED_VALUE = String.raw`([^\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}"',}\[\]<][^"',\[\]<]*)`;
 const AUTH_SCHEME = String.raw`([A-Za-z][A-Za-z0-9+.-]*)`;
 const AUTH_SCHEME_NC = String.raw`(?:[A-Za-z][A-Za-z0-9+.-]*)`;
 const QUOTED_AUTH_VALUE_RE =
   new RegExp(String.raw`(${AUTH_KEY}${SEP}[:=]${SEP})(?:"${AUTH_SCHEME}${TOKEN_BREAK}${DQ_VALUE}"|'${AUTH_SCHEME}${TOKEN_BREAK}${SQ_VALUE}')`, 'giu');
 const QUOTED_AUTH_TOKEN_RE =
   new RegExp(String.raw`(${AUTH_KEY}${SEP}[:=]${SEP}${AUTH_SCHEME_NC}${TOKEN_BREAK})(?:"${DQ_VALUE}"|'${SQ_VALUE}')`, 'giu');
-const UNQUOTED_AUTH_RE = new RegExp(String.raw`(${AUTH_KEY}${SEP}[:=]${SEP}${AUTH_SCHEME_NC}${TOKEN_BREAK})${UNQUOTED_VALUE}`, 'giu');
+const UNQUOTED_AUTH_RE = new RegExp(String.raw`(${AUTH_KEY}${SEP}[:=]${SEP}${AUTH_SCHEME_NC}${TOKEN_BREAK})${AUTH_UNQUOTED_VALUE}`, 'giu');
 const QUOTED_SECRET_FIELD_RE =
   new RegExp(String.raw`(["']?)\b(${SECRET_FIELD})\b\1(${SEP}[:=]${SEP})(?:"${DQ_VALUE}"|'${SQ_VALUE}')`, 'giu');
 const UNQUOTED_SECRET_FIELD_RE =
