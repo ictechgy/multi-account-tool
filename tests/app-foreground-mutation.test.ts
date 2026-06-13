@@ -128,4 +128,90 @@ describe('TUI foreground mutation stale-active guards', () => {
       }
     });
   });
+
+  it('cancels same-active switch when active changes after render-time no-op decision', async () => {
+    const cli = findCliDef('codex');
+    expect(cli).toBeDefined();
+    await createProfile('codex', 'target');
+    await createProfile('codex', 'other');
+    await setActiveProfile('codex', 'target');
+
+    // Simulate another foreground mutation after the UI rendered target as already active.
+    await setActiveProfile('codex', 'other');
+    mockReadSource.mockResolvedValue('live-other');
+
+    const { actions, dispatch } = dispatchRecorder();
+    const refresh = vi.fn();
+
+    await __testHooks.doSwitch(cli!, 'target', dispatch as any, refresh, 'target');
+
+    expect(mockReadSource).not.toHaveBeenCalled();
+    expect(await getActiveProfile('codex')).toBe('other');
+    expect(refresh).not.toHaveBeenCalled();
+    expect(lastAction(actions)).toMatchObject({
+      type: 'replace',
+      screen: {
+        kind: 'message',
+        tone: 'error',
+        title: '활성 프로필 변경 감지 — 작업 취소'
+      }
+    });
+  });
+
+  it('cancels first import when profiles appear after the prompt was shown', async () => {
+    await createProfile('codex', 'created-elsewhere');
+    mockReadSource.mockResolvedValue('live-created-elsewhere');
+
+    const { actions, dispatch } = dispatchRecorder();
+    const refresh = vi.fn();
+
+    await __testHooks.onFirstImport(
+      ['codex'],
+      { codex: { active: undefined, profiles: [] } },
+      dispatch as any,
+      refresh
+    );
+
+    expect(mockReadSource).not.toHaveBeenCalled();
+    expect(await profileExists('codex', 'default')).toBe(false);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(lastAction(actions)).toMatchObject({
+      type: 'replace',
+      screen: {
+        kind: 'message',
+        tone: 'error',
+        title: '가져오기 실패'
+      }
+    });
+    expect(lastAction(actions).screen.body).toContain('프로필 목록이 변경');
+  });
+
+  it('cancels first import when active changes after the prompt was shown', async () => {
+    await setActiveProfile('codex', 'external-active');
+    mockReadSource.mockResolvedValue('live-external-active');
+
+    const { actions, dispatch } = dispatchRecorder();
+    const refresh = vi.fn();
+
+    await __testHooks.onFirstImport(
+      ['codex'],
+      { codex: { active: undefined, profiles: [] } },
+      dispatch as any,
+      refresh
+    );
+
+    expect(mockReadSource).not.toHaveBeenCalled();
+    expect(await profileExists('codex', 'default')).toBe(false);
+    expect(await getActiveProfile('codex')).toBe('external-active');
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(lastAction(actions)).toMatchObject({
+      type: 'replace',
+      screen: {
+        kind: 'message',
+        tone: 'error',
+        title: '가져오기 실패'
+      }
+    });
+    expect(lastAction(actions).screen.body).toContain('활성 프로필을 변경');
+  });
 });

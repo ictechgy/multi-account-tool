@@ -39,6 +39,7 @@ import {
   topOf,
   type Action,
   type AppData,
+  type FirstImportExpectedState,
   type MessageTone,
   type Screen,
   type State
@@ -130,10 +131,32 @@ async function initialize(dispatch: React.Dispatch<Action>): Promise<void> {
     .filter((id) => (data.profilesByCli[id] ?? []).length === 0);
 
   if (!data.firstImportPromptShown && importable.length > 0) {
-    dispatch({ type: 'replace', screen: { kind: 'firstImport', targets: importable } });
+    dispatch({
+      type: 'replace',
+      screen: {
+        kind: 'firstImport',
+        targets: importable,
+        expectedByCli: buildFirstImportExpectedByCli(importable, data)
+      }
+    });
   } else {
     dispatch({ type: 'replace', screen: { kind: 'home' } });
   }
+}
+
+function buildFirstImportExpectedByCli(
+  targets: string[],
+  data: AppData
+): Record<string, FirstImportExpectedState> {
+  return Object.fromEntries(
+    targets.map((cliId) => [
+      cliId,
+      {
+        active: data.activeByCli[cliId],
+        profiles: profileNames(data.profilesByCli[cliId] ?? [])
+      }
+    ])
+  );
 }
 
 async function loadAllData(): Promise<AppData> {
@@ -166,6 +189,14 @@ async function loadProfilesByCli(): Promise<AppData['profilesByCli']> {
     })
   );
   return result;
+}
+
+function sortedProfileNames(names: string[]): string[] {
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+function profileNames(profiles: { name: string }[]): string[] {
+  return sortedProfileNames(profiles.map((p) => p.name));
 }
 
 // --- 화면 렌더링 ---
@@ -340,7 +371,7 @@ function renderFirstImport(
       body={formatFirstImportBody(targets)}
       yesLabel="모두 가져오기"
       noLabel="건너뛰기"
-      onYes={() => void onFirstImport(screen.targets, dispatch, refresh)}
+      onYes={() => void onFirstImport(screen.targets, screen.expectedByCli, dispatch, refresh)}
       onNo={() => void declineFirstImport(dispatch)}
     />
   );
@@ -405,6 +436,7 @@ async function declineFirstImport(dispatch: React.Dispatch<Action>): Promise<voi
 
 async function onFirstImport(
   targets: string[],
+  expectedByCli: Record<string, FirstImportExpectedState>,
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
@@ -415,6 +447,7 @@ async function onFirstImport(
       const snap = await withCliMutationLock(
         { cliId, profileName: 'default', execMode: 'foreground', affectsCliIds: [cliId] },
         async () => {
+          await assertFirstImportStateUnchanged(cliId, expectedByCli[cliId]);
           const captured = await snapshotLiveToProfile(cliId, 'default');
           await setActiveProfile(cliId, 'default');
           return captured;
@@ -643,6 +676,22 @@ class ActiveProfileChangedError extends Error {
   }
 }
 
+class FirstImportStateChangedError extends Error {
+  constructor(
+    cliId: string,
+    expectedProfiles: string[],
+    currentProfiles: string[]
+  ) {
+    super(
+      `초기 가져오기 dialog 표시 중 ${cliId} 프로필 목록이 변경되었습니다.\n` +
+      `예상: ${formatProfileList(expectedProfiles)} / 현재: ${formatProfileList(currentProfiles)}\n\n` +
+      `다른 작업이 먼저 프로필 상태를 변경해 stale 가져오기를 취소했습니다.\n` +
+      `프로필 목록을 다시 확인 후 재시도하세요.`
+    );
+    this.name = 'FirstImportStateChangedError';
+  }
+}
+
 async function assertActiveProfileUnchanged(
   cliId: string,
   expected: string | undefined
@@ -650,6 +699,29 @@ async function assertActiveProfileUnchanged(
   const current = await getActiveProfile(cliId);
   if (current !== expected) throw new ActiveProfileChangedError(expected, current);
   return current;
+}
+
+async function assertFirstImportStateUnchanged(
+  cliId: string,
+  expected: FirstImportExpectedState | undefined
+): Promise<void> {
+  if (!expected) {
+    throw new FirstImportStateChangedError(cliId, [], await listProfiles(cliId));
+  }
+  await assertActiveProfileUnchanged(cliId, expected.active);
+  const expectedProfiles = sortedProfileNames(expected.profiles);
+  const currentProfiles = sortedProfileNames(await listProfiles(cliId));
+  if (!sameProfileNames(currentProfiles, expectedProfiles)) {
+    throw new FirstImportStateChangedError(cliId, expectedProfiles, currentProfiles);
+  }
+}
+
+function sameProfileNames(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((name, idx) => name === b[idx]);
+}
+
+function formatProfileList(names: string[]): string {
+  return names.length === 0 ? '(없음)' : names.join(', ');
 }
 
 async function doSwitch(
@@ -1047,5 +1119,6 @@ export const __testHooks = {
   doCapture,
   doCreateProfile,
   doDelete,
-  doSwitch
+  doSwitch,
+  onFirstImport
 };

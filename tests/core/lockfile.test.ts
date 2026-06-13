@@ -189,6 +189,34 @@ describe('lockfile.acquireCliLock', () => {
     expect(existsSync(cliLockPath('codex'))).toBe(false);
   });
 
+  it('prepareMetadata 성공 시 finalized info.json 과 lease.body 에 lock-time metadata 를 보존한다', async () => {
+    const lease = await acquireCliLockLease('codex', 'work', {
+      execMode: 'exec',
+      affectsCliIds: ['codex'],
+      prepareMetadata: async () => ({ previousActive: 'default' })
+    });
+
+    try {
+      expect(lease.body.profile).toBe('work');
+      expect(lease.body.execMode).toBe('exec');
+      expect(lease.body.previousActive).toBe('default');
+      expect(lease.body.affectsCliIds).toEqual(['codex']);
+
+      const info = JSON.parse(
+        await fs.readFile(join(cliLockPath('codex'), 'info.json'), 'utf8')
+      );
+      expect(info.profile).toBe('work');
+      expect(info.execMode).toBe('exec');
+      expect(info.previousActive).toBe('default');
+      expect(info.affectsCliIds).toEqual(['codex']);
+      expect(info.token).toBe(lease.body.token);
+    } finally {
+      await lease.release();
+    }
+
+    expect(existsSync(cliLockPath('codex'))).toBe(false);
+  });
+
   it('prepareMetadata 는 live holder 충돌 시 호출되지 않는다', async () => {
     const release = await acquireCliLock('codex', 'holder');
     const prepare = vi.fn();
