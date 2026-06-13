@@ -76,7 +76,8 @@ describe('validateCliDefRaw (순수 validator)', () => {
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '/p', saveAs: '../escape.json' }] }, 'saveAs'],
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '', saveAs: 'a.json' }] }, 'path'],
     [{ id: 'x', name: 'X', sources: [{ type: 'keychain', saveAs: 'a.json' }] }, 'service'],
-    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: '', saveAs: 'a.json' }] }, 'service']
+    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: '', saveAs: 'a.json' }] }, 'service'],
+    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: 'bad\nsvc', saveAs: 'a.json' }] }, '제어']
   ])('잘못된 입력 → error 메시지에 "%s" 포함', (raw, expectedKeyword) => {
     const r = validateCliDefRaw(raw);
     expect(r.def).toBeUndefined();
@@ -182,6 +183,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
     it.each([
       [{ type: 'os-keyring', saveAs: 'a.json' }, 'service'],
       [{ type: 'os-keyring', service: '', saveAs: 'a.json' }, 'service'],
+      [{ type: 'os-keyring', service: 'bad\tsvc', saveAs: 'a.json' }, '제어'],
       [{ type: 'os-keyring', service: 'svc', account: '', saveAs: 'a.json' }, 'account'],
       [{ type: 'os-keyring', service: 'svc', account: 'has\x00nul', saveAs: 'a.json' }, 'NUL'],
       [{ type: 'os-keyring', service: 'svc', backend: 'kwallet', saveAs: 'a.json' }, 'backend'],

@@ -9,6 +9,22 @@ import { createHash } from 'node:crypto';
 
 /** maskIdentifier 의 fingerprint 길이 (hex 자리수). 정책 변경 시 단일 source. */
 const MASK_FINGERPRINT_LENGTH = 12;
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/g;
+const JWT_RE = /eyJ[A-Za-z0-9+/=._-]{20,}/g;
+const LONG_SECRET_RE = /[A-Za-z0-9+/=_-]{50,}/g;
+const PROVIDER_TOKEN_RE =
+  /\b(?:sk-[A-Za-z0-9._-]{8,}|ya29\.[A-Za-z0-9._-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
+const BEARER_VALUE_RE = /\b(authorization\s*[:=]\s*Bearer\s+)([^\["'\s,}]+)/gi;
+const SECRET_FIELD_RE =
+  /\b(access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|secret[_-]?key|client[_-]?secret|clientSecret|auth[_-]?token|bearer[_-]?token|password|token)\b(\s*[:=]\s*["']?)([^\["'\s,}]+)/gi;
+
+function sanitizeDisplayText(s: string): string {
+  return s.replace(CONTROL_CHAR_RE, '?');
+}
+
+function redactSecretFields(s: string): string {
+  return s.replace(BEARER_VALUE_RE, '$1[redacted]').replace(SECRET_FIELD_RE, '$1$2[redacted]');
+}
 
 /**
  * 사용자 식별자 (email / accountId 등) 를 stable SHA-256 fingerprint 로 마스킹.
@@ -154,15 +170,21 @@ export class OsKeyringAccountMissingError extends Error {
 
 /**
  * 자격증명/토큰 후보 시퀀스를 redact.
- * JWT (eyJ...) 패턴과 50자 이상 base64-like 시퀀스를 [redacted] 로 대체하고 500자로 절단.
+ * field-aware token 값, 주요 provider prefix, JWT, 50자+ base64-like 를 가리고 500자로 절단.
  *
  * sources.ts 의 keychain 에러뿐 아니라 모든 사용자 노출 에러에 적용된다.
  */
 export function redactMessage(s: string): string {
-  return s
-    .replace(/eyJ[A-Za-z0-9+/=._-]{20,}/g, '[redacted-jwt]')
-    .replace(/[A-Za-z0-9+/=_-]{50,}/g, '[redacted]')
+  const markerRedacted = sanitizeDisplayText(s)
+    .replace(JWT_RE, '[redacted-jwt]')
+    .replace(PROVIDER_TOKEN_RE, '[redacted]');
+  return redactSecretFields(markerRedacted)
+    .replace(LONG_SECRET_RE, '[redacted]')
     .slice(0, 500);
+}
+
+function formatServiceForDisplay(service: string): string {
+  return redactMessage(service);
 }
 
 /**
@@ -179,9 +201,9 @@ export function errorMessage(err: unknown): string {
  * 사용자 표시용 에러 설명. errorMessage 결과에 타입별 컨텍스트 라인을 덧붙인다.
  *
  * 현재 분기:
- *  - KeychainAccountMissingError: redactMessage 가 긴 base64-like service 명을
- *    [redacted] 로 가릴 수 있으므로, raw `service` 를 별도 라인으로 surface 한다.
- *    사용자가 Keychain Access.app 에서 어떤 service 를 정리할지 식별 가능.
+ *  - KeychainAccountMissingError / OsKeyringAccountMissingError: service 를 별도 라인에
+ *    surface 하되, user-supplied plugin service 일 수 있으므로 control char 제거 +
+ *    secret-like redact 를 적용한다.
  *  - 그 외: errorMessage 와 동일 (단일 라인).
  *
  * 호출자는 multi-line 표시가 허용되는 곳에서만 사용 (TUI message body, mat exec stderr).
@@ -190,7 +212,7 @@ export function errorMessage(err: unknown): string {
 export function describeError(err: unknown): string {
   const msg = errorMessage(err);
   if (err instanceof KeychainAccountMissingError || err instanceof OsKeyringAccountMissingError) {
-    return `${msg}\n→ Service: ${err.service}`;
+    return `${msg}\n→ Service: ${formatServiceForDisplay(err.service)}`;
   }
   return msg;
 }

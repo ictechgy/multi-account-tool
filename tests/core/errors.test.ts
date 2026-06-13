@@ -60,6 +60,26 @@ describe('redactMessage', () => {
     expect(out).toContain(short);
   });
 
+  it('provider prefix 토큰과 credential field 값을 redact', () => {
+    const openAi = 'sk-' + 'fakeOpenAiToken1234';
+    const google = 'ya29.' + 'fakeGoogleToken1234';
+    const out = redactMessage(`OPENAI_API_KEY=${openAi} refresh_token="short-refresh" google=${google}`);
+    expect(out).not.toContain(openAi);
+    expect(out).not.toContain(google);
+    expect(out).not.toContain('short-refresh');
+    expect(out).toContain('OPENAI_API_KEY=[redacted]');
+    expect(out).toContain('refresh_token="[redacted]"');
+  });
+
+  it('Authorization Bearer 값을 redact', () => {
+    const out = redactMessage('Authorization: Bearer bearer-secret-12345');
+    expect(out).toBe('Authorization: Bearer [redacted]');
+  });
+
+  it('제어 문자는 사용자 표시 전 치환한다', () => {
+    expect(redactMessage('first\nsecond\tthird')).toBe('first?second?third');
+  });
+
   it('출력은 500자로 truncate', () => {
     const huge = 'x'.repeat(2000);
     expect(redactMessage(huge).length).toBeLessThanOrEqual(500);
@@ -133,7 +153,7 @@ describe('describeError', () => {
     expect(describeError(null)).toBe(errorMessage(null));
   });
 
-  it('KeychainAccountMissingError 는 message + "→ Service: ${service}" 라인 추가', () => {
+  it('KeychainAccountMissingError 는 message + 안전한 service 표시 라인 추가', () => {
     const err = new KeychainAccountMissingError('com.openai.codex');
     const out = describeError(err);
     expect(out).toContain('→ Service: com.openai.codex');
@@ -142,14 +162,21 @@ describe('describeError', () => {
     expect(out.split('\n')[0]).toBe(errorMessage(err));
   });
 
-  it('긴 plugin service 명: message 는 redact 되지만 → Service 라인은 raw 보존 (핵심 가치)', () => {
-    // redactMessage 가 [redacted] 로 가린 service 를 사용자가 식별할 수 있게 surface.
-    // 이 라인이 없으면 사용자는 어떤 Keychain service 를 정리해야 할지 알 수 없음.
+  it('긴 plugin service 명: message 와 → Service 라인 모두 redact', () => {
+    // plugin service 는 user-supplied 값이라 별도 라인도 secret-like 값을 그대로 노출하지 않는다.
     const longService = 'a'.repeat(60);
     const err = new KeychainAccountMissingError(longService);
     const out = describeError(err);
     expect(out).toContain('[redacted]');
-    expect(out).toContain(`→ Service: ${longService}`);
+    expect(out).toContain('→ Service: [redacted]');
+    expect(out).not.toContain(longService);
+  });
+
+  it('service 표시 라인의 제어 문자를 제거해 로그/터미널 injection 을 막는다', () => {
+    const err = new KeychainAccountMissingError('svc\nINJECT\tNEXT');
+    const out = describeError(err);
+    expect(out).toContain('→ Service: svc?INJECT?NEXT');
+    expect(out.split('\n')).toHaveLength(2);
   });
 });
 

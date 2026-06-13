@@ -39,6 +39,10 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+function hasControlChar(v: string): boolean {
+  return /[\x00-\x1f\x7f]/.test(v);
+}
+
 interface SourceParseResult {
   source?: Source;
   error?: string;
@@ -66,6 +70,9 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   }
   if (typeof raw.service !== 'string' || raw.service.length === 0) {
     return { error: `sources[${idx}].service 는 비어있지 않은 문자열이어야 합니다.` };
+  }
+  if (hasControlChar(raw.service)) {
+    return { error: `sources[${idx}].service 에 제어 문자가 포함될 수 없습니다.` };
   }
   // account 는 선택. 명시되면 typeof string + non-empty + NUL 차단 (방어선).
   // 화이트리스트는 두지 않음 — 사용자가 email/UUID/임의 식별자를 자유롭게 사용 가능.

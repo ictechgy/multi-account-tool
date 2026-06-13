@@ -48,27 +48,22 @@ describe('writeFileAtomic', () => {
     await writeFileAtomic(target, 'ok');
     const entries = await fs.readdir(dir);
     expect(entries).toContain('clean.json');
-    expect(entries.some((e) => e.endsWith('.tmp'))).toBe(false);
+    expect(entries.some((e) => e.includes('.tmp'))).toBe(false);
   });
 
-  it('tmp 가 symlink 면 open 단계에서 거부, decoy 손상 없음', async () => {
-    // writeFileAtomic 의 tmp path 는 `${target}.tmp` 로 결정적이라 미리 symlink 를 깔아두면
-    // open(O_EXCL | O_NOFOLLOW) 가 둘 중 하나로 즉시 실패한다.
-    // - O_EXCL → EEXIST (tmp 가 이미 존재) — 이게 먼저 잡힌다
-    // - O_NOFOLLOW → ELOOP (symlink 추적 차단)
-    // 어느 단계든 핵심 invariant 는 "decoy 가 손상되지 않는다" 이므로 그것을 명시 assert.
+  it('legacy deterministic tmp symlink 를 무시하고 unique tmp 로 쓴다', async () => {
+    // 예전 `${target}.tmp` deterministic 경로를 공격자가 선점해도, 현재 구현은 nonce tmp 를
+    // 사용하므로 decoy 를 건드리지 않고 대상 파일을 정상 교체해야 한다.
     const target = join(dir, 'victim.json');
-    const tmpPath = `${target}.tmp`;
+    const legacyTmpPath = `${target}.tmp`;
     const decoy = join(dir, 'decoy');
     await fs.writeFile(decoy, 'old');
-    await symlink(decoy, tmpPath);
+    await symlink(decoy, legacyTmpPath);
 
-    await expect(writeFileAtomic(target, 'attack')).rejects.toMatchObject({
-      code: expect.stringMatching(/^(EEXIST|ELOOP)$/)
-    });
+    await writeFileAtomic(target, 'attack');
+    expect(await fs.readFile(target, 'utf8')).toBe('attack');
     expect(await fs.readFile(decoy, 'utf8')).toBe('old');
-    // O_EXCL/O_NOFOLLOW 두 보호를 분리 검증하려면 별도 단위 테스트가 필요하나, 본 케이스는
-    // attacker symlink 가 있을 때 decoy 가 보호된다는 end-to-end invariant 만 보장한다.
+    expect((await fs.lstat(legacyTmpPath)).isSymbolicLink()).toBe(true);
   });
 
   it('연속 쓰기에 대해 마지막 쓰기 결과가 보존된다 (rename atomicity)', async () => {
@@ -97,18 +92,10 @@ describe('writeFileAtomic', () => {
     expect(['EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'EPERM']).toContain(caughtCode);
 
     const entries = await fs.readdir(dir);
-    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+    expect(entries.filter((e) => e.includes('.tmp'))).toEqual([]);
   });
 
-  it('동시 쓰기는 race 결과와 무관하게 .tmp 잔존 없음 (intentional all-rejected 도 수용)', async () => {
-    // io-atomic.ts contract (모듈 상단 주석): 호출자가 같은 path 에 동시 호출하지 않도록
-    // 보장해야 한다. 본 테스트는 그 contract 를 위배했을 때의 안전망 검증:
-    //   - 호출 A 가 open(tmp) 성공 후 호출 B 가 open(tmp) → EEXIST → B 가 catch 에서 rm(tmp)
-    //   - 호출 A 의 rename 이 ENOENT 로 실패. 모든 호출이 실패할 수 있음 (intentional contract 위배 결과).
-    //
-    // 의도된 invariant 두 가지를 모두 명시 assert (silent pass 차단):
-    //  1) settled 결과의 모든 rejection 은 알려진 EEXIST/ENOENT 계열 — unexpected 에러 없음
-    //  2) 결과와 무관하게 .tmp 는 dir 에 남지 않음
+  it('동시 쓰기도 unique tmp 때문에 모두 완료되고 tmp 잔존 없음', async () => {
     const target = join(dir, 'concurrent.json');
     const settled = await Promise.allSettled([
       writeFileAtomic(target, 'longer-payload-A'),
@@ -116,19 +103,11 @@ describe('writeFileAtomic', () => {
       writeFileAtomic(target, 'longer-payload-C')
     ]);
 
-    for (const r of settled) {
-      if (r.status === 'rejected') {
-        const code = (r.reason as NodeJS.ErrnoException).code;
-        expect(['EEXIST', 'ENOENT', 'EPERM']).toContain(code);
-      }
-    }
-    const fileExists = await fs.access(target).then(() => true).catch(() => false);
-    if (fileExists) {
-      const content = await fs.readFile(target, 'utf8');
-      expect(['longer-payload-A', 'longer-payload-B', 'longer-payload-C']).toContain(content);
-    }
+    expect(settled.every((r) => r.status === 'fulfilled')).toBe(true);
+    const content = await fs.readFile(target, 'utf8');
+    expect(['longer-payload-A', 'longer-payload-B', 'longer-payload-C']).toContain(content);
     const entries = await fs.readdir(dir);
-    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+    expect(entries.filter((e) => e.includes('.tmp'))).toEqual([]);
   });
 
   it('writeFile 실패 시 열린 handle close 와 tmp cleanup 을 best-effort 로 시도하고 원본 에러를 보존한다', async () => {
@@ -161,11 +140,13 @@ describe('writeFileAtomic', () => {
       const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
 
       await expect(mockedWriteFileAtomic('/tmp/mat-secret.json', 'secret')).rejects.toBe(writeErr);
-      expect(mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
+      expect(mkdir).toHaveBeenCalledWith('/tmp', { recursive: true, mode: 0o700 });
       expect(open).toHaveBeenCalledOnce();
+      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/mat-secret\.json\.tmp-\d+-[0-9a-f]{16}$/);
       expect(handle.writeFile).toHaveBeenCalledWith('secret');
       expect(handle.close).toHaveBeenCalledOnce();
-      expect(rmMock).toHaveBeenCalledWith('/tmp/mat-secret.json.tmp', { force: true });
+      expect(rmMock.mock.calls[0][0]).toMatch(/^\/tmp\/mat-secret\.json\.tmp-\d+-[0-9a-f]{16}$/);
+      expect(rmMock.mock.calls[0][1]).toEqual({ force: true });
       expect(rename).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock('node:fs');

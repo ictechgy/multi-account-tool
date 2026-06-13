@@ -38,6 +38,18 @@ export function parseJsonObject<T>(raw: string): T | null {
  */
 export const DANGEROUS_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
+const JWT_RE = /eyJ[A-Za-z0-9+/=._-]{20,}/g;
+const LONG_SECRET_RE = /[A-Za-z0-9+/=_-]{20,}/g;
+const PROVIDER_TOKEN_RE =
+  /\b(?:sk-[A-Za-z0-9._-]{8,}|ya29\.[A-Za-z0-9._-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
+const BEARER_VALUE_RE = /\b(authorization\s*[:=]\s*Bearer\s+)([^<"'\s,}]+)/gi;
+const SECRET_FIELD_RE =
+  /\b(access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|secret[_-]?key|client[_-]?secret|clientSecret|auth[_-]?token|bearer[_-]?token|password|token)\b(\s*[:=]\s*["']?)([^<"'\s,}]+)/gi;
+
+function redactSecretFields(s: string): string {
+  return s.replace(BEARER_VALUE_RE, '$1<redacted>').replace(SECRET_FIELD_RE, '$1$2<redacted>');
+}
+
 /**
  * adapter 가 throw 한 예외의 message 를 detail 에 surface 하기 전 redact.
  *
@@ -47,13 +59,16 @@ export const DANGEROUS_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constr
  * 대비 (M4 quad-review iter 1 합의).
  *
  * 정책:
+ *  - field-aware token 값 / provider prefix → `<redacted>`
  *  - 20자 이상 base64-like 시퀀스 → `<redacted>` (refresh_token / access_token 류)
  *  - JWT prefix (`eyJ`) → `<redacted-jwt>`
  *  - 120자 truncate (detail UI 폭 cap)
  */
 export function redactSecretLikeMessage(s: string): string {
-  return s
-    .replace(/eyJ[A-Za-z0-9+/=._-]{20,}/g, '<redacted-jwt>')
-    .replace(/[A-Za-z0-9+/=_-]{20,}/g, '<redacted>')
+  const markerRedacted = s
+    .replace(JWT_RE, '<redacted-jwt>')
+    .replace(PROVIDER_TOKEN_RE, '<redacted>');
+  return redactSecretFields(markerRedacted)
+    .replace(LONG_SECRET_RE, '<redacted>')
     .slice(0, 120);
 }
