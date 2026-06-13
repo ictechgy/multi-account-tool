@@ -6,25 +6,10 @@
  */
 
 import { createHash } from 'node:crypto';
+import { redactSecretLikeText } from './redaction.js';
 
 /** maskIdentifier 의 fingerprint 길이 (hex 자리수). 정책 변경 시 단일 source. */
 const MASK_FINGERPRINT_LENGTH = 12;
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/g;
-const JWT_RE = /eyJ[A-Za-z0-9+/=._-]{20,}/g;
-const LONG_SECRET_RE = /[A-Za-z0-9+/=_-]{50,}/g;
-const PROVIDER_TOKEN_RE =
-  /\b(?:sk-[A-Za-z0-9._-]{8,}|ya29\.[A-Za-z0-9._-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
-const BEARER_VALUE_RE = /\b(authorization\s*[:=]\s*Bearer\s+)([^\["'\s,}]+)/gi;
-const SECRET_FIELD_RE =
-  /\b(access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|secret[_-]?key|client[_-]?secret|clientSecret|auth[_-]?token|bearer[_-]?token|password|token)\b(\s*[:=]\s*["']?)([^\["'\s,}]+)/gi;
-
-function sanitizeDisplayText(s: string): string {
-  return s.replace(CONTROL_CHAR_RE, '?');
-}
-
-function redactSecretFields(s: string): string {
-  return s.replace(BEARER_VALUE_RE, '$1[redacted]').replace(SECRET_FIELD_RE, '$1$2[redacted]');
-}
 
 /**
  * 사용자 식별자 (email / accountId 등) 를 stable SHA-256 fingerprint 로 마스킹.
@@ -175,12 +160,12 @@ export class OsKeyringAccountMissingError extends Error {
  * sources.ts 의 keychain 에러뿐 아니라 모든 사용자 노출 에러에 적용된다.
  */
 export function redactMessage(s: string): string {
-  const markerRedacted = sanitizeDisplayText(s)
-    .replace(JWT_RE, '[redacted-jwt]')
-    .replace(PROVIDER_TOKEN_RE, '[redacted]');
-  return redactSecretFields(markerRedacted)
-    .replace(LONG_SECRET_RE, '[redacted]')
-    .slice(0, 500);
+  return redactSecretLikeText(s, {
+    secretMarker: '[redacted]',
+    jwtMarker: '[redacted-jwt]',
+    longSecretMin: 50,
+    maxLength: 500
+  });
 }
 
 function formatServiceForDisplay(service: string): string {

@@ -12,7 +12,7 @@
 
 import { Dirent, promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { writeFileAtomic } from './io-atomic.js';
+import { isAtomicTmpFileName, writeFileAtomic } from './io-atomic.js';
 import { configPath, dataDir } from './paths.js';
 import type { Config } from './types.js';
 
@@ -123,7 +123,7 @@ async function walkAndCleanTmp(dir: string): Promise<void> {
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       await walkAndCleanTmp(full);
-    } else if (e.isFile() && e.name.endsWith('.tmp')) {
+    } else if (e.isFile() && isAtomicTmpFileName(e.name)) {
       await fs.rm(full, { force: true }).catch(() => { /* best-effort */ });
     }
   }

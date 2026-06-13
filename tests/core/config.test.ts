@@ -230,16 +230,20 @@ describe('config', () => {
       await expect(cleanupTmpFiles()).resolves.toBeUndefined();
     });
 
-    it('.tmp 파일은 삭제, .tmp 아닌 파일은 보존', async () => {
+    it('.tmp 및 nonce atomic tmp 파일은 삭제, .tmp 아닌 파일은 보존', async () => {
       const base = dataDir();
       await fs.mkdir(base, { recursive: true, mode: 0o700 });
       await fs.writeFile(join(base, 'stale.tmp'), 'tmp data');
+      await fs.writeFile(join(base, 'config.json.tmp-123-abcdefabcdefabcd'), 'secret tmp data');
       await fs.writeFile(join(base, 'config.json'), '{}');
+      await fs.writeFile(join(base, 'keep.tmp-notatomic'), 'not atomic tmp');
 
       await cleanupTmpFiles();
 
       expect(existsSync(join(base, 'stale.tmp'))).toBe(false);
+      expect(existsSync(join(base, 'config.json.tmp-123-abcdefabcdefabcd'))).toBe(false);
       expect(existsSync(join(base, 'config.json'))).toBe(true);
+      expect(existsSync(join(base, 'keep.tmp-notatomic'))).toBe(true);
     });
 
     it('서브 디렉토리도 재귀로 .tmp 정리', async () => {
@@ -248,11 +252,13 @@ describe('config', () => {
       await fs.mkdir(nested, { recursive: true, mode: 0o700 });
       await fs.writeFile(join(nested, 'auth.json'), '{"v":1}');
       await fs.writeFile(join(nested, 'auth.json.tmp'), 'partial');
+      await fs.writeFile(join(nested, 'auth.json.tmp-456-0123456789abcdef'), 'partial nonce');
 
       await cleanupTmpFiles();
 
       expect(existsSync(join(nested, 'auth.json'))).toBe(true);
       expect(existsSync(join(nested, 'auth.json.tmp'))).toBe(false);
+      expect(existsSync(join(nested, 'auth.json.tmp-456-0123456789abcdef'))).toBe(false);
     });
 
     it('symlink 는 추적하지 않음 (out-of-scope 보호) + symlink 자체도 잔존', async () => {

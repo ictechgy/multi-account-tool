@@ -95,7 +95,11 @@ describe('writeFileAtomic', () => {
     expect(entries.filter((e) => e.includes('.tmp'))).toEqual([]);
   });
 
-  it('동시 쓰기도 unique tmp 때문에 모두 완료되고 tmp 잔존 없음', async () => {
+  it('동시 plain replace 도 unique tmp 로 tmp 잔존 없이 완료된다 (RMW serialization 은 호출자 책임)', async () => {
+    // writeFileAtomic 은 단일 문자열을 atomic replace 하는 primitive 이다. 같은 path 의
+    // read-modify-write 의미 보존/순서화는 config.mutateConfig 같은 상위 호출자 책임.
+    // 여기서는 nonce tmp 간 상호 삭제/ENOENT 회귀가 없고, 실패/성공과 무관하게 tmp 가 남지
+    // 않는다는 파일 쓰기 primitive invariant 만 검증한다.
     const target = join(dir, 'concurrent.json');
     const settled = await Promise.allSettled([
       writeFileAtomic(target, 'longer-payload-A'),

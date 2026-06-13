@@ -68,6 +68,8 @@ describe('validateCliDefRaw (순수 validator)', () => {
     [{}, 'id'],
     [{ id: 'x' }, 'name'],
     [{ id: 'x', name: '' }, 'name'],
+    [{ id: 'x', name: 'bad\u001b[31m', sources: [{ type: 'file', path: '/p', saveAs: 'a.json' }] }, '제어'],
+    [{ id: 'x', name: 'safe\u202Egnp.exe', sources: [{ type: 'file', path: '/p', saveAs: 'a.json' }] }, '제어'],
     [{ id: 'x', name: 'X' }, 'sources'],
     [{ id: 'x', name: 'X', sources: [] }, 'sources'],
     [{ id: '../escape', name: 'X', sources: [{ type: 'file', path: '/p', saveAs: 'a.json' }] }, 'id'],
@@ -77,7 +79,8 @@ describe('validateCliDefRaw (순수 validator)', () => {
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '', saveAs: 'a.json' }] }, 'path'],
     [{ id: 'x', name: 'X', sources: [{ type: 'keychain', saveAs: 'a.json' }] }, 'service'],
     [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: '', saveAs: 'a.json' }] }, 'service'],
-    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: 'bad\nsvc', saveAs: 'a.json' }] }, '제어']
+    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: 'bad\nsvc', saveAs: 'a.json' }] }, '제어'],
+    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: 'bad\u2028svc', saveAs: 'a.json' }] }, '제어']
   ])('잘못된 입력 → error 메시지에 "%s" 포함', (raw, expectedKeyword) => {
     const r = validateCliDefRaw(raw);
     expect(r.def).toBeUndefined();
@@ -185,7 +188,8 @@ describe('validateCliDefRaw (순수 validator)', () => {
       [{ type: 'os-keyring', service: '', saveAs: 'a.json' }, 'service'],
       [{ type: 'os-keyring', service: 'bad\tsvc', saveAs: 'a.json' }, '제어'],
       [{ type: 'os-keyring', service: 'svc', account: '', saveAs: 'a.json' }, 'account'],
-      [{ type: 'os-keyring', service: 'svc', account: 'has\x00nul', saveAs: 'a.json' }, 'NUL'],
+      [{ type: 'os-keyring', service: 'svc', account: 'has\x00nul', saveAs: 'a.json' }, '제어'],
+      [{ type: 'os-keyring', service: 'svc', account: 'safe\u202Egnp.exe', saveAs: 'a.json' }, '제어'],
       [{ type: 'os-keyring', service: 'svc', backend: 'kwallet', saveAs: 'a.json' }, 'backend'],
       [{ type: 'os-keyring', service: 'svc', backend: '', saveAs: 'a.json' }, 'backend']
     ])('os-keyring 거부 케이스 → error 에 "%s" 포함', (source, expectedKeyword) => {
@@ -222,7 +226,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
       [null, '비어있지 않은 문자열'],
       [true, '비어있지 않은 문자열'],
       ['', '비어있지 않은 문자열'],
-      ['has\x00nul', 'NUL']
+      ['has\x00nul', '제어']
     ])('account 가 %j → error "%s" 포함', (badAccount, expectedKeyword) => {
       const r = validateCliDefRaw({
         id: 'bad', name: 'Bad',
@@ -250,6 +254,20 @@ describe('loadUserCliDefs — fs 통합', () => {
     const r = loadUserCliDefs();
     expect(r.defs).toEqual([]);
     expect(r.warnings).toEqual([]);
+  });
+
+  it('on-disk plugin 의 unsafe display char 는 warning 후 skip', async () => {
+    await writePlugin('bad.json', {
+      id: 'bad',
+      name: 'Bad\u001b[31mName',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('name');
+    expect(r.warnings[0]).toContain('제어');
   });
 
   it('빈 디렉토리 → 빈 결과', async () => {

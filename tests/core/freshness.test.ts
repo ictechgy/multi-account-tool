@@ -278,6 +278,36 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(detail).toMatch(/<redacted/);
   });
 
+  it('adapter 예외 msg 의 JSON/quoted Bearer/control-separated secret 도 redact+sanitize', async () => {
+    const access = 'short-access-secret';
+    const password = 'abc def';
+    const bearer = 'quoted-bearer-secret';
+    const newline = 'newline-bearer-secret';
+    const secretMsg =
+      `json={"access_token":"${access}","password":"${password}"} ` +
+      `Authorization: Bearer "${bearer}" Authorization:\nBearer ${newline}`;
+    const adapter: SourceAdapter = {
+      compare: () => {
+        throw new Error(secretMsg);
+      }
+    };
+    registerAdapter('codex', adapter);
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(join(profileDir, 'auth.json'), '{"refresh_token":"same"}');
+    await fs.mkdir(join(tmp.home, '.codex'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.codex/auth.json'), '{"refresh_token":"same"}');
+
+    const report = await inspectLiveFreshness('codex', 'p');
+    const detail = report.sources[0].result.detail ?? '';
+    expect(detail).not.toContain(access);
+    expect(detail).not.toContain(password);
+    expect(detail).not.toContain(bearer);
+    expect(detail).not.toContain(newline);
+    expect(detail).not.toContain('\n');
+    expect(detail).toContain('<redacted>');
+  });
+
   it('multi-source CLI (Gemini) — source 별 결과 독립 보고', async () => {
     const profileDir = join(tmp.home, '.multi-account-tool/profiles/gemini/p');
     await fs.mkdir(profileDir, { recursive: true });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   KeychainAccountMissingError,
+  OsKeyringAccountMissingError,
   UsageError,
   ValidationError,
   describeError,
@@ -71,9 +72,20 @@ describe('redactMessage', () => {
     expect(out).toContain('refresh_token="[redacted]"');
   });
 
-  it('Authorization Bearer 값을 redact', () => {
-    const out = redactMessage('Authorization: Bearer bearer-secret-12345');
-    expect(out).toBe('Authorization: Bearer [redacted]');
+  it('JSON/quoted credential field 값을 redact', () => {
+    const out = redactMessage('{"access_token":"short-secret","password":"abc def"}');
+    expect(out).toBe('{"access_token":"[redacted]","password":"[redacted]"}');
+    expect(out).not.toContain('short-secret');
+    expect(out).not.toContain('abc def');
+  });
+
+  it.each([
+    ['Authorization: Bearer bearer-secret-12345', 'Authorization: Bearer [redacted]'],
+    ['Authorization: Bearer "quoted-secret"', 'Authorization: Bearer "[redacted]"'],
+    ['authorization="Bearer quoted-secret"', 'authorization="Bearer [redacted]"'],
+    ['Authorization:\nBearer newline-secret', 'Authorization:?Bearer [redacted]']
+  ])('Authorization Bearer 값을 redact: %s', (raw, expected) => {
+    expect(redactMessage(raw)).toBe(expected);
   });
 
   it('제어 문자는 사용자 표시 전 치환한다', () => {
@@ -177,6 +189,13 @@ describe('describeError', () => {
     const out = describeError(err);
     expect(out).toContain('→ Service: svc?INJECT?NEXT');
     expect(out.split('\n')).toHaveLength(2);
+  });
+
+  it('OsKeyringAccountMissingError 도 service 라인을 sanitize/redact', () => {
+    const err = new OsKeyringAccountMissingError('svc\u202Egnp.exe', 2);
+    const out = describeError(err);
+    expect(out).toContain('→ Service: svc?gnp.exe');
+    expect(out).not.toContain('\u202E');
   });
 });
 

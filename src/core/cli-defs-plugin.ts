@@ -17,6 +17,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { hasUnsafeDisplayChar } from './display-safety.js';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
 import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from './types.js';
 
@@ -37,10 +38,6 @@ export interface LoadUserCliDefsResult {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function hasControlChar(v: string): boolean {
-  return /[\x00-\x1f\x7f]/.test(v);
 }
 
 interface SourceParseResult {
@@ -71,8 +68,8 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   if (typeof raw.service !== 'string' || raw.service.length === 0) {
     return { error: `sources[${idx}].service 는 비어있지 않은 문자열이어야 합니다.` };
   }
-  if (hasControlChar(raw.service)) {
-    return { error: `sources[${idx}].service 에 제어 문자가 포함될 수 없습니다.` };
+  if (hasUnsafeDisplayChar(raw.service)) {
+    return { error: `sources[${idx}].service 에 제어/서식 문자가 포함될 수 없습니다.` };
   }
   // account 는 선택. 명시되면 typeof string + non-empty + NUL 차단 (방어선).
   // 화이트리스트는 두지 않음 — 사용자가 email/UUID/임의 식별자를 자유롭게 사용 가능.
@@ -81,8 +78,8 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     if (typeof raw.account !== 'string' || raw.account.length === 0) {
       return { error: `sources[${idx}].account 는 비어있지 않은 문자열이어야 합니다.` };
     }
-    if (raw.account.includes('\x00')) {
-      return { error: `sources[${idx}].account 에 NUL 문자가 포함될 수 없습니다.` };
+    if (hasUnsafeDisplayChar(raw.account)) {
+      return { error: `sources[${idx}].account 에 제어/서식 문자가 포함될 수 없습니다.` };
     }
     account = raw.account;
   }
@@ -129,6 +126,9 @@ export function validateCliDefRaw(raw: unknown): ValidateCliDefResult {
   }
   if (typeof raw.name !== 'string' || raw.name.length === 0) {
     return { error: 'name 은 비어있지 않은 문자열이어야 합니다.' };
+  }
+  if (hasUnsafeDisplayChar(raw.name)) {
+    return { error: 'name 에 제어/서식 문자가 포함될 수 없습니다.' };
   }
   if (!Array.isArray(raw.sources) || raw.sources.length === 0) {
     return { error: 'sources 는 비어있지 않은 배열이어야 합니다.' };

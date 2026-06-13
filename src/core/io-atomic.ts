@@ -28,6 +28,10 @@ function atomicTmpPath(path: string): string {
   return `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
 }
 
+export function isAtomicTmpFileName(name: string): boolean {
+  return name.endsWith('.tmp') || /\.tmp-\d+-[0-9a-f]{16}$/.test(name);
+}
+
 /**
  * 파일을 원자적으로 쓴다. 권한 0600, 부모 디렉토리 자동 생성.
  * path 는 이미 expanded 된 절대 경로여야 한다 (`~/` 확장은 호출자 책임).
