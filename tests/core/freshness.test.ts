@@ -283,8 +283,9 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     const password = 'abc def';
     const bearer = 'quoted-bearer-secret';
     const newline = 'newline-bearer-secret';
+    const escaped = 'abc \\"def\\" ghi';
     const secretMsg =
-      `json={"access_token":"${access}","password":"${password}"} ` +
+      `json={"access_token":"${access}","password":"${password}","client_secret":"${escaped}"} ` +
       `Authorization: Bearer "${bearer}" Authorization:\nBearer ${newline}`;
     const adapter: SourceAdapter = {
       compare: () => {
@@ -304,6 +305,8 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(detail).not.toContain(password);
     expect(detail).not.toContain(bearer);
     expect(detail).not.toContain(newline);
+    expect(detail).not.toContain('def');
+    expect(detail).not.toContain('ghi');
     expect(detail).not.toContain('\n');
     expect(detail).toContain('<redacted>');
   });

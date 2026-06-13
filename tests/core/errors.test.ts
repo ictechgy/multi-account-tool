@@ -79,13 +79,29 @@ describe('redactMessage', () => {
     expect(out).not.toContain('abc def');
   });
 
+  it('escaped quote 를 포함한 quoted credential 값을 통째로 redact', () => {
+    const out = redactMessage('{"password":"abc \\"def\\" ghi","authorization":"Bearer abc \\"def\\" ghi"}');
+    expect(out).toBe('{"password":"[redacted]","authorization":"Bearer [redacted]"}');
+    expect(out).not.toContain('def');
+    expect(out).not.toContain('ghi');
+  });
+
   it.each([
     ['Authorization: Bearer bearer-secret-12345', 'Authorization: Bearer [redacted]'],
     ['Authorization: Bearer "quoted-secret"', 'Authorization: Bearer "[redacted]"'],
     ['authorization="Bearer quoted-secret"', 'authorization="Bearer [redacted]"'],
-    ['Authorization:\nBearer newline-secret', 'Authorization:?Bearer [redacted]']
+    ['Authorization:\nBearer newline-secret', 'Authorization:?Bearer [redacted]'],
+    ['Authorization:\x1fBearer unit-secret', 'Authorization:?Bearer [redacted]'],
+    ['Authorization:\x00Bearer nul-secret', 'Authorization:?Bearer [redacted]'],
+    ['Authorization: Bearer sk-abcd\nefghijklmnop', 'Authorization: Bearer [redacted]']
   ])('Authorization Bearer 값을 redact: %s', (raw, expected) => {
     expect(redactMessage(raw)).toBe(expected);
+  });
+
+  it('secret field 값이 control 문자로 split 되어도 tail 을 남기지 않는다', () => {
+    const out = redactMessage('token=eyJabc\n1234567890abcdef0123456789');
+    expect(out).toBe('token=[redacted]');
+    expect(out).not.toContain('1234567890');
   });
 
   it('제어 문자는 사용자 표시 전 치환한다', () => {

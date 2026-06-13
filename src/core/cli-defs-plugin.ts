@@ -17,7 +17,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { hasUnsafeDisplayChar } from './display-safety.js';
+import { hasUnsafeDisplayChar, sanitizeDisplayText } from './display-safety.js';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
 import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from './types.js';
 
@@ -61,6 +61,9 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   if (raw.type === 'file') {
     if (typeof raw.path !== 'string' || raw.path.length === 0) {
       return { error: `sources[${idx}].path 는 비어있지 않은 문자열이어야 합니다.` };
+    }
+    if (hasUnsafeDisplayChar(raw.path)) {
+      return { error: `sources[${idx}].path 에 제어/서식 문자가 포함될 수 없습니다.` };
     }
     const src: FileSource = { type: 'file', path: raw.path, saveAs: safeSaveAs };
     return { source: src };
@@ -162,20 +165,21 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
   for (const name of entries.sort()) {
     if (!name.endsWith('.json')) continue;
     const path = join(dir, name);
+    const displayName = sanitizeDisplayText(name);
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(path, 'utf8'));
     } catch (err) {
-      warnings.push(`${name}: JSON 파싱 실패 — ${(err as Error).message}`);
+      warnings.push(`${displayName}: JSON 파싱 실패 — ${(err as Error).message}`);
       continue;
     }
     const { def, error } = validateCliDefRaw(raw);
     if (error || !def) {
-      warnings.push(`${name}: ${error}`);
+      warnings.push(`${displayName}: ${error}`);
       continue;
     }
     if (seenIds.has(def.id)) {
-      warnings.push(`${name}: id '${def.id}' 가 다른 plugin 과 충돌 — skip`);
+      warnings.push(`${displayName}: id '${def.id}' 가 다른 plugin 과 충돌 — skip`);
       continue;
     }
     seenIds.add(def.id);

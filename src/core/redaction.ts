@@ -12,12 +12,20 @@ const PROVIDER_TOKEN_RE =
   /\b(?:sk-[A-Za-z0-9._-]{8,}|ya29\.[A-Za-z0-9._-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
 const SECRET_FIELD =
   '(?:[A-Za-z0-9]+[_-])*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|secret[_-]?key|client[_-]?secret|auth[_-]?token|bearer[_-]?token|session[_-]?token|password|token|accessToken|refreshToken|idToken|apiKey|secretKey|clientSecret|authToken|bearerToken|sessionToken)';
-const AUTH_KEY = '["\\\']?\\bauthorization\\b["\\\']?';
-const QUOTED_AUTH_VALUE_RE = new RegExp(`(${AUTH_KEY}\\s*[:=]\\s*)(["'])Bearer\\s+[\\s\\S]*?\\2`, 'gi');
-const QUOTED_BEARER_TOKEN_RE = new RegExp(`(${AUTH_KEY}\\s*[:=]\\s*Bearer\\s+)(["'])[\\s\\S]*?\\2`, 'gi');
-const UNQUOTED_BEARER_RE = new RegExp(`(${AUTH_KEY}\\s*[:=]\\s*Bearer\\s+)([^\\s"',}\\[\\]<]+)`, 'gi');
-const QUOTED_SECRET_FIELD_RE = new RegExp(`(["']?)\\b(${SECRET_FIELD})\\b\\1(\\s*[:=]\\s*)(["'])([\\s\\S]*?)\\4`, 'gi');
-const UNQUOTED_SECRET_FIELD_RE = new RegExp(`(["']?)\\b(${SECRET_FIELD})\\b\\1(\\s*[:=]\\s*)([^\\s"',}\\[\\]<]+)`, 'gi');
+const AUTH_KEY = String.raw`["']?\bauthorization\b["']?`;
+const SEP = String.raw`[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]*`;
+const DQ_VALUE = String.raw`((?:\\.|[^"\\])*)`;
+const SQ_VALUE = String.raw`((?:\\.|[^'\\])*)`;
+const UNQUOTED_VALUE = String.raw`([^\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}"',}\[\]<][^"',}\[\]<]*)`;
+const QUOTED_AUTH_VALUE_RE =
+  new RegExp(String.raw`(${AUTH_KEY}${SEP}[:=]${SEP})(?:"Bearer${SEP}${DQ_VALUE}"|'Bearer${SEP}${SQ_VALUE}')`, 'giu');
+const QUOTED_BEARER_TOKEN_RE =
+  new RegExp(String.raw`(${AUTH_KEY}${SEP}[:=]${SEP}Bearer${SEP})(?:"${DQ_VALUE}"|'${SQ_VALUE}')`, 'giu');
+const UNQUOTED_BEARER_RE = new RegExp(String.raw`(${AUTH_KEY}${SEP}[:=]${SEP}Bearer${SEP})${UNQUOTED_VALUE}`, 'giu');
+const QUOTED_SECRET_FIELD_RE =
+  new RegExp(String.raw`(["']?)\b(${SECRET_FIELD})\b\1(${SEP}[:=]${SEP})(?:"${DQ_VALUE}"|'${SQ_VALUE}')`, 'giu');
+const UNQUOTED_SECRET_FIELD_RE =
+  new RegExp(String.raw`(["']?)\b(${SECRET_FIELD})\b\1(${SEP}[:=]${SEP})${UNQUOTED_VALUE}`, 'giu');
 
 export interface RedactSecretLikeOptions {
   secretMarker: string;
@@ -32,15 +40,23 @@ function alreadyRedacted(value: string, opts: RedactSecretLikeOptions): boolean 
 
 function redactBearerValues(s: string, opts: RedactSecretLikeOptions): string {
   return s
-    .replace(QUOTED_AUTH_VALUE_RE, `$1$2Bearer ${opts.secretMarker}$2`)
-    .replace(QUOTED_BEARER_TOKEN_RE, `$1$2${opts.secretMarker}$2`)
+    .replace(QUOTED_AUTH_VALUE_RE, (m, prefix, doubleValue, singleValue) => {
+      const quote = doubleValue !== undefined ? '"' : "'";
+      return alreadyRedacted(doubleValue ?? singleValue, opts) ? m : `${prefix}${quote}Bearer ${opts.secretMarker}${quote}`;
+    })
+    .replace(QUOTED_BEARER_TOKEN_RE, (m, prefix, doubleValue, singleValue) => {
+      const quote = doubleValue !== undefined ? '"' : "'";
+      return alreadyRedacted(doubleValue ?? singleValue, opts) ? m : `${prefix}${quote}${opts.secretMarker}${quote}`;
+    })
     .replace(UNQUOTED_BEARER_RE, `$1${opts.secretMarker}`);
 }
 
 function redactQuotedSecretField(s: string, opts: RedactSecretLikeOptions): string {
-  return s.replace(QUOTED_SECRET_FIELD_RE, (m, kq, key, sep, vq, value) => {
+  return s.replace(QUOTED_SECRET_FIELD_RE, (m, kq, key, sep, doubleValue, singleValue) => {
+    const quote = doubleValue !== undefined ? '"' : "'";
+    const value = doubleValue ?? singleValue;
     if (alreadyRedacted(value, opts)) return m;
-    return `${kq}${key}${kq}${sep}${vq}${opts.secretMarker}${vq}`;
+    return `${kq}${key}${kq}${sep}${quote}${opts.secretMarker}${quote}`;
   });
 }
 

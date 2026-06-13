@@ -77,6 +77,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '/p' }] }, 'saveAs'],
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '/p', saveAs: '../escape.json' }] }, 'saveAs'],
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '', saveAs: 'a.json' }] }, 'path'],
+    [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '/tmp/bad\u202Epath', saveAs: 'a.json' }] }, '제어'],
     [{ id: 'x', name: 'X', sources: [{ type: 'keychain', saveAs: 'a.json' }] }, 'service'],
     [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: '', saveAs: 'a.json' }] }, 'service'],
     [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: 'bad\nsvc', saveAs: 'a.json' }] }, '제어'],
@@ -268,6 +269,16 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]).toContain('name');
     expect(r.warnings[0]).toContain('제어');
+  });
+
+  it('warning 의 plugin 파일명도 display sanitize 된다', async () => {
+    await writePluginRaw('bad\u001b[31m.json', '{not json');
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('bad?[31m.json');
+    expect(r.warnings[0]).not.toContain('\u001b');
   });
 
   it('빈 디렉토리 → 빈 결과', async () => {
