@@ -6,6 +6,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { redactSecretLikeText } from './redaction.js';
 
 /** maskIdentifier 의 fingerprint 길이 (hex 자리수). 정책 변경 시 단일 source. */
 const MASK_FINGERPRINT_LENGTH = 12;
@@ -95,16 +96,17 @@ export class ValidationError extends UsageError {
  * user-supplied service 가 들어올 수 있어 정의 시점에 방어선 적용.
  * Typed caller 는 readonly service 필드로 raw 값에 직접 접근 가능.
  *
- * **UI 권장**: redactMessage 가 50자+ base64-like service 명을 [redacted] 로
- * 가릴 수 있으므로, instanceof 분기 후 `err.service` 를 별도 라인 (또는 안내
- * UI 의 보조 필드) 으로 surface 해야 사용자가 어떤 service 를 정리해야 할지
- * 식별 가능. 현재 BUILTIN service 명은 짧아 redact 가 발생하지 않음.
+ * **UI 권장**: `err.service` 는 raw 필드로 보존되지만 사용자 표시는 describeError 의
+ * Service 라인처럼 sanitize/redact 를 거친 값을 사용한다. BUILTIN service 명은 짧고
+ * printable 이라 그대로 보이며, user-supplied plugin service 는 secret/control-like
+ * 값이면 표시 시 가려진다.
  */
 export class KeychainAccountMissingError extends Error {
   readonly service: string;
   constructor(service: string) {
+    const displayService = formatServiceForDisplay(service);
     super(redactMessage(
-      `keychain service '${service}' 의 기존 항목 account 를 파악할 수 없어 안전 swap 을 거부합니다. ` +
+      `keychain service '${displayService}' 의 기존 항목 account 를 파악할 수 없어 안전 swap 을 거부합니다. ` +
       `service-only 삭제는 동일 service 의 타 항목까지 영향을 줄 수 있어 data loss 위험이 있습니다. ` +
       `Keychain Access.app 에서 해당 service 의 항목을 수동 정리 후 다시 시도하세요.`
     ));
@@ -141,8 +143,9 @@ export class OsKeyringAccountMissingError extends Error {
     const reason = matchCount > 1
       ? `${matchCount} 개의 항목이 매칭되어(collision)`
       : `기존 항목의 account 를 식별할 수 없어`;
+    const displayService = formatServiceForDisplay(service);
     super(redactMessage(
-      `os-keyring service '${service}' 에서 ${reason} 안전 swap 을 거부합니다. ` +
+      `os-keyring service '${displayService}' 에서 ${reason} 안전 swap 을 거부합니다. ` +
       `secret-tool clear 는 매칭 항목을 전부 삭제하므로, account 를 확정하지 못한 채 진행하면 ` +
       `무관한 자격증명까지 손실될 수 있습니다. ` +
       `secret-tool 또는 keyring 관리 도구에서 해당 service 의 항목을 정리 후 다시 시도하세요.`
@@ -154,15 +157,26 @@ export class OsKeyringAccountMissingError extends Error {
 
 /**
  * 자격증명/토큰 후보 시퀀스를 redact.
- * JWT (eyJ...) 패턴과 50자 이상 base64-like 시퀀스를 [redacted] 로 대체하고 500자로 절단.
+ * field-aware token 값, 주요 provider prefix, JWT, 50자+ base64-like 를 가리고 500자로 절단.
  *
  * sources.ts 의 keychain 에러뿐 아니라 모든 사용자 노출 에러에 적용된다.
  */
 export function redactMessage(s: string): string {
-  return s
-    .replace(/eyJ[A-Za-z0-9+/=._-]{20,}/g, '[redacted-jwt]')
-    .replace(/[A-Za-z0-9+/=_-]{50,}/g, '[redacted]')
-    .slice(0, 500);
+  return redactSecretLikeText(s, {
+    secretMarker: '[redacted]',
+    jwtMarker: '[redacted-jwt]',
+    longSecretMin: 50,
+    maxLength: 500
+  });
+}
+
+export function formatServiceForDisplay(service: string): string {
+  return redactSecretLikeText(service, {
+    secretMarker: '[redacted]',
+    jwtMarker: '[redacted-jwt]',
+    longSecretMin: 16,
+    maxLength: 500
+  });
 }
 
 /**
@@ -179,9 +193,9 @@ export function errorMessage(err: unknown): string {
  * 사용자 표시용 에러 설명. errorMessage 결과에 타입별 컨텍스트 라인을 덧붙인다.
  *
  * 현재 분기:
- *  - KeychainAccountMissingError: redactMessage 가 긴 base64-like service 명을
- *    [redacted] 로 가릴 수 있으므로, raw `service` 를 별도 라인으로 surface 한다.
- *    사용자가 Keychain Access.app 에서 어떤 service 를 정리할지 식별 가능.
+ *  - KeychainAccountMissingError / OsKeyringAccountMissingError: service 를 별도 라인에
+ *    surface 하되, user-supplied plugin service 일 수 있으므로 control char 제거 +
+ *    secret-like redact 를 적용한다.
  *  - 그 외: errorMessage 와 동일 (단일 라인).
  *
  * 호출자는 multi-line 표시가 허용되는 곳에서만 사용 (TUI message body, mat exec stderr).
@@ -190,7 +204,7 @@ export function errorMessage(err: unknown): string {
 export function describeError(err: unknown): string {
   const msg = errorMessage(err);
   if (err instanceof KeychainAccountMissingError || err instanceof OsKeyringAccountMissingError) {
-    return `${msg}\n→ Service: ${err.service}`;
+    return `${msg}\n→ Service: ${formatServiceForDisplay(err.service)}`;
   }
   return msg;
 }

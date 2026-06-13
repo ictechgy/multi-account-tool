@@ -48,27 +48,31 @@ describe('writeFileAtomic', () => {
     await writeFileAtomic(target, 'ok');
     const entries = await fs.readdir(dir);
     expect(entries).toContain('clean.json');
-    expect(entries.some((e) => e.endsWith('.tmp'))).toBe(false);
+    expect(entries.some((e) => e.includes('.tmp'))).toBe(false);
   });
 
-  it('tmp 가 symlink 면 open 단계에서 거부, decoy 손상 없음', async () => {
-    // writeFileAtomic 의 tmp path 는 `${target}.tmp` 로 결정적이라 미리 symlink 를 깔아두면
-    // open(O_EXCL | O_NOFOLLOW) 가 둘 중 하나로 즉시 실패한다.
-    // - O_EXCL → EEXIST (tmp 가 이미 존재) — 이게 먼저 잡힌다
-    // - O_NOFOLLOW → ELOOP (symlink 추적 차단)
-    // 어느 단계든 핵심 invariant 는 "decoy 가 손상되지 않는다" 이므로 그것을 명시 assert.
+  it('유효하지만 긴 target basename 도 tmp suffix 때문에 실패하지 않는다', async () => {
+    const target = join(dir, 'a'.repeat(240));
+    await writeFileAtomic(target, 'ok');
+    expect(await fs.readFile(target, 'utf8')).toBe('ok');
+    const entries = await fs.readdir(dir);
+    expect(entries).toContain('a'.repeat(240));
+    expect(entries.some((e) => e.startsWith('.mat-atomic@'))).toBe(false);
+  });
+
+  it('legacy deterministic tmp symlink 를 무시하고 unique tmp 로 쓴다', async () => {
+    // 예전 `${target}.tmp` deterministic 경로를 공격자가 선점해도, 현재 구현은 nonce tmp 를
+    // 사용하므로 decoy 를 건드리지 않고 대상 파일을 정상 교체해야 한다.
     const target = join(dir, 'victim.json');
-    const tmpPath = `${target}.tmp`;
+    const legacyTmpPath = `${target}.tmp`;
     const decoy = join(dir, 'decoy');
     await fs.writeFile(decoy, 'old');
-    await symlink(decoy, tmpPath);
+    await symlink(decoy, legacyTmpPath);
 
-    await expect(writeFileAtomic(target, 'attack')).rejects.toMatchObject({
-      code: expect.stringMatching(/^(EEXIST|ELOOP)$/)
-    });
+    await writeFileAtomic(target, 'attack');
+    expect(await fs.readFile(target, 'utf8')).toBe('attack');
     expect(await fs.readFile(decoy, 'utf8')).toBe('old');
-    // O_EXCL/O_NOFOLLOW 두 보호를 분리 검증하려면 별도 단위 테스트가 필요하나, 본 케이스는
-    // attacker symlink 가 있을 때 decoy 가 보호된다는 end-to-end invariant 만 보장한다.
+    expect((await fs.lstat(legacyTmpPath)).isSymbolicLink()).toBe(true);
   });
 
   it('연속 쓰기에 대해 마지막 쓰기 결과가 보존된다 (rename atomicity)', async () => {
@@ -97,18 +101,14 @@ describe('writeFileAtomic', () => {
     expect(['EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'EPERM']).toContain(caughtCode);
 
     const entries = await fs.readdir(dir);
-    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+    expect(entries.filter((e) => e.includes('.tmp'))).toEqual([]);
   });
 
-  it('동시 쓰기는 race 결과와 무관하게 .tmp 잔존 없음 (intentional all-rejected 도 수용)', async () => {
-    // io-atomic.ts contract (모듈 상단 주석): 호출자가 같은 path 에 동시 호출하지 않도록
-    // 보장해야 한다. 본 테스트는 그 contract 를 위배했을 때의 안전망 검증:
-    //   - 호출 A 가 open(tmp) 성공 후 호출 B 가 open(tmp) → EEXIST → B 가 catch 에서 rm(tmp)
-    //   - 호출 A 의 rename 이 ENOENT 로 실패. 모든 호출이 실패할 수 있음 (intentional contract 위배 결과).
-    //
-    // 의도된 invariant 두 가지를 모두 명시 assert (silent pass 차단):
-    //  1) settled 결과의 모든 rejection 은 알려진 EEXIST/ENOENT 계열 — unexpected 에러 없음
-    //  2) 결과와 무관하게 .tmp 는 dir 에 남지 않음
+  it('동시 plain replace 도 unique tmp 로 tmp 잔존 없이 완료된다 (RMW serialization 은 호출자 책임)', async () => {
+    // writeFileAtomic 은 단일 문자열을 atomic replace 하는 primitive 이다. 같은 path 의
+    // read-modify-write 의미 보존/순서화는 config.mutateConfig 같은 상위 호출자 책임.
+    // 여기서는 nonce tmp 간 상호 삭제/ENOENT 회귀가 없고, 실패/성공과 무관하게 tmp 가 남지
+    // 않는다는 파일 쓰기 primitive invariant 만 검증한다.
     const target = join(dir, 'concurrent.json');
     const settled = await Promise.allSettled([
       writeFileAtomic(target, 'longer-payload-A'),
@@ -116,19 +116,11 @@ describe('writeFileAtomic', () => {
       writeFileAtomic(target, 'longer-payload-C')
     ]);
 
-    for (const r of settled) {
-      if (r.status === 'rejected') {
-        const code = (r.reason as NodeJS.ErrnoException).code;
-        expect(['EEXIST', 'ENOENT', 'EPERM']).toContain(code);
-      }
-    }
-    const fileExists = await fs.access(target).then(() => true).catch(() => false);
-    if (fileExists) {
-      const content = await fs.readFile(target, 'utf8');
-      expect(['longer-payload-A', 'longer-payload-B', 'longer-payload-C']).toContain(content);
-    }
+    expect(settled.every((r) => r.status === 'fulfilled')).toBe(true);
+    const content = await fs.readFile(target, 'utf8');
+    expect(['longer-payload-A', 'longer-payload-B', 'longer-payload-C']).toContain(content);
     const entries = await fs.readdir(dir);
-    expect(entries.filter((e) => e.endsWith('.tmp'))).toEqual([]);
+    expect(entries.filter((e) => e.includes('.tmp'))).toEqual([]);
   });
 
   it('writeFile 실패 시 열린 handle close 와 tmp cleanup 을 best-effort 로 시도하고 원본 에러를 보존한다', async () => {
@@ -161,12 +153,129 @@ describe('writeFileAtomic', () => {
       const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
 
       await expect(mockedWriteFileAtomic('/tmp/mat-secret.json', 'secret')).rejects.toBe(writeErr);
-      expect(mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
+      expect(mkdir).toHaveBeenCalledWith('/tmp', { recursive: true, mode: 0o700 });
       expect(open).toHaveBeenCalledOnce();
+      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
+      expect(open.mock.calls[0][1]).toBe(
+        realFs.constants.O_WRONLY |
+          realFs.constants.O_CREAT |
+          realFs.constants.O_EXCL |
+          realFs.constants.O_NOFOLLOW
+      );
+      expect(open.mock.calls[0][2]).toBe(0o600);
       expect(handle.writeFile).toHaveBeenCalledWith('secret');
       expect(handle.close).toHaveBeenCalledOnce();
-      expect(rmMock).toHaveBeenCalledWith('/tmp/mat-secret.json.tmp', { force: true });
+      expect(rmMock.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
+      expect(rmMock.mock.calls[0][1]).toEqual({ force: true });
       expect(rename).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
+  });
+
+  it('성공 경로에서 file sync 후 rename 하고 parent directory sync 를 best-effort 로 수행한다', async () => {
+    vi.resetModules();
+    const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const fileHandle = {
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      sync: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    const dirHandle = {
+      sync: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    const mkdir = vi.fn().mockResolvedValue(undefined);
+    const open = vi.fn().mockImplementation(async (p: string) => (p === '/tmp' ? dirHandle : fileHandle));
+    const rename = vi.fn().mockResolvedValue(undefined);
+    const rmMock = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('node:fs', () => ({
+      ...realFs,
+      constants: realFs.constants,
+      promises: {
+        mkdir,
+        open,
+        rename,
+        rm: rmMock
+      }
+    }));
+
+    try {
+      const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
+
+      await mockedWriteFileAtomic('/tmp/mat-secret.json', 'secret');
+      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
+      expect(open.mock.calls[0][1]).toBe(
+        realFs.constants.O_WRONLY |
+          realFs.constants.O_CREAT |
+          realFs.constants.O_EXCL |
+          realFs.constants.O_NOFOLLOW
+      );
+      expect(open.mock.calls[0][2]).toBe(0o600);
+      expect(fileHandle.writeFile).toHaveBeenCalledWith('secret');
+      expect(fileHandle.sync).toHaveBeenCalledOnce();
+      expect(fileHandle.close).toHaveBeenCalledOnce();
+      expect(rename).toHaveBeenCalledOnce();
+      expect(open).toHaveBeenCalledWith('/tmp', realFs.constants.O_RDONLY);
+      expect(dirHandle.sync).toHaveBeenCalledOnce();
+      expect(dirHandle.close).toHaveBeenCalledOnce();
+      expect(rmMock).not.toHaveBeenCalled();
+
+      expect(fileHandle.sync.mock.invocationCallOrder[0]).toBeLessThan(fileHandle.close.mock.invocationCallOrder[0]);
+      expect(fileHandle.close.mock.invocationCallOrder[0]).toBeLessThan(rename.mock.invocationCallOrder[0]);
+      expect(rename.mock.invocationCallOrder[0]).toBeLessThan(dirHandle.sync.mock.invocationCallOrder[0]);
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
+  });
+
+  it('durable:false 는 atomic rename/권한은 유지하되 file/parent fsync 를 건너뛴다', async () => {
+    vi.resetModules();
+    const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const fileHandle = {
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      sync: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    const mkdir = vi.fn().mockResolvedValue(undefined);
+    const open = vi.fn().mockResolvedValue(fileHandle);
+    const rename = vi.fn().mockResolvedValue(undefined);
+    const rmMock = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('node:fs', () => ({
+      ...realFs,
+      constants: realFs.constants,
+      promises: {
+        mkdir,
+        open,
+        rename,
+        rm: rmMock
+      }
+    }));
+
+    try {
+      const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
+
+      await mockedWriteFileAtomic('/tmp/mat-scratch.json', 'scratch', { durable: false });
+
+      expect(open).toHaveBeenCalledOnce();
+      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
+      expect(open.mock.calls[0][1]).toBe(
+        realFs.constants.O_WRONLY |
+          realFs.constants.O_CREAT |
+          realFs.constants.O_EXCL |
+          realFs.constants.O_NOFOLLOW
+      );
+      expect(open.mock.calls[0][2]).toBe(0o600);
+      expect(fileHandle.writeFile).toHaveBeenCalledWith('scratch');
+      expect(fileHandle.sync).not.toHaveBeenCalled();
+      expect(fileHandle.close).toHaveBeenCalledOnce();
+      expect(rename).toHaveBeenCalledOnce();
+      expect(open).not.toHaveBeenCalledWith('/tmp', realFs.constants.O_RDONLY);
+      expect(rmMock).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock('node:fs');
       vi.resetModules();

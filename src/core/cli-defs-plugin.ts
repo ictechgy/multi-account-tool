@@ -17,15 +17,28 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { hasUnsafeDisplayChar } from './display-safety.js';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
+import { redactSecretLikeText } from './redaction.js';
 import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from './types.js';
 
 /** plugin 파일이 모이는 디렉토리: `~/.multi-account-tool/cli-defs/`. */
 const CLI_DEFS_DIR_NAME = 'cli-defs';
+const MAX_PLUGIN_NAME_LENGTH = 80;
+const MAX_PLUGIN_SERVICE_LENGTH = 128;
 
 /** 사용자 plugin 디렉토리 절대 경로. */
 function cliDefsDir(): string {
   return join(dataDir(), CLI_DEFS_DIR_NAME);
+}
+
+function formatPluginWarning(text: string): string {
+  return redactSecretLikeText(text, {
+    secretMarker: '[redacted]',
+    jwtMarker: '[redacted-jwt]',
+    longSecretMin: 24,
+    maxLength: 500
+  });
 }
 
 export interface LoadUserCliDefsResult {
@@ -61,11 +74,23 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     if (typeof raw.path !== 'string' || raw.path.length === 0) {
       return { error: `sources[${idx}].path 는 비어있지 않은 문자열이어야 합니다.` };
     }
+    if (hasUnsafeDisplayChar(raw.path)) {
+      return { error: `sources[${idx}].path 에 제어/서식 문자가 포함될 수 없습니다.` };
+    }
     const src: FileSource = { type: 'file', path: raw.path, saveAs: safeSaveAs };
     return { source: src };
   }
   if (typeof raw.service !== 'string' || raw.service.length === 0) {
     return { error: `sources[${idx}].service 는 비어있지 않은 문자열이어야 합니다.` };
+  }
+  if (raw.service.trim() !== raw.service) {
+    return { error: `sources[${idx}].service 는 앞뒤 공백 없이 입력해야 합니다.` };
+  }
+  if (raw.service.length > MAX_PLUGIN_SERVICE_LENGTH) {
+    return { error: `sources[${idx}].service 는 ${MAX_PLUGIN_SERVICE_LENGTH}자 이하여야 합니다.` };
+  }
+  if (hasUnsafeDisplayChar(raw.service)) {
+    return { error: `sources[${idx}].service 에 제어/서식 문자가 포함될 수 없습니다.` };
   }
   // account 는 선택. 명시되면 typeof string + non-empty + NUL 차단 (방어선).
   // 화이트리스트는 두지 않음 — 사용자가 email/UUID/임의 식별자를 자유롭게 사용 가능.
@@ -74,8 +99,8 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     if (typeof raw.account !== 'string' || raw.account.length === 0) {
       return { error: `sources[${idx}].account 는 비어있지 않은 문자열이어야 합니다.` };
     }
-    if (raw.account.includes('\x00')) {
-      return { error: `sources[${idx}].account 에 NUL 문자가 포함될 수 없습니다.` };
+    if (hasUnsafeDisplayChar(raw.account)) {
+      return { error: `sources[${idx}].account 에 제어/서식 문자가 포함될 수 없습니다.` };
     }
     account = raw.account;
   }
@@ -123,6 +148,15 @@ export function validateCliDefRaw(raw: unknown): ValidateCliDefResult {
   if (typeof raw.name !== 'string' || raw.name.length === 0) {
     return { error: 'name 은 비어있지 않은 문자열이어야 합니다.' };
   }
+  if (raw.name.trim() !== raw.name) {
+    return { error: 'name 은 앞뒤 공백 없이 입력해야 합니다.' };
+  }
+  if (raw.name.length > MAX_PLUGIN_NAME_LENGTH) {
+    return { error: `name 은 ${MAX_PLUGIN_NAME_LENGTH}자 이하여야 합니다.` };
+  }
+  if (hasUnsafeDisplayChar(raw.name)) {
+    return { error: 'name 에 제어/서식 문자가 포함될 수 없습니다.' };
+  }
   if (!Array.isArray(raw.sources) || raw.sources.length === 0) {
     return { error: 'sources 는 비어있지 않은 배열이어야 합니다.' };
   }
@@ -148,27 +182,28 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
     entries = readdirSync(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { defs: [], warnings: [] };
-    return { defs: [], warnings: [`cli-defs 디렉토리 읽기 실패: ${(err as Error).message}`] };
+    return { defs: [], warnings: [formatPluginWarning(`cli-defs 디렉토리 읽기 실패: ${(err as Error).message}`)] };
   }
   const defs: CliDef[] = [];
   const seenIds = new Set<string>();
   for (const name of entries.sort()) {
     if (!name.endsWith('.json')) continue;
     const path = join(dir, name);
+    const displayName = formatPluginWarning(name);
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(path, 'utf8'));
     } catch (err) {
-      warnings.push(`${name}: JSON 파싱 실패 — ${(err as Error).message}`);
+      warnings.push(formatPluginWarning(`${displayName}: JSON 파싱 실패 — ${(err as Error).message}`));
       continue;
     }
     const { def, error } = validateCliDefRaw(raw);
     if (error || !def) {
-      warnings.push(`${name}: ${error}`);
+      warnings.push(formatPluginWarning(`${displayName}: ${error ?? 'unknown validation error'}`));
       continue;
     }
     if (seenIds.has(def.id)) {
-      warnings.push(`${name}: id '${def.id}' 가 다른 plugin 과 충돌 — skip`);
+      warnings.push(formatPluginWarning(`${displayName}: id '${def.id}' 가 다른 plugin 과 충돌 — skip`));
       continue;
     }
     seenIds.add(def.id);

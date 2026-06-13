@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   KeychainAccountMissingError,
+  OsKeyringAccountMissingError,
   UsageError,
   ValidationError,
   describeError,
@@ -60,6 +61,96 @@ describe('redactMessage', () => {
     expect(out).toContain(short);
   });
 
+  it('provider prefix 토큰과 credential field 값을 redact', () => {
+    const openAi = 'sk-' + 'fakeOpenAiToken1234';
+    const google = 'ya29.' + 'fakeGoogleToken1234';
+    const out = redactMessage(`OPENAI_API_KEY=${openAi} refresh_token="short-refresh" google=${google}`);
+    expect(out).not.toContain(openAi);
+    expect(out).not.toContain(google);
+    expect(out).not.toContain('short-refresh');
+    expect(out).toContain('OPENAI_API_KEY=[redacted]');
+    expect(out).toContain('refresh_token="[redacted]"');
+  });
+
+  it('JSON/quoted credential field 값을 redact', () => {
+    const out = redactMessage('{"access_token":"short-secret","password":"abc def"}');
+    expect(out).toBe('{"access_token":"[redacted]","password":"[redacted]"}');
+    expect(out).not.toContain('short-secret');
+    expect(out).not.toContain('abc def');
+  });
+
+  it('private key / bare secret / cookie 계열 credential field 값을 redact', () => {
+    expect(redactMessage('{"private_key":"short private secret","ssh_key":"short ssh secret"}'))
+      .toBe('{"private_key":"[redacted]","ssh_key":"[redacted]"}');
+    expect(redactMessage('privateKey=abcd1234')).toBe('privateKey=[redacted]');
+    expect(redactMessage('secret_access_key=abcd1234')).toBe('secret_access_key=[redacted]');
+    expect(redactMessage('aws_secret_access_key=abcd1234')).toBe('aws_secret_access_key=[redacted]');
+    expect(redactMessage('awsSecretAccessKey=abcd1234')).toBe('awsSecretAccessKey=[redacted]');
+    expect(redactMessage('secret=abc def next=context')).toBe('secret=[redacted]');
+    expect(redactMessage('Cookie: sessionid=short-secret; HttpOnly')).toBe('Cookie: [redacted]');
+    expect(redactMessage('Set-Cookie: sessionid=short-secret; HttpOnly')).toBe('Set-Cookie: [redacted]');
+  });
+
+  it('escaped quote 를 포함한 quoted credential 값을 통째로 redact', () => {
+    const out = redactMessage('{"password":"abc \\"def\\" ghi","authorization":"Bearer abc \\"def\\" ghi"}');
+    expect(out).toBe('{"password":"[redacted]","authorization":"Bearer [redacted]"}');
+    expect(out).not.toContain('def');
+    expect(out).not.toContain('ghi');
+  });
+
+  it.each([
+    ['Authorization: Bearer bearer-secret-12345', 'Authorization: Bearer [redacted]'],
+    ['Authorization: Bearer "quoted-secret"', 'Authorization: Bearer "[redacted]"'],
+    ['authorization="Bearer quoted-secret"', 'authorization="Bearer [redacted]"'],
+    ['Authorization: Basic dXNlcjpwYXNz', 'Authorization: Basic [redacted]'],
+    ['authorization="Basic dXNlcjpwYXNz"', 'authorization="Basic [redacted]"'],
+    ['Authorization:\nBearer newline-secret', 'Authorization:?Bearer [redacted]'],
+    ['Authorization:\x1fBearer unit-secret', 'Authorization:?Bearer [redacted]'],
+    ['Authorization:\x00Bearer nul-secret', 'Authorization:?Bearer [redacted]'],
+    ['Authorization: Bearer sk-abcd\nefghijklmnop', 'Authorization: Bearer [redacted]'],
+    [String.raw`Authorization: Bearer sk-abcd\nefghijklmnop`, 'Authorization: Bearer [redacted]'],
+    [String.raw`Authorization: Bearer sk-\u{0a}abcdefghijklmnop`, 'Authorization: Bearer [redacted]']
+  ])('Authorization Bearer 값을 redact: %s', (raw, expected) => {
+    expect(redactMessage(raw)).toBe(expected);
+  });
+
+  it('secret field 값이 control 문자로 split 되어도 tail 을 남기지 않는다', () => {
+    const out = redactMessage('token=eyJabc\n1234567890abcdef0123456789');
+    expect(out).toBe('token=[redacted]');
+    expect(out).not.toContain('1234567890');
+  });
+
+  it('standalone provider/JWT 토큰이 control 문자로 split 되어도 tail 을 남기지 않는다', () => {
+    const provider = redactMessage('failed token sk-proj-\nabcdefghijklmnop');
+    const providerAfterPrefix = redactMessage('failed token sk-\nabcdefghijklmnop');
+    const providerEarly = redactMessage('failed token sk-p\nrojabcdefghijklmnop');
+    const googleAfterPrefix = redactMessage('failed token ya29.\nabcdefghijklmnop');
+    const slackAfterPrefix = redactMessage('failed token xoxb-\nabcdefghijklmnop');
+    const escapedProvider = redactMessage(String.raw`failed token sk-proj-\nabcdefghijklmnop`);
+    const escapedProviderAfterPrefix = redactMessage(String.raw`failed token sk-\nabcdefghijklmnop`);
+    const jwt = redactMessage('failed token eyJhbGciOi\nJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadsig');
+    const jwtAfterPrefix = redactMessage('failed token eyJ\nabcdefghijklmnop1234567890');
+    const jwtEarly = redactMessage('failed token eyJab\n1234567890abcdef');
+    const escapedJwt = redactMessage(String.raw`failed token eyJ\nabcdefghijklmnop1234567890`);
+    const escapedUnicodeJwt = redactMessage(String.raw`failed token eyJ\u000aabcdefghijklmnop1234567890`);
+    expect(provider).toBe('failed token [redacted]');
+    expect(providerAfterPrefix).toBe('failed token [redacted]');
+    expect(providerEarly).toBe('failed token [redacted]');
+    expect(googleAfterPrefix).toBe('failed token [redacted]');
+    expect(slackAfterPrefix).toBe('failed token [redacted]');
+    expect(escapedProvider).toBe('failed token [redacted]');
+    expect(escapedProviderAfterPrefix).toBe('failed token [redacted]');
+    expect(jwt).toBe('failed token [redacted-jwt]');
+    expect(jwtAfterPrefix).toBe('failed token [redacted-jwt]');
+    expect(jwtEarly).toBe('failed token [redacted-jwt]');
+    expect(escapedJwt).toBe('failed token [redacted-jwt]');
+    expect(escapedUnicodeJwt).toBe('failed token [redacted-jwt]');
+  });
+
+  it('제어 문자는 사용자 표시 전 치환한다', () => {
+    expect(redactMessage('first\nsecond\tthird')).toBe('first?second?third');
+  });
+
   it('출력은 500자로 truncate', () => {
     const huge = 'x'.repeat(2000);
     expect(redactMessage(huge).length).toBeLessThanOrEqual(500);
@@ -97,12 +188,20 @@ describe('KeychainAccountMissingError', () => {
 
   it('50자+ base64-like plugin service 는 메시지에서 redact 되지만 service 필드는 raw 보존', () => {
     // CLI def plugin 시나리오: 사용자가 긴 base64-like service 명 등록.
-    // UI 는 instanceof 분기 후 err.service 를 별도 라인으로 surface 하면 정확한 식별 가능.
+    // UI 는 err.service raw 필드를 직접 표시하지 않고 describeError 의 안전 표시를 사용해야 한다.
     const longService = 'a'.repeat(60);
     const err = new KeychainAccountMissingError(longService);
     expect(err.message).toContain('[redacted]');
     expect(err.message).not.toContain(longService);
     expect(err.service).toBe(longService);
+  });
+
+  it('짧은 opaque plugin service 도 메시지에서 redact 되지만 service 필드는 raw 보존', () => {
+    const opaqueService = 'a'.repeat(16);
+    const err = new KeychainAccountMissingError(opaqueService);
+    expect(err.message).toContain('[redacted]');
+    expect(err.message).not.toContain(opaqueService);
+    expect(err.service).toBe(opaqueService);
   });
 
   it('초장문 service 명에도 message 는 500자 이내로 truncate (회귀 가드)', () => {
@@ -133,7 +232,7 @@ describe('describeError', () => {
     expect(describeError(null)).toBe(errorMessage(null));
   });
 
-  it('KeychainAccountMissingError 는 message + "→ Service: ${service}" 라인 추가', () => {
+  it('KeychainAccountMissingError 는 message + 안전한 service 표시 라인 추가', () => {
     const err = new KeychainAccountMissingError('com.openai.codex');
     const out = describeError(err);
     expect(out).toContain('→ Service: com.openai.codex');
@@ -142,14 +241,37 @@ describe('describeError', () => {
     expect(out.split('\n')[0]).toBe(errorMessage(err));
   });
 
-  it('긴 plugin service 명: message 는 redact 되지만 → Service 라인은 raw 보존 (핵심 가치)', () => {
-    // redactMessage 가 [redacted] 로 가린 service 를 사용자가 식별할 수 있게 surface.
-    // 이 라인이 없으면 사용자는 어떤 Keychain service 를 정리해야 할지 알 수 없음.
+  it('긴 plugin service 명: message 와 → Service 라인 모두 redact', () => {
+    // plugin service 는 user-supplied 값이라 별도 라인도 secret-like 값을 그대로 노출하지 않는다.
     const longService = 'a'.repeat(60);
     const err = new KeychainAccountMissingError(longService);
     const out = describeError(err);
     expect(out).toContain('[redacted]');
-    expect(out).toContain(`→ Service: ${longService}`);
+    expect(out).toContain('→ Service: [redacted]');
+    expect(out).not.toContain(longService);
+  });
+
+  it('짧은 opaque plugin service 명도 message 와 → Service 라인 모두 redact', () => {
+    const opaqueService = 'a'.repeat(16);
+    const err = new KeychainAccountMissingError(opaqueService);
+    const out = describeError(err);
+    expect(out).toContain('[redacted]');
+    expect(out).toContain('→ Service: [redacted]');
+    expect(out).not.toContain(opaqueService);
+  });
+
+  it('service 표시 라인의 제어 문자를 제거해 로그/터미널 injection 을 막는다', () => {
+    const err = new KeychainAccountMissingError('svc\nINJECT\tNEXT');
+    const out = describeError(err);
+    expect(out).toContain('→ Service: svc?INJECT?NEXT');
+    expect(out.split('\n')).toHaveLength(2);
+  });
+
+  it('OsKeyringAccountMissingError 도 service 라인을 sanitize/redact', () => {
+    const err = new OsKeyringAccountMissingError('svc\u202Egnp.exe', 2);
+    const out = describeError(err);
+    expect(out).toContain('→ Service: svc?gnp.exe');
+    expect(out).not.toContain('\u202E');
   });
 });
 

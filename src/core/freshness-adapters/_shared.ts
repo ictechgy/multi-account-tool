@@ -10,6 +10,8 @@
  *  - `redactSecretLikeMessage` — adapter throw path 의 detail secret leak 방어 (M4)
  */
 
+import { redactSecretLikeText } from '../redaction.js';
+
 /**
  * JSON object literal 만 안전 parse. 배열 / 원시값 / null / parse 실패는 모두 null.
  *
@@ -47,13 +49,16 @@ export const DANGEROUS_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constr
  * 대비 (M4 quad-review iter 1 합의).
  *
  * 정책:
+ *  - field-aware token 값 / provider prefix → `<redacted>`
  *  - 20자 이상 base64-like 시퀀스 → `<redacted>` (refresh_token / access_token 류)
  *  - JWT prefix (`eyJ`) → `<redacted-jwt>`
  *  - 120자 truncate (detail UI 폭 cap)
  */
 export function redactSecretLikeMessage(s: string): string {
-  return s
-    .replace(/eyJ[A-Za-z0-9+/=._-]{20,}/g, '<redacted-jwt>')
-    .replace(/[A-Za-z0-9+/=_-]{20,}/g, '<redacted>')
-    .slice(0, 120);
+  return redactSecretLikeText(s, {
+    secretMarker: '<redacted>',
+    jwtMarker: '<redacted-jwt>',
+    longSecretMin: 20,
+    maxLength: 120
+  });
 }

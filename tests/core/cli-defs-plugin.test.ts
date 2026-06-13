@@ -60,6 +60,47 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.def?.sources).toHaveLength(1);
   });
 
+  it('plugin name/service 는 정확한 최대 길이(80/128자)를 허용한다', () => {
+    const name = 'N'.repeat(80);
+    const service = 's'.repeat(128);
+
+    const r = validateCliDefRaw({
+      id: 'boundary-cli',
+      name,
+      sources: [{ type: 'keychain', service, saveAs: 'credentials.json' }]
+    });
+
+    expect(r.error).toBeUndefined();
+    expect(r.def?.name).toBe(name);
+    expect(r.def?.sources[0]).toMatchObject({ type: 'keychain', service });
+  });
+
+  it('plugin warning redaction 은 24자 opaque 값을 threshold 에서 redacts 한다', async () => {
+    const tmp = await setupTmpHome();
+    try {
+      const opaque = 'A'.repeat(24);
+      await writePlugin('a-threshold.json', {
+        id: opaque,
+        name: 'A',
+        sources: [{ type: 'file', path: '/a', saveAs: 'a.json' }]
+      });
+      await writePlugin('b-threshold.json', {
+        id: opaque,
+        name: 'B',
+        sources: [{ type: 'file', path: '/b', saveAs: 'b.json' }]
+      });
+
+      const r = loadUserCliDefs();
+      expect(r.defs.map((d) => d.id)).toEqual([opaque]);
+      expect(r.warnings).toHaveLength(1);
+      expect(r.warnings[0]).toContain('[redacted]');
+      expect(r.warnings[0]).not.toContain(opaque);
+    } finally {
+      resetCliDefCache();
+      await tmp.cleanup();
+    }
+  });
+
   it.each([
     [null, '최상위'],
     [42, '최상위'],
@@ -68,6 +109,8 @@ describe('validateCliDefRaw (순수 validator)', () => {
     [{}, 'id'],
     [{ id: 'x' }, 'name'],
     [{ id: 'x', name: '' }, 'name'],
+    [{ id: 'x', name: 'bad\u001b[31m', sources: [{ type: 'file', path: '/p', saveAs: 'a.json' }] }, '제어'],
+    [{ id: 'x', name: 'safe\u202Egnp.exe', sources: [{ type: 'file', path: '/p', saveAs: 'a.json' }] }, '제어'],
     [{ id: 'x', name: 'X' }, 'sources'],
     [{ id: 'x', name: 'X', sources: [] }, 'sources'],
     [{ id: '../escape', name: 'X', sources: [{ type: 'file', path: '/p', saveAs: 'a.json' }] }, 'id'],
@@ -75,8 +118,11 @@ describe('validateCliDefRaw (순수 validator)', () => {
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '/p' }] }, 'saveAs'],
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '/p', saveAs: '../escape.json' }] }, 'saveAs'],
     [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '', saveAs: 'a.json' }] }, 'path'],
+    [{ id: 'x', name: 'X', sources: [{ type: 'file', path: '/tmp/bad\u202Epath', saveAs: 'a.json' }] }, '제어'],
     [{ id: 'x', name: 'X', sources: [{ type: 'keychain', saveAs: 'a.json' }] }, 'service'],
-    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: '', saveAs: 'a.json' }] }, 'service']
+    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: '', saveAs: 'a.json' }] }, 'service'],
+    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: 'bad\nsvc', saveAs: 'a.json' }] }, '제어'],
+    [{ id: 'x', name: 'X', sources: [{ type: 'keychain', service: 'bad\u2028svc', saveAs: 'a.json' }] }, '제어']
   ])('잘못된 입력 → error 메시지에 "%s" 포함', (raw, expectedKeyword) => {
     const r = validateCliDefRaw(raw);
     expect(r.def).toBeUndefined();
@@ -182,8 +228,10 @@ describe('validateCliDefRaw (순수 validator)', () => {
     it.each([
       [{ type: 'os-keyring', saveAs: 'a.json' }, 'service'],
       [{ type: 'os-keyring', service: '', saveAs: 'a.json' }, 'service'],
+      [{ type: 'os-keyring', service: 'bad\tsvc', saveAs: 'a.json' }, '제어'],
       [{ type: 'os-keyring', service: 'svc', account: '', saveAs: 'a.json' }, 'account'],
-      [{ type: 'os-keyring', service: 'svc', account: 'has\x00nul', saveAs: 'a.json' }, 'NUL'],
+      [{ type: 'os-keyring', service: 'svc', account: 'has\x00nul', saveAs: 'a.json' }, '제어'],
+      [{ type: 'os-keyring', service: 'svc', account: 'safe\u202Egnp.exe', saveAs: 'a.json' }, '제어'],
       [{ type: 'os-keyring', service: 'svc', backend: 'kwallet', saveAs: 'a.json' }, 'backend'],
       [{ type: 'os-keyring', service: 'svc', backend: '', saveAs: 'a.json' }, 'backend']
     ])('os-keyring 거부 케이스 → error 에 "%s" 포함', (source, expectedKeyword) => {
@@ -220,7 +268,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
       [null, '비어있지 않은 문자열'],
       [true, '비어있지 않은 문자열'],
       ['', '비어있지 않은 문자열'],
-      ['has\x00nul', 'NUL']
+      ['has\x00nul', '제어']
     ])('account 가 %j → error "%s" 포함', (badAccount, expectedKeyword) => {
       const r = validateCliDefRaw({
         id: 'bad', name: 'Bad',
@@ -248,6 +296,102 @@ describe('loadUserCliDefs — fs 통합', () => {
     const r = loadUserCliDefs();
     expect(r.defs).toEqual([]);
     expect(r.warnings).toEqual([]);
+  });
+
+  it('on-disk plugin 의 unsafe display char 는 warning 후 skip', async () => {
+    await writePlugin('bad.json', {
+      id: 'bad',
+      name: 'Bad\u001b[31mName',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('name');
+    expect(r.warnings[0]).toContain('제어');
+  });
+
+  it('plugin name 은 앞뒤 공백과 과도한 길이를 거부한다', async () => {
+    await writePlugin('space-name.json', {
+      id: 'spacename',
+      name: ' Bad',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+    await writePlugin('long-name.json', {
+      id: 'longname',
+      name: 'N'.repeat(81),
+      sources: [{ type: 'file', path: '/tmp/y', saveAs: 'y.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.join('\n')).toContain('name');
+    expect(r.warnings.join('\n')).toContain('공백');
+    expect(r.warnings.join('\n')).toContain('80자');
+  });
+
+  it('plugin service 는 앞뒤 공백과 과도한 길이를 거부한다', async () => {
+    await writePlugin('space-service.json', {
+      id: 'spacesvc',
+      name: 'Space Svc',
+      sources: [{ type: 'keychain', service: ' svc', saveAs: 'x.json' }]
+    });
+    await writePlugin('long-service.json', {
+      id: 'longsvc',
+      name: 'Long Svc',
+      sources: [{ type: 'keychain', service: 's'.repeat(129), saveAs: 'y.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.join('\n')).toContain('service');
+    expect(r.warnings.join('\n')).toContain('공백');
+    expect(r.warnings.join('\n')).toContain('128자');
+  });
+
+  it('warning 의 plugin 파일명도 display sanitize 된다', async () => {
+    await writePluginRaw('bad\u001b[31m.json', '{not json');
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('bad?[31m.json');
+    expect(r.warnings[0]).not.toContain('\u001b');
+  });
+
+  it('warning 의 validation error 본문도 display sanitize 된다', async () => {
+    await writePlugin('bad-id.json', {
+      id: 'bad\u001b[31m',
+      name: 'Bad',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('bad?[31m');
+    expect(r.warnings[0]).not.toContain('\u001b');
+  });
+
+  it('warning 의 plugin 파일명과 validation error 본문도 secret-like redact 된다', async () => {
+    const providerToken = 'sk-abcdefghijklmnop';
+    const longOpaqueId = 'A'.repeat(60);
+    await writePluginRaw(`${providerToken}.json`, '{not json');
+    await writePlugin('bad-long-id.json', {
+      id: longOpaqueId,
+      name: 'Bad',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.join('\n')).toContain('[redacted]');
+    expect(r.warnings.join('\n')).not.toContain(providerToken);
+    expect(r.warnings.join('\n')).not.toContain(longOpaqueId);
   });
 
   it('빈 디렉토리 → 빈 결과', async () => {
@@ -315,6 +459,30 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]).toContain('b-x.json');
     expect(r.warnings[0]).toContain('dup');
+  });
+
+  it('plugin id 충돌 warning 의 secret-like id 는 redact 된다', async () => {
+    const providerId = 'sk-abcdefghijklmnop';
+    await writePlugin('a-secret.json', { id: providerId, name: 'A', sources: [{ type: 'file', path: '/a', saveAs: 'a.json' }] });
+    await writePlugin('b-secret.json', { id: providerId, name: 'B', sources: [{ type: 'file', path: '/b', saveAs: 'b.json' }] });
+    const r = loadUserCliDefs();
+    expect(r.defs.map(d => d.id)).toEqual([providerId]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('b-secret.json');
+    expect(r.warnings[0]).toContain('[redacted]');
+    expect(r.warnings[0]).not.toContain(providerId);
+  });
+
+  it('plugin id 충돌 warning 의 32자 opaque id 도 redact 된다', async () => {
+    const opaqueId = 'A'.repeat(32);
+    await writePlugin('a-opaque.json', { id: opaqueId, name: 'A', sources: [{ type: 'file', path: '/a', saveAs: 'a.json' }] });
+    await writePlugin('b-opaque.json', { id: opaqueId, name: 'B', sources: [{ type: 'file', path: '/b', saveAs: 'b.json' }] });
+    const r = loadUserCliDefs();
+    expect(r.defs.map(d => d.id)).toEqual([opaqueId]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('b-opaque.json');
+    expect(r.warnings[0]).toContain('[redacted]');
+    expect(r.warnings[0]).not.toContain(opaqueId);
   });
 });
 

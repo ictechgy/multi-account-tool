@@ -263,7 +263,7 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
               `먼저 mat 으로 자격증명을 캡처하세요.`
           );
         }
-        await writeFileAtomic(cred.absInSession, value);
+        await writeFileAtomic(cred.absInSession, value, { durable: false });
       }
       // (나중) allow-list 복사 — 양측 경로 봉쇄 검증 (스펙 §4.2, copy-isolate #72).
       for (const shareRel of root.share) {
@@ -300,12 +300,12 @@ async function materializeCommandOnlyFiles(plan: SessionPlan): Promise<void> {
           `먼저 mat 으로 자격증명을 캡처하세요.`
       );
     }
-    await writeFileAtomic(cred.absInSession, value);
+    await writeFileAtomic(cred.absInSession, value, { durable: false });
   }
 
   for (const file of extras) {
     assertLexicallyContained(commandDir, file.absInSession);
-    await writeFileAtomic(file.absInSession, file.content);
+    await writeFileAtomic(file.absInSession, file.content, { durable: false });
   }
 }
 
@@ -389,7 +389,7 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
   } finally {
     await handle.close();
   }
-  await writeFileAtomic(copyPath, content);
+  await writeFileAtomic(copyPath, content, { durable: false });
 }
 
 /**

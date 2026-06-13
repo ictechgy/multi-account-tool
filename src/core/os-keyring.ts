@@ -30,7 +30,7 @@
  */
 
 import { runCommand, type CmdResult } from './sources.js';
-import { OsKeyringAccountMissingError, redactMessage } from './errors.js';
+import { OsKeyringAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import type { KeychainStored, OsKeyringSource } from './types.js';
 
 /** Linux `secret-tool` 절대경로. PATH shim 공격을 방지 (SECURITY_BIN 미러). */
@@ -112,7 +112,7 @@ function hasAccount(account?: string): account is string {
 function assertValidOsKeyringSource(src: OsKeyringSource): void {
   if (src.account !== undefined && !hasAccount(src.account)) {
     throw new Error(
-      `OsKeyringSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${src.service}`
+      `OsKeyringSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${formatServiceForDisplay(src.service)}`
     );
   }
 }
