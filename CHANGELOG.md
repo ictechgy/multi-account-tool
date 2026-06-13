@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-13
+
+v0.5.0 이후 세션 command-run 확장, OpenCode/Aider command-scoped 경계,
+그리고 foreground/session credential boundary 보안 하드닝을 묶은 patch 릴리스.
+
+### Added
+
+- **`mat session run` command-scoped 실행 프레임워크 (#84)** — shell 을 열지 않고
+  builtin CLI executable 을 직접 spawn 하며 `[cli-args...]` 를 argv 로 전달하는 세션
+  실행 경로 추가. `session start` 와 같은 materialize → env 주입 → 재캡처 → cleanup
+  lifecycle 을 공유한다.
+- **OpenCode 세션 지원 확대 (#78/#85)** — `XDG_DATA_HOME` 기반 experimental
+  `session start` 와, 더 좁은 `mat session run opencode ...` safer-run 경계 추가.
+  local config/env/plugin/tool/MCP/command/argv 우회 채널을 preflight hard-stop 하고
+  `.claude` prompt/skills fallback 을 차단한다.
+- **Aider partial-run 지원 (#86)** — `mat session run aider` 가 command-only 세션
+  디렉토리에 profile `aider.yml` 과 빈 `.env` 를 materialize 한 뒤 forced
+  `--config`/`--env-file` 로 실행한다. `session start aider` 는 계속 미지원.
+- **세션 지원 CLI 확대 (#77)** — Gemini CLI `envSubdir` 경로와 Linux Claude
+  `CLAUDE_CONFIG_DIR` 세션 격리 지원 추가.
+
+### Changed
+
+- **세션/문서 사이트 갱신 (#83/#92)** — README/README.ko 와 생성된 site 문서에
+  `session run`, OpenCode/Aider 한계, ambient credential env scrub 범위를 명확화.
+- **CI 액션 핀 갱신 (#82)** — `actions/checkout` 을 6.0.3 commit SHA 로 갱신.
+
+### Fixed
+
+- **allow-list path 오류 sanitize (#81)** — 세션 allow-list 경로 오류가 민감 경로를
+  그대로 노출하지 않도록 보강.
+- **same-active missing profile guard (#89)** — 이미 활성으로 표시된 profile 로
+  switch 할 때 실제 profile 디렉토리가 없으면 silent success 대신 실패 처리.
+
+### Security
+
+- **atomic write / redaction hardening (#87)** — atomic write 및 오류/로그 redaction
+  경계 보강.
+- **foreground credential mutation 직렬화 (#88)** — foreground credential mutation 을
+  전역 lock 으로 serialize 하고 stale async context 회귀를 차단.
+- **session child credential env scrub (#90/#91/#92)** — `mat session start/run`
+  자식이 parent shell 의 고신뢰 provider/API endpoint env 및 AWS/GCP credential-chain
+  env 를 상속해 profile copy-isolation 을 우회하지 못하게 scrub/hardening. Kimi,
+  Qwen/DashScope, OpenCode env/config 우회 키를 포함하고, 전체 deny/hardening
+  정책과 `target.env`/root env merge order 를 black-box 테스트로 고정.
+
 ## [0.5.0] - 2026-06-02
 
 세션별 자격증명 격리(`mat session`) 출시 + macOS 전용 keychain 을 3-OS keyring
