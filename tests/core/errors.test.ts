@@ -79,6 +79,14 @@ describe('redactMessage', () => {
     expect(out).not.toContain('abc def');
   });
 
+  it('private key / bare secret / cookie 계열 credential field 값을 redact', () => {
+    expect(redactMessage('{"private_key":"short private secret","ssh_key":"short ssh secret"}'))
+      .toBe('{"private_key":"[redacted]","ssh_key":"[redacted]"}');
+    expect(redactMessage('secret=abc def next=context')).toBe('secret=[redacted]');
+    expect(redactMessage('Cookie: sessionid=short-secret; HttpOnly')).toBe('Cookie: [redacted]');
+    expect(redactMessage('Set-Cookie: sessionid=short-secret; HttpOnly')).toBe('Set-Cookie: [redacted]');
+  });
+
   it('escaped quote 를 포함한 quoted credential 값을 통째로 redact', () => {
     const out = redactMessage('{"password":"abc \\"def\\" ghi","authorization":"Bearer abc \\"def\\" ghi"}');
     expect(out).toBe('{"password":"[redacted]","authorization":"Bearer [redacted]"}');
