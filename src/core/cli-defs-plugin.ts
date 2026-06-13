@@ -17,8 +17,9 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { hasUnsafeDisplayChar, sanitizeDisplayText } from './display-safety.js';
+import { hasUnsafeDisplayChar } from './display-safety.js';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
+import { redactSecretLikeText } from './redaction.js';
 import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from './types.js';
 
 /** plugin 파일이 모이는 디렉토리: `~/.multi-account-tool/cli-defs/`. */
@@ -27,6 +28,15 @@ const CLI_DEFS_DIR_NAME = 'cli-defs';
 /** 사용자 plugin 디렉토리 절대 경로. */
 function cliDefsDir(): string {
   return join(dataDir(), CLI_DEFS_DIR_NAME);
+}
+
+function formatPluginWarning(text: string): string {
+  return redactSecretLikeText(text, {
+    secretMarker: '[redacted]',
+    jwtMarker: '[redacted-jwt]',
+    longSecretMin: 50,
+    maxLength: 500
+  });
 }
 
 export interface LoadUserCliDefsResult {
@@ -158,28 +168,28 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
     entries = readdirSync(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { defs: [], warnings: [] };
-    return { defs: [], warnings: [`cli-defs 디렉토리 읽기 실패: ${(err as Error).message}`] };
+    return { defs: [], warnings: [formatPluginWarning(`cli-defs 디렉토리 읽기 실패: ${(err as Error).message}`)] };
   }
   const defs: CliDef[] = [];
   const seenIds = new Set<string>();
   for (const name of entries.sort()) {
     if (!name.endsWith('.json')) continue;
     const path = join(dir, name);
-    const displayName = sanitizeDisplayText(name);
+    const displayName = formatPluginWarning(name);
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(path, 'utf8'));
     } catch (err) {
-      warnings.push(`${displayName}: JSON 파싱 실패 — ${(err as Error).message}`);
+      warnings.push(formatPluginWarning(`${displayName}: JSON 파싱 실패 — ${(err as Error).message}`));
       continue;
     }
     const { def, error } = validateCliDefRaw(raw);
     if (error || !def) {
-      warnings.push(`${displayName}: ${sanitizeDisplayText(error ?? 'unknown validation error')}`);
+      warnings.push(formatPluginWarning(`${displayName}: ${error ?? 'unknown validation error'}`));
       continue;
     }
     if (seenIds.has(def.id)) {
-      warnings.push(`${displayName}: id '${def.id}' 가 다른 plugin 과 충돌 — skip`);
+      warnings.push(formatPluginWarning(`${displayName}: id '${def.id}' 가 다른 plugin 과 충돌 — skip`));
       continue;
     }
     seenIds.add(def.id);

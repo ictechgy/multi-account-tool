@@ -295,6 +295,24 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings[0]).not.toContain('\u001b');
   });
 
+  it('warning 의 plugin 파일명과 validation error 본문도 secret-like redact 된다', async () => {
+    const providerToken = 'sk-abcdefghijklmnop';
+    const longOpaqueId = 'A'.repeat(60);
+    await writePluginRaw(`${providerToken}.json`, '{not json');
+    await writePlugin('bad-long-id.json', {
+      id: longOpaqueId,
+      name: 'Bad',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.join('\n')).toContain('[redacted]');
+    expect(r.warnings.join('\n')).not.toContain(providerToken);
+    expect(r.warnings.join('\n')).not.toContain(longOpaqueId);
+  });
+
   it('빈 디렉토리 → 빈 결과', async () => {
     await fs.mkdir(cliDefsDir(), { recursive: true });
     const r = loadUserCliDefs();
@@ -360,6 +378,18 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]).toContain('b-x.json');
     expect(r.warnings[0]).toContain('dup');
+  });
+
+  it('plugin id 충돌 warning 의 secret-like id 는 redact 된다', async () => {
+    const providerId = 'sk-abcdefghijklmnop';
+    await writePlugin('a-secret.json', { id: providerId, name: 'A', sources: [{ type: 'file', path: '/a', saveAs: 'a.json' }] });
+    await writePlugin('b-secret.json', { id: providerId, name: 'B', sources: [{ type: 'file', path: '/b', saveAs: 'b.json' }] });
+    const r = loadUserCliDefs();
+    expect(r.defs.map(d => d.id)).toEqual([providerId]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('b-secret.json');
+    expect(r.warnings[0]).toContain('[redacted]');
+    expect(r.warnings[0]).not.toContain(providerId);
   });
 });
 

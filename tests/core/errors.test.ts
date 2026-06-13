@@ -166,12 +166,20 @@ describe('KeychainAccountMissingError', () => {
 
   it('50자+ base64-like plugin service 는 메시지에서 redact 되지만 service 필드는 raw 보존', () => {
     // CLI def plugin 시나리오: 사용자가 긴 base64-like service 명 등록.
-    // UI 는 instanceof 분기 후 err.service 를 별도 라인으로 surface 하면 정확한 식별 가능.
+    // UI 는 err.service raw 필드를 직접 표시하지 않고 describeError 의 안전 표시를 사용해야 한다.
     const longService = 'a'.repeat(60);
     const err = new KeychainAccountMissingError(longService);
     expect(err.message).toContain('[redacted]');
     expect(err.message).not.toContain(longService);
     expect(err.service).toBe(longService);
+  });
+
+  it('짧은 opaque plugin service 도 메시지에서 redact 되지만 service 필드는 raw 보존', () => {
+    const opaqueService = 'a'.repeat(32);
+    const err = new KeychainAccountMissingError(opaqueService);
+    expect(err.message).toContain('[redacted]');
+    expect(err.message).not.toContain(opaqueService);
+    expect(err.service).toBe(opaqueService);
   });
 
   it('초장문 service 명에도 message 는 500자 이내로 truncate (회귀 가드)', () => {
@@ -219,6 +227,15 @@ describe('describeError', () => {
     expect(out).toContain('[redacted]');
     expect(out).toContain('→ Service: [redacted]');
     expect(out).not.toContain(longService);
+  });
+
+  it('짧은 opaque plugin service 명도 message 와 → Service 라인 모두 redact', () => {
+    const opaqueService = 'a'.repeat(32);
+    const err = new KeychainAccountMissingError(opaqueService);
+    const out = describeError(err);
+    expect(out).toContain('[redacted]');
+    expect(out).toContain('→ Service: [redacted]');
+    expect(out).not.toContain(opaqueService);
   });
 
   it('service 표시 라인의 제어 문자를 제거해 로그/터미널 injection 을 막는다', () => {
