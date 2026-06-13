@@ -11,7 +11,7 @@ const JWT_RE = /eyJ[A-Za-z0-9+/=._-]{20,}/g;
 const PROVIDER_TOKEN_RE =
   /\b(?:sk-[A-Za-z0-9._-]{8,}|ya29\.[A-Za-z0-9._-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
 const SECRET_FIELD =
-  '(?:[A-Za-z0-9]+[_-])*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|secret[_-]?key|private[_-]?key|ssh[_-]?key|client[_-]?secret|auth[_-]?token|bearer[_-]?token|session[_-]?token|session[_-]?id|set[_-]?cookie|password|secret|token|cookie|sessionid|accessToken|refreshToken|idToken|apiKey|secretKey|privateKey|sshKey|clientSecret|authToken|bearerToken|sessionToken|sessionId|setCookie)';
+  '(?:[A-Za-z0-9]+[_-])*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|secret[_-]?access[_-]?key|secret[_-]?key|private[_-]?key|ssh[_-]?key|client[_-]?secret|auth[_-]?token|bearer[_-]?token|session[_-]?token|session[_-]?id|set[_-]?cookie|password|secret|token|cookie|sessionid|accessToken|refreshToken|idToken|apiKey|secretAccessKey|awsSecretAccessKey|secretKey|privateKey|sshKey|clientSecret|authToken|bearerToken|sessionToken|sessionId|setCookie)';
 const AUTH_KEY = String.raw`["']?\bauthorization\b["']?`;
 const RAW_BREAK = String.raw`[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]`;
 const ESCAPED_BREAK = String.raw`\\(?:[nrtbfv0]|x[0-9a-f]{2}|u[0-9a-f]{4}|u\{[0-9a-f]{1,6}\})`;

@@ -401,7 +401,7 @@ describe('os-keyring — sourceExists / 입력 검증', () => {
   });
 
   it('account 검증 오류는 opaque service 를 raw 로 노출하지 않는다', async () => {
-    const opaqueService = 'a'.repeat(32);
+    const opaqueService = 'a'.repeat(16);
     const bad: OsKeyringSource = { type: 'os-keyring', service: opaqueService, account: '', saveAs: 'c.json' };
     await expect(readSource(bad)).rejects.toThrow(/service=\[redacted\]/);
     await expect(readSource(bad)).rejects.not.toThrow(opaqueService);

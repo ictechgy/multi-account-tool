@@ -82,6 +82,10 @@ describe('redactMessage', () => {
   it('private key / bare secret / cookie 계열 credential field 값을 redact', () => {
     expect(redactMessage('{"private_key":"short private secret","ssh_key":"short ssh secret"}'))
       .toBe('{"private_key":"[redacted]","ssh_key":"[redacted]"}');
+    expect(redactMessage('privateKey=abcd1234')).toBe('privateKey=[redacted]');
+    expect(redactMessage('secret_access_key=abcd1234')).toBe('secret_access_key=[redacted]');
+    expect(redactMessage('aws_secret_access_key=abcd1234')).toBe('aws_secret_access_key=[redacted]');
+    expect(redactMessage('awsSecretAccessKey=abcd1234')).toBe('awsSecretAccessKey=[redacted]');
     expect(redactMessage('secret=abc def next=context')).toBe('secret=[redacted]');
     expect(redactMessage('Cookie: sessionid=short-secret; HttpOnly')).toBe('Cookie: [redacted]');
     expect(redactMessage('Set-Cookie: sessionid=short-secret; HttpOnly')).toBe('Set-Cookie: [redacted]');
@@ -193,7 +197,7 @@ describe('KeychainAccountMissingError', () => {
   });
 
   it('짧은 opaque plugin service 도 메시지에서 redact 되지만 service 필드는 raw 보존', () => {
-    const opaqueService = 'a'.repeat(32);
+    const opaqueService = 'a'.repeat(16);
     const err = new KeychainAccountMissingError(opaqueService);
     expect(err.message).toContain('[redacted]');
     expect(err.message).not.toContain(opaqueService);
@@ -248,7 +252,7 @@ describe('describeError', () => {
   });
 
   it('짧은 opaque plugin service 명도 message 와 → Service 라인 모두 redact', () => {
-    const opaqueService = 'a'.repeat(32);
+    const opaqueService = 'a'.repeat(16);
     const err = new KeychainAccountMissingError(opaqueService);
     const out = describeError(err);
     expect(out).toContain('[redacted]');

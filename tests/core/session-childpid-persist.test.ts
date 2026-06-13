@@ -117,7 +117,7 @@ describe('recordChildPid — 2단계 persist (childPid 가 ps 전에 기록, #71
     // 2단계(childPidStart)는 자식 서명 조회(ps)가 pending 으로 보류되므로 이 동안 완료될 수 없다 —
     // 따라서 "childPid 있음 + childPidStart 없음" 을 안정적으로 관측할 수 있는 봉인 윈도우가 생긴다.
     let metaDuringPs: Record<string, unknown> | null = null;
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 2000; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       metaDuringPs = await readOnlySessionMeta();
       if (metaDuringPs && metaDuringPs.childPid != null) break;
@@ -171,7 +171,7 @@ describe('runSession — exit-before-write race (recordChildPid settle 보장, #
     // recordChildPid 1단계(childPid write) 완료 + 2단계 ps 가 pending 으로 보류될 때까지 흘린다.
     // 이 시점: session.json 에 childPid 있음, childPidStart 없음, 자식 ps 콜백 1개 보류.
     let armed = false;
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 2000; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       const meta = await readOnlySessionMeta();
       if (meta && meta.childPid != null && pendingChildPsCallbacks.length >= 1) {
@@ -234,7 +234,7 @@ describe('runSession — exit-before-write race (recordChildPid settle 보장, #
 describe('recordChildPid — child exit 후 서명 skip (pid 재사용 방어, #71 round3 Codex HIGH)', () => {
   /** runSession 진행 중 spawn 된 child 가 1단계(childPid) 기록 + 2단계 ps pending 까지 도달할 때까지 흘린다. */
   async function armChildPidPending(): Promise<void> {
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 2000; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       const meta = await readOnlySessionMeta();
       if (meta && meta.childPid != null && pendingChildPsCallbacks.length >= 1) return;
@@ -283,7 +283,7 @@ describe('recordChildPid — child exit 후 서명 skip (pid 재사용 방어, #
     flushChildPs('Mon Jan  1 00:00:00 2000\n');
 
     let metaWithSig: Record<string, unknown> | null = null;
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 2000; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       metaWithSig = await readOnlySessionMeta();
       if (metaWithSig && metaWithSig.childPidStart != null) break;

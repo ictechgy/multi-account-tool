@@ -24,6 +24,8 @@ import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from
 
 /** plugin 파일이 모이는 디렉토리: `~/.multi-account-tool/cli-defs/`. */
 const CLI_DEFS_DIR_NAME = 'cli-defs';
+const MAX_PLUGIN_NAME_LENGTH = 80;
+const MAX_PLUGIN_SERVICE_LENGTH = 128;
 
 /** 사용자 plugin 디렉토리 절대 경로. */
 function cliDefsDir(): string {
@@ -34,7 +36,7 @@ function formatPluginWarning(text: string): string {
   return redactSecretLikeText(text, {
     secretMarker: '[redacted]',
     jwtMarker: '[redacted-jwt]',
-    longSecretMin: 50,
+    longSecretMin: 24,
     maxLength: 500
   });
 }
@@ -80,6 +82,12 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   }
   if (typeof raw.service !== 'string' || raw.service.length === 0) {
     return { error: `sources[${idx}].service 는 비어있지 않은 문자열이어야 합니다.` };
+  }
+  if (raw.service.trim() !== raw.service) {
+    return { error: `sources[${idx}].service 는 앞뒤 공백 없이 입력해야 합니다.` };
+  }
+  if (raw.service.length > MAX_PLUGIN_SERVICE_LENGTH) {
+    return { error: `sources[${idx}].service 는 ${MAX_PLUGIN_SERVICE_LENGTH}자 이하여야 합니다.` };
   }
   if (hasUnsafeDisplayChar(raw.service)) {
     return { error: `sources[${idx}].service 에 제어/서식 문자가 포함될 수 없습니다.` };
@@ -139,6 +147,12 @@ export function validateCliDefRaw(raw: unknown): ValidateCliDefResult {
   }
   if (typeof raw.name !== 'string' || raw.name.length === 0) {
     return { error: 'name 은 비어있지 않은 문자열이어야 합니다.' };
+  }
+  if (raw.name.trim() !== raw.name) {
+    return { error: 'name 은 앞뒤 공백 없이 입력해야 합니다.' };
+  }
+  if (raw.name.length > MAX_PLUGIN_NAME_LENGTH) {
+    return { error: `name 은 ${MAX_PLUGIN_NAME_LENGTH}자 이하여야 합니다.` };
   }
   if (hasUnsafeDisplayChar(raw.name)) {
     return { error: 'name 에 제어/서식 문자가 포함될 수 없습니다.' };

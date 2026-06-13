@@ -636,7 +636,7 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     });
 
     it('src.account 검증 오류는 opaque service 를 raw 로 노출하지 않는다', async () => {
-      const opaqueService = 'a'.repeat(32);
+      const opaqueService = 'a'.repeat(16);
       const badSrc: KeychainSource = {
         type: 'keychain',
         service: opaqueService,

@@ -174,7 +174,7 @@ export function formatServiceForDisplay(service: string): string {
   return redactSecretLikeText(service, {
     secretMarker: '[redacted]',
     jwtMarker: '[redacted-jwt]',
-    longSecretMin: 24,
+    longSecretMin: 16,
     maxLength: 500
   });
 }

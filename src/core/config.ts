@@ -11,8 +11,8 @@
  */
 
 import { Dirent, promises as fs } from 'node:fs';
-import { join } from 'node:path';
-import { isAtomicTmpFileName, writeFileAtomic } from './io-atomic.js';
+import { join, sep } from 'node:path';
+import { atomicTmpFilePid, isAtomicTmpFileName, writeFileAtomic } from './io-atomic.js';
 import { configPath, dataDir } from './paths.js';
 import type { Config } from './types.js';
 
@@ -108,10 +108,29 @@ export async function markFirstFreshnessPromptShown(): Promise<void> {
  * 실패는 무시 (best-effort).
  */
 export async function cleanupTmpFiles(): Promise<void> {
-  await walkAndCleanTmp(dataDir()).catch(() => { /* best-effort */ });
+  const root = dataDir();
+  const rootReal = await fs.realpath(root).catch(() => root);
+  await walkAndCleanTmp(root, rootReal).catch(() => { /* best-effort */ });
 }
 
-async function walkAndCleanTmp(dir: string): Promise<void> {
+function isWithinRoot(rootReal: string, candidateReal: string): boolean {
+  return candidateReal === rootReal || candidateReal.startsWith(rootReal.endsWith(sep) ? rootReal : `${rootReal}${sep}`);
+}
+
+function isProcessProbablyAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function walkAndCleanTmp(dir: string, rootReal: string): Promise<void> {
+  const dirStat = await fs.lstat(dir).catch(() => null);
+  if (!dirStat?.isDirectory() || dirStat.isSymbolicLink()) return;
+  const dirReal = await fs.realpath(dir).catch(() => null);
+  if (!dirReal || !isWithinRoot(rootReal, dirReal)) return;
   let entries: Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -123,8 +142,10 @@ async function walkAndCleanTmp(dir: string): Promise<void> {
     if (e.isSymbolicLink()) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
-      await walkAndCleanTmp(full);
+      await walkAndCleanTmp(full, rootReal);
     } else if (e.isFile() && isAtomicTmpFileName(e.name)) {
+      const pid = atomicTmpFilePid(e.name);
+      if (pid !== null && isProcessProbablyAlive(pid)) continue;
       await fs.rm(full, { force: true }).catch(() => { /* best-effort */ });
     }
   }

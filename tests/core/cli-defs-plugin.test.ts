@@ -271,6 +271,46 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings[0]).toContain('제어');
   });
 
+  it('plugin name 은 앞뒤 공백과 과도한 길이를 거부한다', async () => {
+    await writePlugin('space-name.json', {
+      id: 'spacename',
+      name: ' Bad',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+    await writePlugin('long-name.json', {
+      id: 'longname',
+      name: 'N'.repeat(81),
+      sources: [{ type: 'file', path: '/tmp/y', saveAs: 'y.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.join('\n')).toContain('name');
+    expect(r.warnings.join('\n')).toContain('공백');
+    expect(r.warnings.join('\n')).toContain('80자');
+  });
+
+  it('plugin service 는 앞뒤 공백과 과도한 길이를 거부한다', async () => {
+    await writePlugin('space-service.json', {
+      id: 'spacesvc',
+      name: 'Space Svc',
+      sources: [{ type: 'keychain', service: ' svc', saveAs: 'x.json' }]
+    });
+    await writePlugin('long-service.json', {
+      id: 'longsvc',
+      name: 'Long Svc',
+      sources: [{ type: 'keychain', service: 's'.repeat(129), saveAs: 'y.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings.join('\n')).toContain('service');
+    expect(r.warnings.join('\n')).toContain('공백');
+    expect(r.warnings.join('\n')).toContain('128자');
+  });
+
   it('warning 의 plugin 파일명도 display sanitize 된다', async () => {
     await writePluginRaw('bad\u001b[31m.json', '{not json');
 
@@ -390,6 +430,18 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings[0]).toContain('b-secret.json');
     expect(r.warnings[0]).toContain('[redacted]');
     expect(r.warnings[0]).not.toContain(providerId);
+  });
+
+  it('plugin id 충돌 warning 의 32자 opaque id 도 redact 된다', async () => {
+    const opaqueId = 'A'.repeat(32);
+    await writePlugin('a-opaque.json', { id: opaqueId, name: 'A', sources: [{ type: 'file', path: '/a', saveAs: 'a.json' }] });
+    await writePlugin('b-opaque.json', { id: opaqueId, name: 'B', sources: [{ type: 'file', path: '/b', saveAs: 'b.json' }] });
+    const r = loadUserCliDefs();
+    expect(r.defs.map(d => d.id)).toEqual([opaqueId]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('b-opaque.json');
+    expect(r.warnings[0]).toContain('[redacted]');
+    expect(r.warnings[0]).not.toContain(opaqueId);
   });
 });
 

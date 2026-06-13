@@ -167,4 +167,54 @@ describe('writeFileAtomic', () => {
     }
   });
 
+  it('성공 경로에서 file sync 후 rename 하고 parent directory sync 를 best-effort 로 수행한다', async () => {
+    vi.resetModules();
+    const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const fileHandle = {
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      sync: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    const dirHandle = {
+      sync: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    const mkdir = vi.fn().mockResolvedValue(undefined);
+    const open = vi.fn().mockImplementation(async (p: string) => (p === '/tmp' ? dirHandle : fileHandle));
+    const rename = vi.fn().mockResolvedValue(undefined);
+    const rmMock = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('node:fs', () => ({
+      ...realFs,
+      constants: realFs.constants,
+      promises: {
+        mkdir,
+        open,
+        rename,
+        rm: rmMock
+      }
+    }));
+
+    try {
+      const { writeFileAtomic: mockedWriteFileAtomic } = await import('../../src/core/io-atomic.js');
+
+      await mockedWriteFileAtomic('/tmp/mat-secret.json', 'secret');
+      expect(fileHandle.writeFile).toHaveBeenCalledWith('secret');
+      expect(fileHandle.sync).toHaveBeenCalledOnce();
+      expect(fileHandle.close).toHaveBeenCalledOnce();
+      expect(rename).toHaveBeenCalledOnce();
+      expect(open).toHaveBeenCalledWith('/tmp', realFs.constants.O_RDONLY);
+      expect(dirHandle.sync).toHaveBeenCalledOnce();
+      expect(dirHandle.close).toHaveBeenCalledOnce();
+      expect(rmMock).not.toHaveBeenCalled();
+
+      expect(fileHandle.sync.mock.invocationCallOrder[0]).toBeLessThan(fileHandle.close.mock.invocationCallOrder[0]);
+      expect(fileHandle.close.mock.invocationCallOrder[0]).toBeLessThan(rename.mock.invocationCallOrder[0]);
+      expect(rename.mock.invocationCallOrder[0]).toBeLessThan(dirHandle.sync.mock.invocationCallOrder[0]);
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
+  });
+
 });

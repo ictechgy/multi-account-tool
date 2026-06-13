@@ -23,29 +23,62 @@ const ATOMIC_FLAGS =
   constants.O_CREAT |
   constants.O_EXCL |
   constants.O_NOFOLLOW;
+const ATOMIC_TMP_FILE_RE = /^\.mat-atomic@(\d+)-[0-9a-f]{16}\.tmp$/;
 
 function atomicTmpPath(path: string): string {
   return join(dirname(path), `.mat-atomic@${process.pid}-${randomBytes(8).toString('hex')}.tmp`);
 }
 
 export function isAtomicTmpFileName(name: string): boolean {
-  return /^\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/.test(name);
+  return ATOMIC_TMP_FILE_RE.test(name);
+}
+
+export function atomicTmpFilePid(name: string): number | null {
+  const match = name.match(ATOMIC_TMP_FILE_RE);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+export interface WriteFileAtomicOptions {
+  /**
+   * true(default): file sync + parent directory sync for crash durability.
+   * false: keep atomic replace/permissions but skip fsync for ephemeral session scratch files.
+   */
+  durable?: boolean;
+}
+
+async function syncDirectoryBestEffort(dir: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(dir, constants.O_RDONLY);
+    await handle.sync();
+  } catch {
+    // 일부 플랫폼/파일시스템은 directory fsync 를 지원하지 않는다. rename 자체는 완료됐으므로
+    // parent-dir durability 보강만 best-effort 로 처리한다.
+  } finally {
+    if (handle) await handle.close().catch(() => { /* best-effort */ });
+  }
 }
 
 /**
  * 파일을 원자적으로 쓴다. 권한 0600, 부모 디렉토리 자동 생성.
  * path 는 이미 expanded 된 절대 경로여야 한다 (`~/` 확장은 호출자 책임).
  */
-export async function writeFileAtomic(path: string, value: string): Promise<void> {
-  await fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+export async function writeFileAtomic(path: string, value: string, opts: WriteFileAtomicOptions = {}): Promise<void> {
+  const durable = opts.durable !== false;
+  const dir = dirname(path);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
   let handle: FileHandle | undefined;
   try {
     handle = await fs.open(tmp, ATOMIC_FLAGS, 0o600);
     await handle.writeFile(value);
+    if (durable) await handle.sync();
     await handle.close();
     handle = undefined;
     await fs.rename(tmp, path);
+    if (durable) await syncDirectoryBestEffort(dir);
   } catch (err) {
     if (handle) await handle.close().catch(() => { /* best-effort */ });
     await fs.rm(tmp, { force: true }).catch(() => { /* best-effort */ });
