@@ -81,6 +81,66 @@ describe('cli-mutation-lock.withCliMutationLock', () => {
     );
   });
 
+  it('detached same-CLI continuation after release reacquires instead of reusing stale context', async () => {
+    let releaseGate: () => void = () => {};
+    const afterRelease = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    let detached:
+      | Promise<{
+        heldAfterRelease: boolean;
+        fsLockWasFree: boolean;
+        reusedOuterToken: boolean;
+        innerProfile: string;
+      }>
+      | undefined;
+    let outerToken = '';
+
+    await withCliMutationLock(
+      { cliId: 'codex', profileName: 'outer' },
+      async ({ body: outer }) => {
+        outerToken = outer.token;
+        detached = (async () => {
+          await afterRelease;
+          const heldAfterRelease = isCliMutationLockHeldFor('codex');
+          const fsLockWasFree = await fs.access(cliLockPath('codex')).then(
+            () => false,
+            () => true
+          );
+          let innerToken = '';
+          let innerProfile = '';
+
+          await withCliMutationLock(
+            { cliId: 'codex', profileName: 'inner' },
+            async ({ body: inner }) => {
+              innerToken = inner.token;
+              innerProfile = inner.profile;
+            }
+          );
+
+          return {
+            heldAfterRelease,
+            fsLockWasFree,
+            reusedOuterToken: innerToken === outer.token,
+            innerProfile
+          };
+        })();
+      }
+    );
+
+    releaseGate();
+    expect(detached).toBeDefined();
+    const result = await detached;
+    expect(outerToken).not.toBe('');
+    expect(result).toEqual({
+      heldAfterRelease: false,
+      fsLockWasFree: true,
+      reusedOuterToken: false,
+      innerProfile: 'inner'
+    });
+    await expect(fs.access(cliLockPath('codex'))).rejects.toThrow();
+  });
+
   it('different-CLI nested call acquires an independent context and restores the outer one', async () => {
     await withCliMutationLock(
       { cliId: 'codex', profileName: 'work' },
