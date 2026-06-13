@@ -230,35 +230,39 @@ describe('config', () => {
       await expect(cleanupTmpFiles()).resolves.toBeUndefined();
     });
 
-    it('.tmp 및 nonce atomic tmp 파일은 삭제, .tmp 아닌 파일은 보존', async () => {
+    it('앱 소유 atomic tmp 파일만 삭제하고 합법 tmp-like 파일은 보존', async () => {
       const base = dataDir();
       await fs.mkdir(base, { recursive: true, mode: 0o700 });
       await fs.writeFile(join(base, 'stale.tmp'), 'tmp data');
       await fs.writeFile(join(base, 'config.json.tmp-123-abcdefabcdefabcd'), 'secret tmp data');
+      await fs.writeFile(join(base, '.mat-atomic@123-abcdefabcdefabcd.tmp'), 'secret tmp data');
       await fs.writeFile(join(base, 'config.json'), '{}');
       await fs.writeFile(join(base, 'keep.tmp-notatomic'), 'not atomic tmp');
 
       await cleanupTmpFiles();
 
-      expect(existsSync(join(base, 'stale.tmp'))).toBe(false);
-      expect(existsSync(join(base, 'config.json.tmp-123-abcdefabcdefabcd'))).toBe(false);
+      expect(existsSync(join(base, 'stale.tmp'))).toBe(true);
+      expect(existsSync(join(base, 'config.json.tmp-123-abcdefabcdefabcd'))).toBe(true);
+      expect(existsSync(join(base, '.mat-atomic@123-abcdefabcdefabcd.tmp'))).toBe(false);
       expect(existsSync(join(base, 'config.json'))).toBe(true);
       expect(existsSync(join(base, 'keep.tmp-notatomic'))).toBe(true);
     });
 
-    it('서브 디렉토리도 재귀로 .tmp 정리', async () => {
+    it('서브 디렉토리도 재귀로 앱 소유 atomic tmp 만 정리', async () => {
       const base = dataDir();
       const nested = join(base, 'profiles', 'codex', 'work');
       await fs.mkdir(nested, { recursive: true, mode: 0o700 });
       await fs.writeFile(join(nested, 'auth.json'), '{"v":1}');
       await fs.writeFile(join(nested, 'auth.json.tmp'), 'partial');
       await fs.writeFile(join(nested, 'auth.json.tmp-456-0123456789abcdef'), 'partial nonce');
+      await fs.writeFile(join(nested, '.mat-atomic@456-0123456789abcdef.tmp'), 'partial nonce');
 
       await cleanupTmpFiles();
 
       expect(existsSync(join(nested, 'auth.json'))).toBe(true);
-      expect(existsSync(join(nested, 'auth.json.tmp'))).toBe(false);
-      expect(existsSync(join(nested, 'auth.json.tmp-456-0123456789abcdef'))).toBe(false);
+      expect(existsSync(join(nested, 'auth.json.tmp'))).toBe(true);
+      expect(existsSync(join(nested, 'auth.json.tmp-456-0123456789abcdef'))).toBe(true);
+      expect(existsSync(join(nested, '.mat-atomic@456-0123456789abcdef.tmp'))).toBe(false);
     });
 
     it('symlink 는 추적하지 않음 (out-of-scope 보호) + symlink 자체도 잔존', async () => {
@@ -266,7 +270,7 @@ describe('config', () => {
       await fs.mkdir(base, { recursive: true, mode: 0o700 });
       const outside = join(tmp.home, 'outside-dir');
       await fs.mkdir(outside, { recursive: true });
-      await fs.writeFile(join(outside, 'should-not-be-deleted.tmp'), 'outside');
+      await fs.writeFile(join(outside, '.mat-atomic@999-abcdefabcdefabcd.tmp'), 'outside');
 
       const linkPath = join(base, 'link-to-outside');
       await fs.symlink(outside, linkPath);
@@ -274,9 +278,9 @@ describe('config', () => {
       await cleanupTmpFiles();
 
       // 두 가지 invariant 명시:
-      //  1) symlink 추적 안 함 → outside 의 .tmp 보존
+      //  1) symlink 추적 안 함 → outside 의 app-owned tmp-looking 파일도 보존
       //  2) symlink 자체는 'continue' 로 skip → link 도 base 에 남음 (정리 대상 아님)
-      expect(existsSync(join(outside, 'should-not-be-deleted.tmp'))).toBe(true);
+      expect(existsSync(join(outside, '.mat-atomic@999-abcdefabcdefabcd.tmp'))).toBe(true);
       expect(existsSync(linkPath)).toBe(true);
       const linkStat = await fs.lstat(linkPath);
       expect(linkStat.isSymbolicLink()).toBe(true);
@@ -289,8 +293,8 @@ describe('config', () => {
       await fs.mkdir(base, { recursive: true, mode: 0o700 });
       const denied = join(base, 'denied-dir');
       await fs.mkdir(denied, { mode: 0o700 });
-      await fs.writeFile(join(denied, 'inside.tmp'), 'cannot-access');
-      await fs.writeFile(join(base, 'sibling.tmp'), 'normal');
+      await fs.writeFile(join(denied, '.mat-atomic@111-abcdefabcdefabcd.tmp'), 'cannot-access');
+      await fs.writeFile(join(base, '.mat-atomic@222-abcdefabcdefabcd.tmp'), 'normal');
 
       // CI runner 가 root 이면 chmod 0o000 이 무시되어 readdir 가 성공 — 그 경우 본 테스트 skip.
       await fs.chmod(denied, 0o000);
@@ -303,7 +307,7 @@ describe('config', () => {
       try {
         await expect(cleanupTmpFiles()).resolves.toBeUndefined();
         // sibling 은 정리됨
-        expect(existsSync(join(base, 'sibling.tmp'))).toBe(false);
+        expect(existsSync(join(base, '.mat-atomic@222-abcdefabcdefabcd.tmp'))).toBe(false);
         // denied dir 자체는 보존 (안쪽 못 들어가 정리 못 함)
         expect(existsSync(denied)).toBe(true);
       } finally {

@@ -95,7 +95,8 @@ describe('redactMessage', () => {
     ['Authorization:\nBearer newline-secret', 'Authorization:?Bearer [redacted]'],
     ['Authorization:\x1fBearer unit-secret', 'Authorization:?Bearer [redacted]'],
     ['Authorization:\x00Bearer nul-secret', 'Authorization:?Bearer [redacted]'],
-    ['Authorization: Bearer sk-abcd\nefghijklmnop', 'Authorization: Bearer [redacted]']
+    ['Authorization: Bearer sk-abcd\nefghijklmnop', 'Authorization: Bearer [redacted]'],
+    [String.raw`Authorization: Bearer sk-abcd\nefghijklmnop`, 'Authorization: Bearer [redacted]']
   ])('Authorization Bearer 값을 redact: %s', (raw, expected) => {
     expect(redactMessage(raw)).toBe(expected);
   });
@@ -112,17 +113,25 @@ describe('redactMessage', () => {
     const providerEarly = redactMessage('failed token sk-p\nrojabcdefghijklmnop');
     const googleAfterPrefix = redactMessage('failed token ya29.\nabcdefghijklmnop');
     const slackAfterPrefix = redactMessage('failed token xoxb-\nabcdefghijklmnop');
+    const escapedProvider = redactMessage(String.raw`failed token sk-proj-\nabcdefghijklmnop`);
+    const escapedProviderAfterPrefix = redactMessage(String.raw`failed token sk-\nabcdefghijklmnop`);
     const jwt = redactMessage('failed token eyJhbGciOi\nJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadsig');
     const jwtAfterPrefix = redactMessage('failed token eyJ\nabcdefghijklmnop1234567890');
     const jwtEarly = redactMessage('failed token eyJab\n1234567890abcdef');
+    const escapedJwt = redactMessage(String.raw`failed token eyJ\nabcdefghijklmnop1234567890`);
+    const escapedUnicodeJwt = redactMessage(String.raw`failed token eyJ\u000aabcdefghijklmnop1234567890`);
     expect(provider).toBe('failed token [redacted]');
     expect(providerAfterPrefix).toBe('failed token [redacted]');
     expect(providerEarly).toBe('failed token [redacted]');
     expect(googleAfterPrefix).toBe('failed token [redacted]');
     expect(slackAfterPrefix).toBe('failed token [redacted]');
+    expect(escapedProvider).toBe('failed token [redacted]');
+    expect(escapedProviderAfterPrefix).toBe('failed token [redacted]');
     expect(jwt).toBe('failed token [redacted-jwt]');
     expect(jwtAfterPrefix).toBe('failed token [redacted-jwt]');
     expect(jwtEarly).toBe('failed token [redacted-jwt]');
+    expect(escapedJwt).toBe('failed token [redacted-jwt]');
+    expect(escapedUnicodeJwt).toBe('failed token [redacted-jwt]');
   });
 
   it('제어 문자는 사용자 표시 전 치환한다', () => {

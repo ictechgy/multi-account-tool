@@ -6,7 +6,7 @@
  * (다중 프로세스 race 는 mat 의 단일 프로세스 TUI 모델 하에서 발생하지 않음.)
  *
  * 부수 기능:
- * - cleanupTmpFiles: 시작 시 데이터 디렉토리의 .tmp 잔존 파일 정리 (symlink 추적 안 함)
+ * - cleanupTmpFiles: 시작 시 데이터 디렉토리의 앱 소유 atomic tmp 잔존 파일 정리 (symlink 추적 안 함)
  * - markFirstImportPromptShown: 첫 실행 가져오기 프롬프트 표시 기록
  */
 
@@ -101,8 +101,9 @@ export async function markFirstFreshnessPromptShown(): Promise<void> {
 }
 
 /**
- * 데이터 디렉토리 전체에서 `.tmp` 잔존 파일을 정리한다 (앱 시작 시 호출).
- * 이전 실행에서 비정상 종료로 남은 atomic-write 임시 파일을 제거.
+ * 데이터 디렉토리 전체에서 앱 소유 atomic tmp 잔존 파일을 정리한다 (앱 시작 시 호출).
+ * 이전 실행에서 비정상 종료로 남은 `.mat-atomic@...tmp` 임시 파일을 제거한다.
+ * 사용자 profile `saveAs` 로 합법적인 `*.tmp` / `*.tmp-*` 이름은 삭제하지 않는다.
  * symlink 는 추적하지 않는다 (loop / out-of-scope 디렉토리 보호).
  * 실패는 무시 (best-effort).
  */

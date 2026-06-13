@@ -51,6 +51,15 @@ describe('writeFileAtomic', () => {
     expect(entries.some((e) => e.includes('.tmp'))).toBe(false);
   });
 
+  it('유효하지만 긴 target basename 도 tmp suffix 때문에 실패하지 않는다', async () => {
+    const target = join(dir, 'a'.repeat(240));
+    await writeFileAtomic(target, 'ok');
+    expect(await fs.readFile(target, 'utf8')).toBe('ok');
+    const entries = await fs.readdir(dir);
+    expect(entries).toContain('a'.repeat(240));
+    expect(entries.some((e) => e.startsWith('.mat-atomic@'))).toBe(false);
+  });
+
   it('legacy deterministic tmp symlink 를 무시하고 unique tmp 로 쓴다', async () => {
     // 예전 `${target}.tmp` deterministic 경로를 공격자가 선점해도, 현재 구현은 nonce tmp 를
     // 사용하므로 decoy 를 건드리지 않고 대상 파일을 정상 교체해야 한다.
@@ -146,10 +155,10 @@ describe('writeFileAtomic', () => {
       await expect(mockedWriteFileAtomic('/tmp/mat-secret.json', 'secret')).rejects.toBe(writeErr);
       expect(mkdir).toHaveBeenCalledWith('/tmp', { recursive: true, mode: 0o700 });
       expect(open).toHaveBeenCalledOnce();
-      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/mat-secret\.json\.tmp-\d+-[0-9a-f]{16}$/);
+      expect(open.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
       expect(handle.writeFile).toHaveBeenCalledWith('secret');
       expect(handle.close).toHaveBeenCalledOnce();
-      expect(rmMock.mock.calls[0][0]).toMatch(/^\/tmp\/mat-secret\.json\.tmp-\d+-[0-9a-f]{16}$/);
+      expect(rmMock.mock.calls[0][0]).toMatch(/^\/tmp\/\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/);
       expect(rmMock.mock.calls[0][1]).toEqual({ force: true });
       expect(rename).not.toHaveBeenCalled();
     } finally {

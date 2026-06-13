@@ -13,8 +13,10 @@ const PROVIDER_TOKEN_RE =
 const SECRET_FIELD =
   '(?:[A-Za-z0-9]+[_-])*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|secret[_-]?key|client[_-]?secret|auth[_-]?token|bearer[_-]?token|session[_-]?token|password|token|accessToken|refreshToken|idToken|apiKey|secretKey|clientSecret|authToken|bearerToken|sessionToken)';
 const AUTH_KEY = String.raw`["']?\bauthorization\b["']?`;
-const SEP = String.raw`[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]*`;
-const TOKEN_BREAK = String.raw`[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+`;
+const RAW_BREAK = String.raw`[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]`;
+const ESCAPED_BREAK = String.raw`\\(?:[nrtbfv0]|x[0-9a-f]{2}|u[0-9a-f]{4}|u\{[0-9a-f]{1,6}\})`;
+const SEP = String.raw`(?:${RAW_BREAK}|${ESCAPED_BREAK})*`;
+const TOKEN_BREAK = String.raw`(?:${RAW_BREAK}|${ESCAPED_BREAK})+`;
 const SPLIT_JWT_RE = new RegExp(
   String.raw`\beyJ(?:[A-Za-z0-9+/=._-]*${TOKEN_BREAK})+(?:[A-Za-z0-9+/=._-]+${TOKEN_BREAK})*[A-Za-z0-9+/=._-]{6,}`,
   'giu'

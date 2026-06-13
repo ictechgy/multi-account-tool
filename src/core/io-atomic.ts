@@ -16,7 +16,7 @@
 import { randomBytes } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const ATOMIC_FLAGS =
   constants.O_WRONLY |
@@ -25,11 +25,11 @@ const ATOMIC_FLAGS =
   constants.O_NOFOLLOW;
 
 function atomicTmpPath(path: string): string {
-  return `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
+  return join(dirname(path), `.mat-atomic@${process.pid}-${randomBytes(8).toString('hex')}.tmp`);
 }
 
 export function isAtomicTmpFileName(name: string): boolean {
-  return name.endsWith('.tmp') || /\.tmp-\d+-[0-9a-f]{16}$/.test(name);
+  return /^\.mat-atomic@\d+-[0-9a-f]{16}\.tmp$/.test(name);
 }
 
 /**
