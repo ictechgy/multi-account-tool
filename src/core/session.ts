@@ -97,6 +97,10 @@ export interface SessionPlan {
   cli: string;
   profile: string;
   roots: MaterializedRoot[];
+  /** Command-scoped session run 전용 자격증명 격리본. env root 없이 builtin CLI argv 로 강제 주입된다. */
+  commandCreds?: SessionCred[];
+  /** Command-scoped session run 전용 보조 파일. 재캡처 대상이 아니며 세션 종료 시 폐기된다. */
+  commandExtraFiles?: Array<{ rel: string; absInSession: string; content: string }>;
 }
 
 /** source(file)가 base 의 직속 자식인지 — rel 이 비어있지 않고 `..`/구분자 미포함. */
@@ -266,11 +270,42 @@ export async function materializeSession(plan: SessionPlan): Promise<void> {
         await materializeShareCopy(root, shareRel);
       }
     }
+    await materializeCommandOnlyFiles(plan);
   } catch (err) {
     await removeSessionDir(plan.id).catch(() => {
       /* best-effort 롤백 — 원본 에러 전파 */
     });
     throw err;
+  }
+}
+
+async function materializeCommandOnlyFiles(plan: SessionPlan): Promise<void> {
+  const creds = plan.commandCreds ?? [];
+  const extras = plan.commandExtraFiles ?? [];
+  if (creds.length === 0 && extras.length === 0) return;
+
+  const commandDir = join(sessionDir(plan.id), 'command');
+  await fs.mkdir(commandDir, { mode: 0o700 });
+  const stat = await fs.lstat(commandDir);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`command-only 세션 디렉토리가 정상 디렉토리가 아닙니다: ${sessionPathForError(commandDir)}`);
+  }
+
+  for (const cred of creds) {
+    assertLexicallyContained(commandDir, cred.absInSession);
+    const value = await readProfileFile(plan.cli, plan.profile, cred.saveAs);
+    if (value == null) {
+      throw new UsageError(
+        `프로필에 캡처된 자격증명이 없습니다: ${plan.cli}/${plan.profile}/${cred.saveAs}. ` +
+          `먼저 mat 으로 자격증명을 캡처하세요.`
+      );
+    }
+    await writeFileAtomic(cred.absInSession, value);
+  }
+
+  for (const file of extras) {
+    assertLexicallyContained(commandDir, file.absInSession);
+    await writeFileAtomic(file.absInSession, file.content);
   }
 }
 
@@ -448,6 +483,18 @@ async function collectRecaptureItems(plan: SessionPlan): Promise<RecaptureItem[]
       }
       items.push({ saveAs: cred.saveAs, backup: null, newValue });
     }
+  }
+  for (const cred of plan.commandCreds ?? []) {
+    let newValue: string;
+    try {
+      newValue = await fs.readFile(cred.absInSession, 'utf8');
+    } catch {
+      process.stderr.write(
+        `[mat] 세션 격리본 부재 — 재캡처 skip: ${sanitizeForStderr(plan.cli)}/${sanitizeForStderr(plan.profile)}/${sanitizeForStderr(cred.saveAs)}\n`
+      );
+      continue;
+    }
+    items.push({ saveAs: cred.saveAs, backup: null, newValue });
   }
   return items;
 }
@@ -777,18 +824,46 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
  * 전역 swap/lock 없이 기존 session copy-isolate + 재캡처 lifecycle 을 그대로 쓴다.
  */
 export async function runSessionCommand(opts: SessionCommandOptions): Promise<SessionResult> {
-  return runSessionWithTarget(opts, async (def) => {
-    if (!def.sessionRun) {
-      throw new UsageError(`'${opts.cliId}' 는 session run 을 지원하지 않습니다 (builtin executable 미정의).`);
-    }
-    await preflightSessionRun(def.id, opts.args);
-    return {
+  const def = findCliDef(opts.cliId);
+  if (!def) throw new UsageError(`알 수 없는 CLI: ${opts.cliId}`);
+  if (!def.sessionRun) {
+    throw new UsageError(`'${opts.cliId}' 는 session run 을 지원하지 않습니다 (builtin executable 미정의).`);
+  }
+  await preflightSessionRun(def.id, opts.args);
+  const profileName = validateProfileName(opts.profileName);
+  if (!(await profileExists(opts.cliId, profileName))) {
+    throw new UsageError(`프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
+  }
+
+  await reapOrphans().catch(() => {
+    /* best-effort — start 를 막지 않는다 */
+  });
+
+  const id = makeSessionId(opts.cliId, profileName);
+  const executable = validateSessionRunExecutable(def.sessionRun.executable);
+
+  if (def.id === 'aider') {
+    const plan = planAiderCommandSession(def, profileName, id);
+    const target: SessionSpawnTarget = {
       kind: 'command',
-      executable: validateSessionRunExecutable(def.sessionRun.executable),
-      args: opts.args.slice(),
+      executable,
+      args: aiderForcedArgs(plan, opts.args),
       env: sessionRunEnvOverrides(def.id)
     };
-  });
+    return runPlannedSession(plan, target, () => inspectAiderMaterializedProfile(plan));
+  }
+
+  if (!def.session || def.session.roots.length === 0) {
+    throw new UsageError(`'${opts.cliId}' 는 세션 격리를 지원하지 않습니다 (env override 미지원).`);
+  }
+  const plan = planSession(def, profileName, id);
+  const target: SessionSpawnTarget = {
+    kind: 'command',
+    executable,
+    args: opts.args.slice(),
+    env: sessionRunEnvOverrides(def.id)
+  };
+  return runPlannedSession(plan, target);
 }
 
 async function runSessionWithTarget(
@@ -812,20 +887,38 @@ async function runSessionWithTarget(
 
   const id = makeSessionId(opts.cliId, profileName);
   const plan = planSession(def, profileName, id);
+  return runPlannedSession(plan, target);
+}
+
+async function runPlannedSession(
+  plan: SessionPlan,
+  target: SessionSpawnTarget,
+  afterMaterialize?: () => Promise<void>
+): Promise<SessionResult> {
   await materializeSession(plan); // 세션 디렉토리 생성 + 자격증명 복사
+  if (afterMaterialize) {
+    try {
+      await afterMaterialize();
+    } catch (err) {
+      await removeSessionDir(plan.id).catch(() => {
+        /* best-effort rollback — 원본 에러 전파 */
+      });
+      throw err;
+    }
+  }
   emitSessionWarnings(plan);
   // pid 재사용 검출용 시작 서명 (조회 실패해도 세션 생성을 막지 않음 — liveness-only 폴백).
   const pidStart = (await processStartSignature(process.pid)) ?? undefined;
   const meta: SessionMeta = {
-    id,
-    cli: opts.cliId,
-    profile: profileName,
+    id: plan.id,
+    cli: plan.cli,
+    profile: plan.profile,
     pid: process.pid,
     pidStart,
     startedAt: new Date().toISOString(),
     roots: plan.roots.map((r) => ({ env: r.env, dir: r.dir }))
   };
-  await writeSessionMeta(id, meta);
+  await writeSessionMeta(plan.id, meta);
 
   const childRef: { current: ChildProcess | null } = { current: null };
   const forwarders = registerSessionForwarders(childRef);
@@ -844,7 +937,7 @@ async function runSessionWithTarget(
         // recordChildPid 는 내부 try/catch 로 throw 하지 않지만, 방어적으로 .catch 를 달아
         // settle 만 보장(unhandled rejection 봉인). isChildAlive 를 함께 넘겨 서명 캡처 전/중에
         // child 가 exit 했는지 쓰기 직전 확인하게 한다 (#71 결함: pid 재사용 서명 오기록 차단).
-        recordChildPidDone = recordChildPid(id, meta, childPid, isChildAlive).catch(() => {
+        recordChildPidDone = recordChildPid(plan.id, meta, childPid, isChildAlive).catch(() => {
           /* best-effort — recordChildPid 내부에서 이미 흡수, settle 만 필요 */
         });
         return recordChildPidDone;
@@ -860,7 +953,7 @@ async function runSessionWithTarget(
 
     // spawn 성공/실패와 무관하게 재캡처 + 정리 (exec.ts runUnderLock 패턴 미러).
     const recaptureError = await recaptureBestEffort(plan);
-    await removeSessionDir(id).catch(() => {
+    await removeSessionDir(plan.id).catch(() => {
       /* best-effort */
     });
 
@@ -888,10 +981,42 @@ function validateSessionRunExecutable(executable: string): string {
 
 /** CLI별 command-scoped session run preflight. 실행 전 credential 우회 채널을 fail-closed 로 차단한다. */
 async function preflightSessionRun(cliId: string, args: readonly string[]): Promise<void> {
+  if (cliId === 'aider') await preflightAiderSessionRun(args);
   if (cliId === 'opencode') await preflightOpenCodeSessionRun(args);
 }
 
 function sessionRunEnvOverrides(cliId: string): Record<string, string | undefined> | undefined {
+  if (cliId === 'aider') {
+    return {
+      // Aider can switch models interactively after startup. Keep Bedrock/Vertex from silently using host
+      // AWS/GCP shared credentials, ADC, instance metadata, or container credentials.
+      AWS_CONFIG_FILE: '/dev/null',
+      AWS_EC2_METADATA_DISABLED: 'true',
+      AWS_SHARED_CREDENTIALS_FILE: '/dev/null',
+      CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '/dev/null',
+      GOOGLE_APPLICATION_CREDENTIALS: '/dev/null',
+      NO_GCE_CHECK: 'true',
+      AWS_ACCESS_KEY_ID: undefined,
+      AWS_BEARER_TOKEN_BEDROCK: undefined,
+      AWS_CONTAINER_AUTHORIZATION_TOKEN: undefined,
+      AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE: undefined,
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: undefined,
+      AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: undefined,
+      AWS_DEFAULT_PROFILE: undefined,
+      AWS_PROFILE: undefined,
+      AWS_ROLE_ARN: undefined,
+      AWS_ROLE_SESSION_NAME: undefined,
+      AWS_SECRET_ACCESS_KEY: undefined,
+      AWS_SESSION_TOKEN: undefined,
+      AWS_WEB_IDENTITY_TOKEN_FILE: undefined,
+      GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS: undefined,
+      GOOGLE_CLOUD_PROJECT: undefined,
+      GOOGLE_CLOUD_QUOTA_PROJECT: undefined,
+      GOOGLE_PROJECT: undefined,
+      VERTEXAI_LOCATION: undefined,
+      VERTEXAI_PROJECT: undefined
+    };
+  }
   if (cliId !== 'opencode') return undefined;
   return {
     // OpenCode's Amazon Bedrock provider can fall back to the AWS SDK credential chain. A command-scoped
@@ -908,6 +1033,412 @@ function sessionRunEnvOverrides(cliId: string): Record<string, string | undefine
     AWS_CONTAINER_CREDENTIALS_FULL_URI: undefined,
     AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: undefined
   };
+}
+
+function planAiderCommandSession(def: CliDef, profile: string, id: string): SessionPlan {
+  validateSessionId(id);
+  const source = def.sources.find((src) => src.type === 'file' && src.saveAs === 'aider.yml');
+  if (!source || source.type !== 'file') {
+    throw new UsageError(`aider session run 은 file source 'aider.yml' 이 필요합니다.`);
+  }
+  const commandDir = join(sessionDir(id), 'command');
+  return {
+    id,
+    cli: def.id,
+    profile,
+    roots: [],
+    commandCreds: [
+      {
+        saveAs: source.saveAs,
+        rel: 'command/aider.yml',
+        absInSession: join(commandDir, 'aider.yml')
+      }
+    ],
+    commandExtraFiles: [
+      {
+        rel: 'command/.env',
+        absInSession: join(commandDir, '.env'),
+        content: ''
+      }
+    ]
+  };
+}
+
+function aiderCommandCred(plan: SessionPlan, saveAs: string): SessionCred {
+  const cred = (plan.commandCreds ?? []).find((c) => c.saveAs === saveAs);
+  if (!cred) throw new UsageError(`aider command-only 세션 계획에 ${saveAs} 가 없습니다.`);
+  return cred;
+}
+
+function aiderCommandExtraFile(plan: SessionPlan, rel: string): { rel: string; absInSession: string; content: string } {
+  const file = (plan.commandExtraFiles ?? []).find((f) => f.rel === rel);
+  if (!file) throw new UsageError(`aider command-only 세션 계획에 ${rel} 가 없습니다.`);
+  return file;
+}
+
+function aiderForcedArgs(plan: SessionPlan, userArgs: readonly string[]): string[] {
+  return [
+    '--config',
+    aiderCommandCred(plan, 'aider.yml').absInSession,
+    '--env-file',
+    aiderCommandExtraFile(plan, 'command/.env').absInSession,
+    ...userArgs
+  ];
+}
+
+async function inspectAiderMaterializedProfile(plan: SessionPlan): Promise<void> {
+  const path = aiderCommandCred(plan, 'aider.yml').absInSession;
+  const text = await fs.readFile(path, 'utf8');
+  const bypass = findAiderProfileSidecarPointer(text);
+  if (bypass) {
+    throw new UsageError(
+      `aider session run 차단: profile config 에 ${bypass} sidecar 경로 설정이 있어 격리 밖 파일을 로드할 수 있습니다.`
+    );
+  }
+  const setEnv = findAiderProfileSetEnv(text);
+  if (setEnv) {
+    throw new UsageError(
+      `aider session run 차단: profile config 에 ${setEnv} 설정이 있어 mat 의 child env scrub 을 우회할 수 있습니다.`
+    );
+  }
+  const hostChainModel = findAiderHostCredentialChainModel(text);
+  if (hostChainModel) {
+    throw new UsageError(
+      `aider session run 차단: profile config 의 ${hostChainModel} 모델은 host AWS/Google credential chain 을 사용할 수 있어 partial-run 격리 범위 밖입니다.`
+    );
+  }
+  const hostChainAlias = findAiderHostCredentialChainAlias(text);
+  if (hostChainAlias) {
+    throw new UsageError(
+      `aider session run 차단: profile config 의 alias ${hostChainAlias} 는 host AWS/Google credential chain 모델을 가리켜 partial-run 격리 범위 밖입니다.`
+    );
+  }
+}
+
+const AIDER_BLOCK_ARG_FLAGS = [
+  '--anthropic-api-key',
+  '--api-key',
+  '--api-base',
+  '--api-base-url',
+  '--base-url',
+  '--config',
+  '--env',
+  '--env-file',
+  '--model-metadata-file',
+  '--model-settings-file',
+  '--openai-api-base',
+  '--openai-api-deployment-id',
+  '--openai-api-host',
+  '--openai-api-key',
+  '--openai-api-type',
+  '--openai-api-version',
+  '--openai-base-url',
+  '--openai-organization-id',
+  '--set-env'
+] as const;
+
+async function preflightAiderSessionRun(args: readonly string[]): Promise<void> {
+  preflightAiderArgs(args);
+  preflightAiderEnv();
+  await inspectAiderOAuthKeysCandidate(aiderOAuthKeysPath());
+  for (const candidate of await aiderEnvCandidates(process.cwd())) await inspectAiderEnvCandidate(candidate);
+  for (const candidate of await aiderModelSidecarCandidates(process.cwd())) {
+    await inspectAiderSidecarCandidate(candidate.path, candidate.label);
+  }
+}
+
+function preflightAiderArgs(args: readonly string[]): void {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? '';
+    if (arg === '-c' || arg.startsWith('-c=')) {
+      throw new UsageError(`aider session run 차단: ${arg} 인자는 mat 이 강제하는 config 를 우회할 수 있습니다.`);
+    }
+    if (arg.length > 2 && arg.startsWith('-c') && !arg.startsWith('--')) {
+      throw new UsageError(`aider session run 차단: ${arg} 인자는 mat 이 강제하는 config 를 우회할 수 있습니다.`);
+    }
+    for (const flag of AIDER_BLOCK_ARG_FLAGS) {
+      if (aiderArgMatchesBlockedFlag(arg, flag)) {
+        throw new UsageError(
+          `aider session run 차단: ${arg} 인자는 자격증명/config/env/model sidecar 격리를 우회할 수 있습니다.`
+        );
+      }
+    }
+    const modelValue = aiderModelValueFromArg(args, i);
+    if (modelValue && isAiderHostCredentialChainModel(modelValue)) {
+      throw new UsageError(
+        `aider session run 차단: ${modelValue} 모델은 host AWS/Google credential chain 을 사용할 수 있어 partial-run 격리 범위 밖입니다.`
+      );
+    }
+    const aliasValue = aiderAliasValueFromArg(args, i);
+    if (aliasValue && isAiderHostCredentialChainAlias(aliasValue)) {
+      throw new UsageError(
+        `aider session run 차단: ${aliasValue} alias 는 host AWS/Google credential chain 모델을 가리켜 partial-run 격리 범위 밖입니다.`
+      );
+    }
+  }
+}
+
+function aiderArgMatchesBlockedFlag(arg: string, flag: (typeof AIDER_BLOCK_ARG_FLAGS)[number]): boolean {
+  if (!arg.startsWith('--')) return false;
+  const option = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+  if (option === flag) return true;
+  if (!flag.startsWith(option)) return false;
+
+  // Aider currently uses Python argparse/configargparse long-option abbreviation. Prefixes such as
+  // `--conf`, `--env-fi`, or `--api-ke` can therefore select blocked options too. Fail closed for
+  // dangerous prefixes, while preserving the common safe exact `--model` option (a prefix of the
+  // model-sidecar flags but not itself a sidecar path).
+  if (option === '--model') return false;
+  if (
+    (flag === '--model-settings-file' || flag === '--model-metadata-file') &&
+    !option.startsWith('--model-')
+  ) {
+    return false;
+  }
+  return option.length > 2;
+}
+
+const AIDER_MODEL_VALUE_FLAGS = ['--model', '--weak-model', '--editor-model', '--list-models', '--models'] as const;
+const AIDER_ALIAS_VALUE_FLAGS = ['--alias'] as const;
+
+function aiderModelValueFromArg(args: readonly string[], index: number): string | null {
+  const arg = args[index] ?? '';
+  for (const flag of AIDER_MODEL_VALUE_FLAGS) {
+    if (!aiderArgMatchesModelValueFlag(arg, flag)) continue;
+    const equals = arg.indexOf('=');
+    if (equals >= 0) return arg.slice(equals + 1);
+    return args[index + 1] ?? null;
+  }
+  return null;
+}
+
+function aiderArgMatchesModelValueFlag(arg: string, flag: (typeof AIDER_MODEL_VALUE_FLAGS)[number]): boolean {
+  if (!arg.startsWith('--')) return false;
+  const option = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+  if (option === flag) return true;
+  if (flag === '--model') return false;
+  return flag.startsWith(option) && option.length > 2;
+}
+
+function isAiderHostCredentialChainModel(value: string): boolean {
+  return /^(bedrock|vertex_ai)\//i.test(value);
+}
+
+function aiderAliasValueFromArg(args: readonly string[], index: number): string | null {
+  const arg = args[index] ?? '';
+  for (const flag of AIDER_ALIAS_VALUE_FLAGS) {
+    if (!aiderArgMatchesValueFlag(arg, flag)) continue;
+    const equals = arg.indexOf('=');
+    if (equals >= 0) return arg.slice(equals + 1);
+    return args[index + 1] ?? null;
+  }
+  return null;
+}
+
+function aiderArgMatchesValueFlag(arg: string, flag: (typeof AIDER_ALIAS_VALUE_FLAGS)[number]): boolean {
+  if (!arg.startsWith('--')) return false;
+  const option = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+  if (option === flag) return true;
+  return flag.startsWith(option) && option.length > 2;
+}
+
+function isAiderHostCredentialChainAlias(value: string): boolean {
+  const separator = value.indexOf(':');
+  if (separator <= 0) return false;
+  return isAiderHostCredentialChainModel(value.slice(separator + 1).trim());
+}
+
+function preflightAiderEnv(): void {
+  for (const name of Object.keys(process.env)) {
+    if (name.startsWith('AIDER_')) {
+      throw new UsageError(`aider session run 차단: ${name} env 는 Aider 설정을 우회할 수 있습니다.`);
+    }
+    if (isAiderProviderCredentialEnv(name)) {
+      throw new UsageError(`aider session run 차단: ${name} env 는 provider credential 로 동작할 수 있습니다.`);
+    }
+  }
+}
+
+function isAiderProviderCredentialEnv(name: string): boolean {
+  if (
+    [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_BASE_URL',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'AWS_CONFIG_FILE',
+      'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+      'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+      'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+      'AWS_DEFAULT_PROFILE',
+      'AWS_PROFILE',
+      'AWS_ROLE_ARN',
+      'AWS_ROLE_SESSION_NAME',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_SESSION_TOKEN',
+      'AWS_SHARED_CREDENTIALS_FILE',
+      'AWS_WEB_IDENTITY_TOKEN_FILE',
+      'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+      'DEEPSEEK_API_KEY',
+      'DEEPSEEK_API_BASE',
+      'DEEPSEEK_BASE_URL',
+      'GEMINI_API_KEY',
+      'GEMINI_API_BASE',
+      'GEMINI_BASE_URL',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      'GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS',
+      'GOOGLE_CLOUD_PROJECT',
+      'GOOGLE_CLOUD_QUOTA_PROJECT',
+      'GOOGLE_PROJECT',
+      'OPENAI_API_BASE',
+      'OPENAI_API_HOST',
+      'OPENAI_API_KEY',
+      'OPENAI_API_TYPE',
+      'OPENAI_API_VERSION',
+      'OPENAI_API_DEPLOYMENT_ID',
+      'OPENAI_BASE_URL',
+      'OPENAI_ORGANIZATION_ID',
+      'OPENROUTER_API_KEY',
+      'OPENROUTER_API_BASE',
+      'OPENROUTER_BASE_URL',
+      'VERTEXAI_LOCATION',
+      'VERTEXAI_PROJECT'
+    ].includes(name)
+  ) {
+    return true;
+  }
+  return /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i.test(name);
+}
+
+function aiderOAuthKeysPath(): string {
+  return join(expandTilde('~/.aider'), 'oauth-keys.env');
+}
+
+async function aiderEnvCandidates(startDir: string): Promise<string[]> {
+  const out = [join(expandTilde('~'), '.env')];
+  let dir = startDir;
+  for (;;) {
+    out.push(join(dir, '.env'));
+    if (await aiderPathExists(join(dir, '.git'))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return Array.from(new Set(out));
+}
+
+async function aiderModelSidecarCandidates(
+  startDir: string
+): Promise<Array<{ path: string; label: string }>> {
+  const names = ['.aider.model.settings.yml', '.aider.model.metadata.json'];
+  const out: Array<{ path: string; label: string }> = [];
+  for (const name of names) out.push({ path: join(expandTilde('~'), name), label: 'home model sidecar' });
+  let dir = startDir;
+  for (;;) {
+    for (const name of names) out.push({ path: join(dir, name), label: 'project model sidecar' });
+    if (await aiderPathExists(join(dir, '.git'))) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return Array.from(new Map(out.map((candidate) => [candidate.path, candidate])).values());
+}
+
+async function inspectAiderOAuthKeysCandidate(path: string): Promise<void> {
+  const stat = await aiderLstatIfExists(path);
+  if (!stat) return;
+  if (stat.isSymbolicLink()) {
+    throw new UsageError(`aider session run 차단: OAuth key dotenv 후보가 symlink 입니다: ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new UsageError(`aider session run 차단: OAuth key dotenv 후보가 일반 파일이 아닙니다: ${path}`);
+  }
+  let text: string;
+  try {
+    text = await fs.readFile(path, 'utf8');
+  } catch (err) {
+    throw new UsageError(`aider session run 차단: OAuth key dotenv 후보를 읽을 수 없습니다: ${path}: ${errorText(err)}`);
+  }
+  if (text.length > 0) {
+    throw new UsageError(
+      `aider session run 차단: OAuth key dotenv 후보가 존재해 forced --env-file 격리를 우회할 수 있습니다: ${path}`
+    );
+  }
+}
+
+async function inspectAiderEnvCandidate(path: string): Promise<void> {
+  const stat = await aiderLstatIfExists(path);
+  if (!stat) return;
+  if (stat.isSymbolicLink()) {
+    throw new UsageError(`aider session run 차단: .env 후보가 symlink 입니다: ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new UsageError(`aider session run 차단: .env 후보가 일반 파일이 아닙니다: ${path}`);
+  }
+  let text: string;
+  try {
+    text = await fs.readFile(path, 'utf8');
+  } catch (err) {
+    throw new UsageError(`aider session run 차단: .env 후보를 읽을 수 없습니다: ${path}: ${errorText(err)}`);
+  }
+  const envName = findAiderCredentialEnvAssignment(text);
+  if (envName) {
+    throw new UsageError(`aider session run 차단: .env 에 ${envName} 설정이 있어 격리를 우회할 수 있습니다: ${path}`);
+  }
+}
+
+async function inspectAiderSidecarCandidate(path: string, label: string): Promise<void> {
+  const stat = await aiderLstatIfExists(path);
+  if (!stat) return;
+  if (stat.isSymbolicLink()) {
+    throw new UsageError(`aider session run 차단: ${label} 후보가 symlink 입니다: ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new UsageError(`aider session run 차단: ${label} 후보가 일반 파일이 아닙니다: ${path}`);
+  }
+  let text: string;
+  try {
+    text = await fs.readFile(path, 'utf8');
+  } catch (err) {
+    throw new UsageError(`aider session run 차단: ${label} 후보를 읽을 수 없습니다: ${path}: ${errorText(err)}`);
+  }
+  if (text.length > 0) {
+    throw new UsageError(`aider session run 차단: ${label} 후보가 존재해 model sidecar 격리를 보장할 수 없습니다: ${path}`);
+  }
+}
+
+function findAiderCredentialEnvAssignment(text: string): string | null {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+    if (!match) continue;
+    const name = match[1];
+    if (name.startsWith('AIDER_') || isAiderProviderCredentialEnv(name)) return name;
+  }
+  return null;
+}
+
+function findAiderProfileSidecarPointer(text: string): string | null {
+  if (/(^|[{\n\r,])\s*["']?model[-_]settings[-_]file["']?\s*[:=]/im.test(text)) return 'model-settings-file';
+  if (/(^|[{\n\r,])\s*["']?model[-_]metadata[-_]file["']?\s*[:=]/im.test(text)) return 'model-metadata-file';
+  return null;
+}
+
+function findAiderProfileSetEnv(text: string): string | null {
+  if (/(^|[{\n\r,])\s*["']?set[-_]env["']?\s*[:=]/im.test(text)) return 'set-env';
+  return null;
+}
+
+function findAiderHostCredentialChainModel(text: string): string | null {
+  const match = /(^|[{\n\r,])\s*["']?(?:model|models|weak[-_]model|editor[-_]model|list[-_]models)["']?\s*[:=]\s*["']?(bedrock|vertex_ai)\//im.exec(text);
+  return match ? `${match[2]}/` : null;
+}
+
+function findAiderHostCredentialChainAlias(text: string): string | null {
+  const match = /(^|[\s\["',])([^:\s"',\[\]][^:"',\[\]]*?\s*:\s*(bedrock|vertex_ai)\/[^\s"',\]]*)/im.exec(text);
+  return match ? match[2] : null;
 }
 
 const OPENCODE_BLOCK_ENV = [
@@ -1448,17 +1979,28 @@ async function failIfOpenCodePluginDirectoryExists(path: string, label: string):
   }
 }
 
-async function lstatIfExists(path: string): Promise<import('node:fs').Stats | null> {
+async function lstatIfExists(
+  path: string,
+  failurePrefix = 'opencode session run 차단: config 후보 확인 실패'
+): Promise<import('node:fs').Stats | null> {
   try {
     return await fs.lstat(path);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new UsageError(`opencode session run 차단: config 후보 확인 실패: ${path}: ${errorText(err)}`);
+    throw new UsageError(`${failurePrefix}: ${path}: ${errorText(err)}`);
   }
 }
 
 async function pathExists(path: string): Promise<boolean> {
   return (await lstatIfExists(path)) != null;
+}
+
+async function aiderLstatIfExists(path: string): Promise<import('node:fs').Stats | null> {
+  return lstatIfExists(path, 'aider session run 차단: 후보 확인 실패');
+}
+
+async function aiderPathExists(path: string): Promise<boolean> {
+  return (await aiderLstatIfExists(path)) != null;
 }
 
 function errorText(err: unknown): string {

@@ -18,7 +18,7 @@
 
 1. ✅ **`mat session run <cli> <profile> -- [cli-args...]` framework** — 임의 shell/command 금지, builtin executable allow-list, 기존 session materialize/recapture lifecycle 재사용.
 2. ✅ **OpenCode safer-run** — 현행 `session start opencode` 는 EXPERIMENTAL 유지. `session run opencode` 에서는 `attach`/`--dangerously-skip-permissions`/`--share`·`--command`/`--file`·`-f`/cwd·project-directory argv, `OPENCODE_AUTH_CONTENT`, `OPENCODE_CONFIG*`, `OPENCODE_DB`, `OPENCODE_MODELS_*`, `OPENCODE_TEST_*`, `OPENCODE_TUI_CONFIG`, `OPENCODE_PERMISSION`, provider credential env/project `.env`, local plugin/tool/command/mode/agent/skill dirs/config `instructions`/`skills`/`reference(s)`/`share`/deprecated `mode`/agent `prompt`·`permission`·`tools`/`plugin`/`mcp`/command channels/package manifests, global/managed/project/home `.opencode`/legacy `config`/`config.json`/`opencode.json{,c}`/`tui.json{,c}` 의 `{file:...}` substitution·plaintext/env-backed `apiKey`·credential header/option·provider endpoint·AWS profile 설정을 hard-stop 하고, child 의 AWS/Google ambient credential fallback 과 `.claude` prompt/skills fallback 을 scrub/disable.
-3. **Aider partial-run** — `session start aider` 는 미지원 유지. `session run aider` 는 forced `--config <session/aider.yml>` + forced `--env-file <session/.env>` 가 home/repo/current config·dotenv 탐색을 차단한다는 negative test 통과 후에만 지원. `--openai-api-key`/`--anthropic-api-key`/`--api-key` 및 provider `*_API_KEY` env 는 hard-stop/scrub.
+3. ✅ **Aider partial-run** — `session start aider` 는 미지원 유지. `session run aider` 는 forced `--config <session>/command/aider.yml` + forced empty `--env-file <session>/command/.env` 로 command-scoped 실행만 열고, user config/env/model-sidecar argv(축약 long-option 포함), ambient `AIDER_*`, provider credential/endpoint env, AWS/Google/Vertex credential-chain env, child AWS/Google credential-chain scrub, credential-bearing `.env`, `~/.aider/oauth-keys.env`, non-empty/symlinked model sidecars, profile 내부 sidecar pointer/set-env, Bedrock/Vertex model selector/listing/alias 를 hard-stop.
 4. **Antigravity research only** — 제품 지원은 blocked. upstream 의 stable auth-store contract 와 safe recapture story 가 모두 필요하다. Linux private-keyring 실험은 성공해도 지원 승격 조건이 아니라 research artifact 로만 둔다.
 
 ---
@@ -179,7 +179,7 @@ lterm send-keys "mat exec claude work-acc -- claude" Enter
 | 4 | ~~세션 격리 (#2)~~ ✅ | env var override 지원 CLI 부터 완료. Keychain/native-keyring CLI 는 별도 R&D |
 | 5 | ~~`mat session run` framework~~ ✅ | OpenCode/Aider 를 shell 이 아닌 command-scoped 경계로 안전하게 일부 unblock |
 | 6 | ~~OpenCode safer-run~~ ✅ | broad `XDG_DATA_HOME` EXPERIMENTAL 을 좁히고 config/env/project 우회 hard-stop |
-| 7 | Aider partial-run | forced config/env-file negative test 통과 후 제한 지원 |
+| 7 | ~~Aider partial-run~~ ✅ | forced config/env-file + env/argv/dotenv/OAuth-key/provider-chain/model-sidecar hard-stop 로 제한 지원 |
 | 8 | Antigravity auth-store research | upstream 계약 확인 전 제품 지원 금지 |
 | 9 | lterm shim wrapper (`lterm claude --profile X`) | lterm repo 협력 |
 

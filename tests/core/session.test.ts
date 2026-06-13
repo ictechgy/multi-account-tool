@@ -96,6 +96,13 @@ const OPENCODE_DEF = {
   sessionRun: { executable: 'opencode' }
 } satisfies CliDef;
 
+const AIDER_DEF = {
+  id: 'aider',
+  name: 'Aider (fixture)',
+  sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }],
+  sessionRun: { executable: 'aider' }
+} satisfies CliDef;
+
 type FakeChildProcess = EventEmitter & {
   pid?: number;
   exitCode: number | null;
@@ -173,6 +180,55 @@ const OPENCODE_FIXED_TEST_ENV_KEYS = [
   'XDG_CONFIG_HOME'
 ] as const;
 
+const AIDER_FIXED_TEST_ENV_KEYS = [
+  'AIDER_CONFIG',
+  'AIDER_ENV_FILE',
+  'AIDER_MODEL_METADATA_FILE',
+  'AIDER_MODEL_SETTINGS_FILE',
+  'AIDER_OPENAI_API_BASE',
+  'AIDER_OPENAI_API_KEY',
+  'AIDER_SET_ENV',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_BEARER_TOKEN_BEDROCK',
+  'AWS_CONFIG_FILE',
+  'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+  'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+  'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  'AWS_DEFAULT_PROFILE',
+  'AWS_PROFILE',
+  'AWS_ROLE_ARN',
+  'AWS_ROLE_SESSION_NAME',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_SHARED_CREDENTIALS_FILE',
+  'AWS_WEB_IDENTITY_TOKEN_FILE',
+  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'CUSTOM_AUTH_TOKEN',
+  'DEEPSEEK_API_BASE',
+  'DEEPSEEK_API_KEY',
+  'GEMINI_API_BASE',
+  'GEMINI_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_CLOUD_QUOTA_PROJECT',
+  'GOOGLE_PROJECT',
+  'OPENAI_API_BASE',
+  'OPENAI_API_HOST',
+  'OPENAI_API_KEY',
+  'OPENAI_API_TYPE',
+  'OPENAI_API_VERSION',
+  'OPENAI_API_DEPLOYMENT_ID',
+  'OPENAI_BASE_URL',
+  'OPENAI_ORGANIZATION_ID',
+  'OPENROUTER_API_KEY',
+  'VERTEXAI_LOCATION',
+  'VERTEXAI_PROJECT'
+] as const;
+
 function isOpenCodeProviderCredentialEnvForTest(name: string): boolean {
   if (
     [
@@ -195,6 +251,58 @@ function isOpenCodeProviderCredentialEnvForTest(name: string): boolean {
   return /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i.test(name);
 }
 
+function isAiderProviderCredentialEnvForTest(name: string): boolean {
+  if (
+    [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_BASE_URL',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'AWS_CONFIG_FILE',
+      'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+      'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+      'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+      'AWS_DEFAULT_PROFILE',
+      'AWS_PROFILE',
+      'AWS_ROLE_ARN',
+      'AWS_ROLE_SESSION_NAME',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_SESSION_TOKEN',
+      'AWS_SHARED_CREDENTIALS_FILE',
+      'AWS_WEB_IDENTITY_TOKEN_FILE',
+      'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+      'DEEPSEEK_API_KEY',
+      'DEEPSEEK_API_BASE',
+      'DEEPSEEK_BASE_URL',
+      'GEMINI_API_KEY',
+      'GEMINI_API_BASE',
+      'GEMINI_BASE_URL',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      'GOOGLE_AUTH_SUPPRESS_CREDENTIALS_WARNINGS',
+      'GOOGLE_CLOUD_PROJECT',
+      'GOOGLE_CLOUD_QUOTA_PROJECT',
+      'GOOGLE_PROJECT',
+      'OPENAI_API_BASE',
+      'OPENAI_API_HOST',
+      'OPENAI_API_KEY',
+      'OPENAI_API_TYPE',
+      'OPENAI_API_VERSION',
+      'OPENAI_API_DEPLOYMENT_ID',
+      'OPENAI_BASE_URL',
+      'OPENAI_ORGANIZATION_ID',
+      'OPENROUTER_API_KEY',
+      'OPENROUTER_API_BASE',
+      'OPENROUTER_BASE_URL',
+      'VERTEXAI_LOCATION',
+      'VERTEXAI_PROJECT'
+    ].includes(name)
+  ) {
+    return true;
+  }
+  return /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i.test(name);
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -205,7 +313,12 @@ beforeEach(async () => {
   envKeysToRestore = Array.from(
     new Set([
       ...OPENCODE_FIXED_TEST_ENV_KEYS,
-      ...Object.keys(process.env).filter(isOpenCodeProviderCredentialEnvForTest)
+      ...AIDER_FIXED_TEST_ENV_KEYS,
+      ...Object.keys(process.env).filter((name) =>
+        name.startsWith('AIDER_') ||
+        isOpenCodeProviderCredentialEnvForTest(name) ||
+        isAiderProviderCredentialEnvForTest(name)
+      )
     ])
   );
   originalEnv = Object.fromEntries(envKeysToRestore.map((k) => [k, process.env[k]]));
@@ -1183,6 +1296,343 @@ describe('runSessionCommand', () => {
       } finally {
         readdirSpy.mockRestore();
       }
+    });
+  });
+
+  describe('Aider partial-run preflight', () => {
+    async function enterProject(name = 'aider-project'): Promise<string> {
+      const dir = join(tmp.home, name);
+      await fs.mkdir(dir, { recursive: true });
+      process.chdir(dir);
+      return dir;
+    }
+
+    async function expectAiderHardStop(expected: RegExp, args: string[] = []): Promise<void> {
+      const promise = runSessionCommand({ cliId: 'aider', profileName: 'work', args });
+      await expect(promise).rejects.toBeInstanceOf(UsageError);
+      await expect(promise).rejects.toThrow(expected);
+      expect(mockProfileExists).not.toHaveBeenCalled();
+      expect(mockReadProfile).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+    }
+
+    beforeEach(async () => {
+      mockFindCliDef.mockReturnValue(AIDER_DEF);
+      await enterProject();
+    });
+
+    it('session start 는 계속 미지원이고 session run 만 command-scoped 로 열린다', async () => {
+      await expect(runSession({ cliId: 'aider', profileName: 'work' })).rejects.toBeInstanceOf(UsageError);
+      expect(mockProfileExists).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('safe path: forced --config/--env-file 로 command-only 격리본을 주입하고 재캡처한다', async () => {
+      await fs.writeFile(join(tmp.home, '.aider.conf.yml'), 'HOME_SHOULD_NOT_LOAD');
+      await fs.writeFile(join(process.cwd(), '.aider.conf.yml'), 'PROJECT_SHOULD_NOT_LOAD');
+      await fs.writeFile(join(process.cwd(), '.env'), 'SAFE_LOCAL_ONLY=1\n');
+      const child = fakeChild({ pid: 5432 });
+      mockSpawn.mockReturnValue(asChildProcess(child));
+
+      const runPromise = runSessionCommand({
+        cliId: 'aider',
+        profileName: 'work',
+        args: ['--message', 'hi']
+      });
+
+      await eventually(() => expect(mockSpawn).toHaveBeenCalled());
+      const [cmd, args, options] = mockSpawn.mock.calls[0];
+      expect(cmd).toBe('aider');
+      expect(args.slice(0, 4)).toEqual(['--config', expect.any(String), '--env-file', expect.any(String)]);
+      expect(args.slice(4)).toEqual(['--message', 'hi']);
+      const configPath = args[1] as string;
+      const envPath = args[3] as string;
+      expect(configPath).toContain(join('.multi-account-tool', 'sessions'));
+      expect(configPath.endsWith(join('command', 'aider.yml'))).toBe(true);
+      expect(envPath.endsWith(join('command', '.env'))).toBe(true);
+      await expect(fs.readFile(configPath, 'utf8')).resolves.toBe('TOK');
+      await expect(fs.readFile(envPath, 'utf8')).resolves.toBe('');
+      const configStat = await fs.stat(configPath);
+      const envStat = await fs.stat(envPath);
+      expect(configStat.mode & 0o777).toBe(0o600);
+      expect(envStat.mode & 0o777).toBe(0o600);
+
+      const env = (options as { env: Record<string, string | undefined> }).env;
+      expect(env.MAT_SESSION).toMatch(/^aider-work-[0-9a-f]{8}$/);
+      expect(env.AIDER_CONFIG).toBeUndefined();
+      expect(env.AIDER_ENV_FILE).toBeUndefined();
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(Object.keys(env).filter((name) => name.startsWith('AIDER_'))).toEqual([]);
+      expect(env.AWS_CONFIG_FILE).toBe('/dev/null');
+      expect(env.AWS_EC2_METADATA_DISABLED).toBe('true');
+      expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe('/dev/null');
+      expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe('/dev/null');
+      expect(env.CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE).toBe('/dev/null');
+      expect(env.NO_GCE_CHECK).toBe('true');
+      expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+      expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
+      expect(env.VERTEXAI_PROJECT).toBeUndefined();
+
+      child.emit('exit', 0, null);
+      await expect(runPromise).resolves.toEqual({ code: 0, signal: null, recaptureError: undefined });
+      expect(mockStage).toHaveBeenCalledWith('aider', 'work', 'aider.yml', 'TOK');
+      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+    });
+
+    it.each([
+      ['--config'],
+      ['--conf'],
+      ['--config=/tmp/aider.yml'],
+      ['-c'],
+      ['-c=/tmp/aider.yml'],
+      ['-c/tmp/aider.yml'],
+      ['--env'],
+      ['--en'],
+      ['--env=/tmp/.env'],
+      ['--env-file'],
+      ['--env-fi'],
+      ['--env-file=/tmp/.env'],
+      ['--api-key'],
+      ['--api-ke'],
+      ['--api-key=openai=sk-test'],
+      ['--openai-api-key'],
+      ['--openai-api-ke'],
+      ['--anthropic-api-key=sk-ant'],
+      ['--set-env'],
+      ['--set-en'],
+      ['--openai-api-base=https://evil.example/v1'],
+      ['--openai-base-url=https://evil.example/v1'],
+      ['--model-settings-file=/tmp/settings.yml'],
+      ['--model-settings-f=/tmp/settings.yml'],
+      ['--model-metadata-file=/tmp/metadata.json']
+    ])('%s argv override → hard-stop before profile/read/spawn', async (arg) => {
+      await expectAiderHardStop(/자격증명|config|env|sidecar|우회/, [arg]);
+    });
+
+    it.each([
+      ['--model', 'bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0'],
+      ['--model=vertex_ai/claude-3-5-sonnet@20240620'],
+      ['--weak-model', 'vertex_ai/gemini-pro'],
+      ['--weak', 'vertex_ai/gemini-pro'],
+      ['--weak-m=vertex_ai/gemini-pro'],
+      ['--editor=bedrock/anthropic.claude-v2'],
+      ['--editor-model=bedrock/anthropic.claude-v2'],
+      ['--list-models', 'bedrock/'],
+      ['--list=vertex_ai/'],
+      ['--models', 'bedrock/'],
+      ['--models=vertex_ai/']
+    ])('host credential-chain model argv %j → hard-stop before profile/read/spawn', async (...args) => {
+      await expectAiderHardStop(/host AWS\/Google credential chain/, args);
+    });
+
+    it.each([
+      ['--alias', 'safe:bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0', '--model', 'safe'],
+      ['--ali=safe:vertex_ai/claude-3-5-sonnet@20240620', '--model', 'safe'],
+      ['--alias', 'safe/name:bedrock/anthropic.claude-v2', '--model', 'safe/name'],
+      ['--alias', 'safe: bedrock/anthropic.claude-v2', '--model', 'safe'],
+      ['--alias=safe : vertex_ai/claude-3-5-sonnet@20240620', '--model', 'safe']
+    ])('host credential-chain alias argv %j → hard-stop before profile/read/spawn', async (...args) => {
+      await expectAiderHardStop(/alias.*host AWS\/Google credential chain/, args);
+    });
+
+    it.each([
+      'AIDER_CONFIG',
+      'AIDER_ENV_FILE',
+      'AIDER_MODEL_SETTINGS_FILE',
+      'AIDER_MODEL_METADATA_FILE',
+      'AIDER_OPENAI_API_KEY',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_PROFILE',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      'OPENAI_API_KEY',
+      'OPENAI_API_BASE',
+      'OPENAI_BASE_URL',
+      'ANTHROPIC_API_KEY',
+      'GEMINI_API_KEY',
+      'OPENROUTER_API_KEY',
+      'VERTEXAI_PROJECT',
+      'CUSTOM_AUTH_TOKEN'
+    ])('%s env present → hard-stop before profile/read/spawn', async (name) => {
+      process.env[name] = 'secret';
+      await expectAiderHardStop(new RegExp(`${name} env`));
+    });
+
+    it('home .env provider key → hard-stop before profile/read/spawn', async () => {
+      const path = join(tmp.home, '.env');
+      await fs.writeFile(path, 'OPENAI_API_KEY=sk-test\n');
+
+      await expectAiderHardStop(new RegExp(`\\.env.*OPENAI_API_KEY.*${escapeRegExp(path)}`));
+    });
+
+    it('project .env provider key → hard-stop before profile/read/spawn', async () => {
+      const path = join(process.cwd(), '.env');
+      await fs.writeFile(path, 'export ANTHROPIC_API_KEY=secret\n');
+
+      await expectAiderHardStop(new RegExp(`\\.env.*ANTHROPIC_API_KEY.*${escapeRegExp(path)}`));
+    });
+
+    it('project .env AWS/Google credential-chain assignment → hard-stop before profile/read/spawn', async () => {
+      const path = join(process.cwd(), '.env');
+      await fs.writeFile(path, 'AWS_ACCESS_KEY_ID=akid\nGOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp.json\n');
+
+      await expectAiderHardStop(new RegExp(`\\.env.*AWS_ACCESS_KEY_ID.*${escapeRegExp(path)}`));
+    });
+
+    it('home ~/.aider/oauth-keys.env non-empty → hard-stop before profile/read/spawn', async () => {
+      const path = join(tmp.home, '.aider', 'oauth-keys.env');
+      await fs.mkdir(join(tmp.home, '.aider'), { recursive: true });
+      await fs.writeFile(path, 'OPENROUTER_API_KEY=oauth-key\n');
+
+      await expectAiderHardStop(new RegExp(`OAuth key dotenv.*${escapeRegExp(path)}`));
+    });
+
+    it('symlinked ~/.aider/oauth-keys.env → hard-stop before profile/read/spawn', async () => {
+      const target = join(tmp.home, 'target-oauth-keys.env');
+      const path = join(tmp.home, '.aider', 'oauth-keys.env');
+      await fs.mkdir(join(tmp.home, '.aider'), { recursive: true });
+      await fs.writeFile(target, '');
+      await fs.symlink(target, path);
+
+      await expectAiderHardStop(new RegExp(`OAuth key dotenv.*symlink.*${escapeRegExp(path)}`));
+    });
+
+    it('unreadable ~/.aider/oauth-keys.env → hard-stop before profile/read/spawn', async () => {
+      const path = join(tmp.home, '.aider', 'oauth-keys.env');
+      await fs.mkdir(join(tmp.home, '.aider'), { recursive: true });
+      await fs.writeFile(path, '');
+      const readFileSpy = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(new Error('EACCES fixture'));
+
+      try {
+        await expectAiderHardStop(new RegExp(`OAuth key dotenv.*읽을 수 없습니다.*${escapeRegExp(path)}`));
+      } finally {
+        readFileSpy.mockRestore();
+      }
+    });
+
+    it('parent project .env provider key before git root → hard-stop from nested cwd', async () => {
+      const root = await enterProject('aider-repo-with-parent-env');
+      await fs.mkdir(join(root, '.git'));
+      const nested = join(root, 'packages', 'app');
+      await fs.mkdir(nested, { recursive: true });
+      const path = join(root, '.env');
+      await fs.writeFile(path, 'OPENROUTER_API_KEY=secret\n');
+      process.chdir(nested);
+
+      await expectAiderHardStop(new RegExp(`\\.env.*OPENROUTER_API_KEY.*${escapeRegExp(path)}`));
+    });
+
+    it('symlinked project .env candidate → hard-stop before profile/read/spawn', async () => {
+      const target = join(tmp.home, 'target-aider.env');
+      const path = join(process.cwd(), '.env');
+      await fs.writeFile(target, 'SAFE=1\n');
+      await fs.symlink(target, path);
+
+      await expectAiderHardStop(new RegExp(`\\.env.*symlink.*${escapeRegExp(path)}`));
+    });
+
+    it('unreadable project .env candidate → hard-stop before profile/read/spawn', async () => {
+      const path = join(process.cwd(), '.env');
+      await fs.writeFile(path, 'SAFE=1\n');
+      const readFileSpy = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(new Error('EACCES fixture'));
+
+      try {
+        await expectAiderHardStop(new RegExp(`\\.env.*읽을 수 없습니다.*${escapeRegExp(path)}`));
+      } finally {
+        readFileSpy.mockRestore();
+      }
+    });
+
+    it('project model settings sidecar 존재 → hard-stop before profile/read/spawn', async () => {
+      const path = join(process.cwd(), '.aider.model.settings.yml');
+      await fs.writeFile(path, 'openai/foo:\n  extra_params: {}\n');
+
+      await expectAiderHardStop(new RegExp(`model sidecar.*${escapeRegExp(path)}`));
+    });
+
+    it('home model metadata sidecar 존재 → hard-stop before profile/read/spawn', async () => {
+      const path = join(tmp.home, '.aider.model.metadata.json');
+      await fs.writeFile(path, '{"custom/model":{"max_input_tokens":1}}\n');
+
+      await expectAiderHardStop(new RegExp(`model sidecar.*${escapeRegExp(path)}`));
+    });
+
+    it('symlinked model sidecar candidate → hard-stop before profile/read/spawn', async () => {
+      const target = join(tmp.home, 'target-aider-model.yml');
+      const path = join(process.cwd(), '.aider.model.settings.yml');
+      await fs.writeFile(target, '');
+      await fs.symlink(target, path);
+
+      await expectAiderHardStop(new RegExp(`model sidecar.*symlink.*${escapeRegExp(path)}`));
+    });
+
+    it.each([
+      'model-settings-file: /tmp/aider-settings.yml\n',
+      'model_metadata_file: ~/.aider.model.metadata.json\n',
+      '{"model-settings-file":"/tmp/aider-settings.yml"}\n'
+    ])('profile 내부 model sidecar pointer(%s) → materialize 후 spawn 전 hard-stop + cleanup', async (profileText) => {
+      mockReadProfile.mockResolvedValue(profileText);
+
+      const promise = runSessionCommand({ cliId: 'aider', profileName: 'work', args: ['--message', 'hi'] });
+      await expect(promise).rejects.toBeInstanceOf(UsageError);
+      await expect(promise).rejects.toThrow(/profile config.*sidecar/);
+      expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
+      expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
+      expect(mockSpawn).not.toHaveBeenCalled();
+      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+    });
+
+    it.each([
+      'set-env:\n  - AWS_SHARED_CREDENTIALS_FILE=/tmp/aws-creds\n',
+      'set_env:\n  - GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp.json\n',
+      '{"set-env":["VERTEXAI_PROJECT=prod"]}\n'
+    ])('profile 내부 set-env(%s) → materialize 후 spawn 전 hard-stop + cleanup', async (profileText) => {
+      mockReadProfile.mockResolvedValue(profileText);
+
+      const promise = runSessionCommand({ cliId: 'aider', profileName: 'work', args: ['--message', 'hi'] });
+      await expect(promise).rejects.toBeInstanceOf(UsageError);
+      await expect(promise).rejects.toThrow(/profile config.*set-env/);
+      expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
+      expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
+      expect(mockSpawn).not.toHaveBeenCalled();
+      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+    });
+
+    it.each([
+      'model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0\n',
+      'models: vertex_ai/\n',
+      'weak_model: vertex_ai/claude-3-5-sonnet@20240620\n',
+      'list_models: bedrock/\n',
+      '{"editor-model":"bedrock/anthropic.claude-v2"}\n',
+      '{"list-models":"vertex_ai/"}\n'
+    ])('profile 내부 host credential-chain model(%s) → materialize 후 spawn 전 hard-stop + cleanup', async (profileText) => {
+      mockReadProfile.mockResolvedValue(profileText);
+
+      const promise = runSessionCommand({ cliId: 'aider', profileName: 'work', args: ['--message', 'hi'] });
+      await expect(promise).rejects.toBeInstanceOf(UsageError);
+      await expect(promise).rejects.toThrow(/host AWS\/Google credential chain/);
+      expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
+      expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
+      expect(mockSpawn).not.toHaveBeenCalled();
+      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+    });
+
+    it.each([
+      'alias: safe:bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0\nmodel: safe\n',
+      'alias:\n  - safe:vertex_ai/claude-3-5-sonnet@20240620\nmodel: safe\n',
+      'alias: safe/name:bedrock/anthropic.claude-v2\nmodel: safe/name\n',
+      'alias: "safe: bedrock/anthropic.claude-v2"\nmodel: safe\n',
+      'alias: ["safe : vertex_ai/claude-3-5-sonnet@20240620"]\nmodel: safe\n',
+      '{"alias":["safe:bedrock/anthropic.claude-v2"],"model":"safe"}\n'
+    ])('profile 내부 host credential-chain alias(%s) → materialize 후 spawn 전 hard-stop + cleanup', async (profileText) => {
+      mockReadProfile.mockResolvedValue(profileText);
+
+      const promise = runSessionCommand({ cliId: 'aider', profileName: 'work', args: ['--message', 'hi'] });
+      await expect(promise).rejects.toBeInstanceOf(UsageError);
+      await expect(promise).rejects.toThrow(/alias.*host AWS\/Google credential chain/);
+      expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
+      expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
+      expect(mockSpawn).not.toHaveBeenCalled();
+      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
     });
   });
 });
