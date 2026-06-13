@@ -96,10 +96,10 @@ export class ValidationError extends UsageError {
  * user-supplied service 가 들어올 수 있어 정의 시점에 방어선 적용.
  * Typed caller 는 readonly service 필드로 raw 값에 직접 접근 가능.
  *
- * **UI 권장**: redactMessage 가 50자+ base64-like service 명을 [redacted] 로
- * 가릴 수 있으므로, instanceof 분기 후 `err.service` 를 별도 라인 (또는 안내
- * UI 의 보조 필드) 으로 surface 해야 사용자가 어떤 service 를 정리해야 할지
- * 식별 가능. 현재 BUILTIN service 명은 짧아 redact 가 발생하지 않음.
+ * **UI 권장**: `err.service` 는 raw 필드로 보존되지만 사용자 표시는 describeError 의
+ * Service 라인처럼 sanitize/redact 를 거친 값을 사용한다. BUILTIN service 명은 짧고
+ * printable 이라 그대로 보이며, user-supplied plugin service 는 secret/control-like
+ * 값이면 표시 시 가려진다.
  */
 export class KeychainAccountMissingError extends Error {
   readonly service: string;

@@ -175,7 +175,7 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
     }
     const { def, error } = validateCliDefRaw(raw);
     if (error || !def) {
-      warnings.push(`${displayName}: ${error}`);
+      warnings.push(`${displayName}: ${sanitizeDisplayText(error ?? 'unknown validation error')}`);
       continue;
     }
     if (seenIds.has(def.id)) {

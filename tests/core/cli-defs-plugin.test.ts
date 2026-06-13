@@ -281,6 +281,20 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings[0]).not.toContain('\u001b');
   });
 
+  it('warning 의 validation error 본문도 display sanitize 된다', async () => {
+    await writePlugin('bad-id.json', {
+      id: 'bad\u001b[31m',
+      name: 'Bad',
+      sources: [{ type: 'file', path: '/tmp/x', saveAs: 'x.json' }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('bad?[31m');
+    expect(r.warnings[0]).not.toContain('\u001b');
+  });
+
   it('빈 디렉토리 → 빈 결과', async () => {
     await fs.mkdir(cliDefsDir(), { recursive: true });
     const r = loadUserCliDefs();

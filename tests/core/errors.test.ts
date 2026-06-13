@@ -90,6 +90,8 @@ describe('redactMessage', () => {
     ['Authorization: Bearer bearer-secret-12345', 'Authorization: Bearer [redacted]'],
     ['Authorization: Bearer "quoted-secret"', 'Authorization: Bearer "[redacted]"'],
     ['authorization="Bearer quoted-secret"', 'authorization="Bearer [redacted]"'],
+    ['Authorization: Basic dXNlcjpwYXNz', 'Authorization: Basic [redacted]'],
+    ['authorization="Basic dXNlcjpwYXNz"', 'authorization="Basic [redacted]"'],
     ['Authorization:\nBearer newline-secret', 'Authorization:?Bearer [redacted]'],
     ['Authorization:\x1fBearer unit-secret', 'Authorization:?Bearer [redacted]'],
     ['Authorization:\x00Bearer nul-secret', 'Authorization:?Bearer [redacted]'],
@@ -102,6 +104,13 @@ describe('redactMessage', () => {
     const out = redactMessage('token=eyJabc\n1234567890abcdef0123456789');
     expect(out).toBe('token=[redacted]');
     expect(out).not.toContain('1234567890');
+  });
+
+  it('standalone provider/JWT 토큰이 control 문자로 split 되어도 tail 을 남기지 않는다', () => {
+    const provider = redactMessage('failed token sk-proj-\nabcdefghijklmnop');
+    const jwt = redactMessage('failed token eyJhbGciOi\nJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadsig');
+    expect(provider).toBe('failed token [redacted]');
+    expect(jwt).toBe('failed token [redacted-jwt]');
   });
 
   it('제어 문자는 사용자 표시 전 치환한다', () => {
