@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-14
+
+세션 안의 Codex skill 사용성을 복구하고, 관련 copy-isolation 설명 문서를 다듬은 patch 릴리스.
+
 ### Added
 
 - Codex `mat session start` now copy-isolates `~/.codex/skills` into the session `CODEX_HOME/skills`, so skills are available in isolated profile shells without live-sharing or write-back to the source tree.
+
+### Changed
+
+- Polished README and generated site wording for session copy-isolation, clarifying that Codex `config.toml` and `skills/` are session-local snapshots and are never written back.
 
 ## [0.5.1] - 2026-06-13
 
