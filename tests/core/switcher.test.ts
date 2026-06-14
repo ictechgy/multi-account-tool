@@ -69,6 +69,7 @@ import {
   createProfile,
   deleteProfile,
   profileExists,
+  readMeta,
   readProfileFile,
   writeProfileFile
 } from '../../src/core/profile-store.js';
@@ -112,6 +113,21 @@ describe('switcher', () => {
       expect(result.empty).toEqual([]);
       expect(await profileExists('codex', 'work')).toBe(true);
       expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('live-data');
+    });
+
+    it('캡처 시 profile identity metadata 를 raw account 없이 기록', async () => {
+      const account = 'acct-person@example.test';
+      mockReadSource.mockResolvedValue(JSON.stringify({ tokens: { account_id: account }, auth_mode: 'ChatGPT' }));
+
+      await snapshotLiveToProfile('codex', 'identity');
+
+      const meta = await readMeta('codex', 'identity');
+      const serialized = JSON.stringify(meta);
+      expect(meta?.identity?.status).toBe('available');
+      expect(meta?.identity?.signals).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'account', fingerprint: expect.stringMatching(/^<hash:[0-9a-f]{12}>$/) })
+      ]));
+      expect(serialized).not.toContain(account);
     });
 
     it('라이브 값 없는 source 는 empty 에 (writeProfileFile 호출 안 됨)', async () => {

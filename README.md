@@ -237,7 +237,7 @@ A small allow-list of non-credential data may also be copied as session-local sn
 
 Before a real run, use `mat session run <cli> <profile> --check -- [cli-args...]` (or `--explain`) to exercise the **same** support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. Exit code `0` means the real run would pass preflight, `1` means a validation blocker was found, and `2` means usage/parser error. Add `--json` to that `--check`/`--explain` command for an automation-friendly report with blockers, phases, selected executable, profile existence, and exact argv.
 
-For dashboards and statuslines, `mat status --json` emits a stable schema-v1 summary of active profiles and sessions. `mat session list --json` emits schema-v1 lifecycle entries (`active` / `orphan` / `unknown`) with owner/child status and root env names only; it never includes session root paths. Mutating session lifecycle commands append best-effort, redacted JSONL events to `~/.multi-account-tool/audit.jsonl`; persistent audit entries hash profile/session identifiers and redact secret-like strings.
+For dashboards and statuslines, `mat status --json` emits a stable schema-v1 summary of active profiles and sessions. Active profiles may include capture-time identity metadata such as masked account/email fingerprints or allowlisted tier/provider-mode signals; status never parses credential files or keyring entries on demand. `mat session list --json` emits schema-v1 lifecycle entries (`active` / `orphan` / `unknown`) with owner/child status and root env names only; it never includes session root paths. Mutating session lifecycle commands append best-effort, redacted JSONL events to `~/.multi-account-tool/audit.jsonl`; persistent audit entries hash profile/session identifiers and redact secret-like strings.
 
 **Supported CLIs** (those that relocate their *credential* directory via an env var):
 
@@ -304,9 +304,9 @@ Exit codes:
 mat doctor [--json]
 ```
 
-Run a metadata-only safety audit across every known CLI. `doctor` reports active-profile state, profile directory presence, live source presence when it can be checked without reading secret values, session support flags, plugin warnings, and high-confidence ambient override channels such as provider API-key env vars or project-local config files.
+Run a metadata-only safety audit across every known CLI. `doctor` reports active-profile state, sanitized capture-time identity metadata when present, profile directory presence, live source presence when it can be checked without reading secret values, session support flags, plugin warnings, and high-confidence ambient override channels such as provider API-key env vars or project-local config files.
 
-`mat doctor` intentionally does **not** compare stored/live credential contents and does not query OS keyring entries that would print secret values. Use `mat freshness <cli>` when you explicitly want the deeper OAuth rotation comparison.
+`mat doctor` intentionally does **not** compare stored/live credential contents, parse profile credential files to backfill identity, or query OS keyring entries that would print secret values. Use `mat freshness <cli>` when you explicitly want the deeper OAuth rotation comparison.
 
 ```bash
 # Human-readable report
@@ -325,7 +325,7 @@ mat support <cli> [--json]
 mat explain <cli> [--json]
 ```
 
-Show exactly what `mat` supports for one CLI and why. The report covers profile swap, freshness/drift checks, `mat session start`, `mat session run`, source types (without live paths or credential values), ambient/project override risks, and the last verified upstream assumptions behind the support claim.
+Show exactly what `mat` supports for one CLI and why. The report covers profile swap, freshness/drift checks, `mat session start`, `mat session run`, source types (without live paths or credential values), static capture-time profile identity signal support, ambient/project override risks, and the last verified upstream assumptions behind the support claim.
 
 `explain` is an alias for `support`. Known blocked CLIs such as `agy` are explainable even when they are not valid profile-swap targets; user plugin CLIs are reported as profile-swap only with fallback freshness and no trusted session boundary.
 

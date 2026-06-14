@@ -30,6 +30,7 @@ import {
   validateProfileName
 } from './paths.js';
 import type { Profile } from './types.js';
+import type { ProfileIdentitySummary } from './types.js';
 
 // app.tsx / exec.ts 등 외부 호출자 backward compat 용 re-export.
 // 검증자는 paths.ts 단일 소스 — profile-store.ts 에 별도 정의 없음.
@@ -112,6 +113,21 @@ export async function touchProfile(cliId: string, name: string): Promise<void> {
   const meta = await readMeta(cliId, safeName);
   if (!meta) return;
   meta.updatedAt = new Date().toISOString();
+  await writeMeta(meta);
+}
+
+/** capture/recapture 성공 후 updatedAt + sanitized identity metadata 를 함께 기록. */
+export async function recordProfileCapture(
+  cliId: string,
+  name: string,
+  identity: ProfileIdentitySummary
+): Promise<void> {
+  validateCliId(cliId);
+  const safeName = validateProfileName(name);
+  const meta = await readMeta(cliId, safeName);
+  if (!meta) return;
+  meta.updatedAt = identity.capturedAt;
+  meta.identity = identity;
   await writeMeta(meta);
 }
 

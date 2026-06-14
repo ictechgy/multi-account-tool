@@ -14,10 +14,12 @@ import { getAllCliDefs, getCliDefsWarnings } from './cli-defs.js';
 import { loadConfig } from './config.js';
 import { errorMessage, redactMessage } from './errors.js';
 import { expandTilde, dataDir } from './paths.js';
-import { listProfiles, profileExists } from './profile-store.js';
+import { normalizeIsoString, normalizeProfileIdentity, formatProfileIdentity } from './profile-identity.js';
+import { listProfiles, profileExists, readMeta } from './profile-store.js';
 import { sourceExists } from './sources.js';
 import { doctorSessionSupportForCli } from './support.js';
 import type { CliDef, Config, Source } from './types.js';
+import type { ProfileIdentitySummary } from './types.js';
 
 export type DoctorStatus = 'ok' | 'warning' | 'error';
 export type SourcePresenceStatus = 'present' | 'missing' | 'not-checked' | 'error';
@@ -47,6 +49,9 @@ export interface DoctorCliReport {
   name: string;
   activeProfile?: string;
   activeProfileExists: boolean | null;
+  activeProfileUpdatedAt?: string;
+  activeProfileIdentity?: ProfileIdentitySummary;
+  activeProfileMetadataIssue?: 'missing' | 'invalid' | 'unreadable';
   profilesCount: number;
   sources: DoctorSourceStatus[];
   session: {
@@ -215,6 +220,7 @@ async function inspectCli(
       issues.push(issue('error', 'active.profile-check-error', `${cli.id}: active profile check failed: ${errorMessage(err)}`));
     }
   }
+  const meta = await inspectActiveProfileMeta(cli.id, activeProfile, issues);
 
   const sources = await Promise.all(cli.sources.map(inspectSource));
   for (const src of sources) {
@@ -234,6 +240,9 @@ async function inspectCli(
     name: redactMessage(cli.name),
     activeProfile: activeProfile == null ? undefined : redactMessage(activeProfile),
     activeProfileExists,
+    activeProfileUpdatedAt: meta.updatedAt,
+    activeProfileIdentity: meta.identity,
+    activeProfileMetadataIssue: meta.issue,
     profilesCount,
     sources,
     session,
@@ -244,6 +253,25 @@ async function inspectCli(
     },
     issues
   };
+}
+
+async function inspectActiveProfileMeta(
+  cliId: string,
+  activeProfile: string | undefined,
+  issues: DoctorIssue[]
+): Promise<{ updatedAt?: string; identity?: ProfileIdentitySummary; issue?: 'missing' | 'invalid' | 'unreadable' }> {
+  if (activeProfile == null) return {};
+  try {
+    const meta = await readMeta(cliId, activeProfile);
+    if (!meta) return { issue: 'missing' };
+    const updatedAt = normalizeIsoString(meta.updatedAt);
+    const identity = normalizeProfileIdentity(meta.identity);
+    if (!updatedAt) issues.push(issue('warning', 'active.metadata-invalid', `${cliId}: active profile metadata invalid`));
+    return { updatedAt, identity, issue: updatedAt ? undefined : 'invalid' };
+  } catch {
+    issues.push(issue('warning', 'active.metadata-unreadable', `${cliId}: active profile metadata unreadable`));
+    return { issue: 'unreadable' };
+  }
 }
 
 export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorReport> {
@@ -313,6 +341,10 @@ export function formatDoctorReport(report: DoctorReport): string {
     const cliStatus = aggregateStatus(cli.issues).toUpperCase();
     lines.push(`  ${cli.id} (${cli.name}) — ${cliStatus}`);
     lines.push(`    active: ${cli.activeProfile ?? '(none)'}${cli.activeProfileExists === false ? ' [missing]' : ''}`);
+    if (cli.activeProfileUpdatedAt) lines.push(`    active updatedAt: ${cli.activeProfileUpdatedAt}`);
+    if (cli.activeProfile || cli.activeProfileMetadataIssue) {
+      lines.push(`    ${formatProfileIdentity(cli.activeProfileIdentity)}${cli.activeProfileMetadataIssue ? ` [metadata:${cli.activeProfileMetadataIssue}]` : ''}`);
+    }
     lines.push(`    profiles: ${cli.profilesCount}`);
     lines.push(`    session: start=${cli.session.start}, run=${cli.session.run}`);
     lines.push(`    freshness: not-run (use: ${cli.freshness.command})`);

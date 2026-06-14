@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   listProfiles: vi.fn(),
   profileExists: vi.fn(),
+  readMeta: vi.fn(),
   sourceExists: vi.fn()
 }));
 
@@ -54,7 +55,8 @@ vi.mock('../../src/core/config.js', () => ({
 
 vi.mock('../../src/core/profile-store.js', () => ({
   listProfiles: mocks.listProfiles,
-  profileExists: mocks.profileExists
+  profileExists: mocks.profileExists,
+  readMeta: mocks.readMeta
 }));
 
 vi.mock('../../src/core/sources.js', () => ({
@@ -73,6 +75,7 @@ describe('doctor — read-only safety report', () => {
     mocks.loadConfig.mockResolvedValue({ version: 1, active: {} });
     mocks.listProfiles.mockResolvedValue([]);
     mocks.profileExists.mockResolvedValue(false);
+    mocks.readMeta.mockResolvedValue(null);
     mocks.sourceExists.mockResolvedValue(false);
   });
 
@@ -107,6 +110,39 @@ describe('doctor — read-only safety report', () => {
     expect(report.clis[0].session).toEqual({ start: 'supported', run: 'supported' });
     expect(JSON.stringify(report)).not.toContain('sk-should-not-appear');
     expect(mocks.sourceExists).not.toHaveBeenCalled();
+  });
+
+  it('surfaces only normalized active profile identity from metadata', async () => {
+    mocks.getAllCliDefs.mockReturnValue([
+      { id: 'codex', name: 'Codex CLI', sources: [{ type: 'file', path: '~/.codex/auth.json', saveAs: 'auth.json' }] }
+    ]);
+    mocks.loadConfig.mockResolvedValue({ version: 1, active: { codex: 'work' } });
+    mocks.profileExists.mockResolvedValue(true);
+    mocks.readMeta.mockResolvedValue({
+      name: 'work',
+      cli: 'codex',
+      createdAt: '2026-06-14T00:00:00.000Z',
+      updatedAt: '2026-06-14T00:00:00.000Z',
+      label: 'sk-abcdefghijklmnopqrstuvwxyz0123456789',
+      identity: {
+        schemaVersion: 1,
+        status: 'available',
+        capturedAt: '2026-06-14T00:00:00.000Z',
+        completeness: 'complete',
+        signals: [
+          { kind: 'email', source: 'auth.json', confidence: 'high', value: 'raw@example.test' },
+          { kind: 'account', source: '../../../secret', confidence: 'high', fingerprint: '<hash:123456789abc>' }
+        ]
+      }
+    });
+
+    const report = await runDoctor({ cwd: tmp.home, env: {}, now: new Date('2026-06-14T00:00:00Z') });
+    const serialized = JSON.stringify(report);
+
+    expect(report.clis[0].activeProfileIdentity?.signals[0]).toMatchObject({ fingerprint: '<hash:123456789abc>' });
+    expect(serialized).not.toContain('raw@example.test');
+    expect(serialized).not.toContain('../../../secret');
+    expect(serialized).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
   });
 
   it('warns about missing active profile and ambient override channels without env values', async () => {

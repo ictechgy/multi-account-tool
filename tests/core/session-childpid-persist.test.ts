@@ -62,7 +62,8 @@ vi.mock('../../src/core/profile-store.js', () => ({
   stageProfileFile: vi.fn().mockResolvedValue('/stub/staged'),
   commitStagedFile: vi.fn().mockResolvedValue(undefined),
   discardStagedFile: vi.fn().mockResolvedValue(undefined),
-  removeProfileFile: vi.fn().mockResolvedValue(undefined)
+  removeProfileFile: vi.fn().mockResolvedValue(undefined),
+  recordProfileCapture: vi.fn().mockResolvedValue(undefined)
 }));
 
 import { findCliDef } from '../../src/core/cli-defs.js';

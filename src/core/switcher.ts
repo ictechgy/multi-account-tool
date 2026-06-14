@@ -17,9 +17,11 @@ import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile, setActiveProfile } from './config.js';
 import { UnknownCliError } from './errors.js';
 import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
+import { buildProfileIdentity, type IdentitySourceInput } from './profile-identity.js';
 import {
   createProfile,
   profileExists,
+  recordProfileCapture,
   readProfileFile,
   touchProfile,
   writeProfileFile
@@ -61,16 +63,28 @@ async function snapshotLiveToProfileUnlocked(
   }
   const captured: string[] = [];
   const empty: string[] = [];
+  const identitySources: IdentitySourceInput[] = [];
   for (const src of def.sources) {
     const value = await readSource(src);
     if (value == null) {
       empty.push(src.saveAs);
+      const stored = await readProfileFile(cliId, profileName, src.saveAs);
+      identitySources.push({
+        saveAs: src.saveAs,
+        value: stored,
+        state: stored == null ? 'missing' : 'carried-forward'
+      });
       continue;
     }
     await writeProfileFile(cliId, profileName, src.saveAs, value);
     captured.push(src.saveAs);
+    identitySources.push({ saveAs: src.saveAs, value, state: 'captured' });
   }
-  await touchProfile(cliId, profileName);
+  await recordProfileCapture(
+    cliId,
+    profileName,
+    buildProfileIdentity({ cliId, capturedAt: new Date(), sources: identitySources })
+  );
   return { cliId, profileName, captured, empty };
 }
 

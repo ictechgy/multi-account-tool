@@ -237,7 +237,7 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 
 실행 전에는 `mat session run <cli> <profile> --check -- [cli-args...]` (또는 `--explain`) 으로 **동일한** 지원 여부, profile, executable, Aider, OpenCode hard-stop validator 를 점검할 수 있다. 이 경로는 CLI 를 spawn 하지 않고 session directory 도 만들지 않는다. 실제 실행 preflight 를 통과하면 exit `0`, validation blocker 가 있으면 `1`, 사용법/parser 오류는 `2` 다. 자동화가 필요하면 그 `--check`/`--explain` 명령에 `--json` 을 붙여 blocker, phase, 선택 executable, profile 존재 여부, 정확한 argv 를 포함한 report 를 받는다.
 
-dashboard/statusline 용도로 `mat status --json` 은 active profile 과 session 요약을 담은 안정 schema-v1 을 출력한다. `mat session list --json` 은 owner/child 상태와 root env 이름만 포함한 schema-v1 session lifecycle entry(`active` / `orphan` / `unknown`)를 출력하며, session root 절대 경로는 내보내지 않는다. 변이를 수행하는 session lifecycle 명령은 `~/.multi-account-tool/audit.jsonl` 에 best-effort redacted JSONL event 를 append 한다. persistent audit entry 는 profile/session identifier 를 hash 처리하고 secret-like string 을 redact 한다.
+dashboard/statusline 용도로 `mat status --json` 은 active profile 과 session 요약을 담은 안정 schema-v1 을 출력한다. active profile 에는 capture 시점에 저장된 masked account/email fingerprint 나 allowlisted tier/provider-mode 같은 identity metadata 가 포함될 수 있지만, status 는 credential file 이나 keyring entry 를 즉석에서 파싱하지 않는다. `mat session list --json` 은 owner/child 상태와 root env 이름만 포함한 schema-v1 session lifecycle entry(`active` / `orphan` / `unknown`)를 출력하며, session root 절대 경로는 내보내지 않는다. 변이를 수행하는 session lifecycle 명령은 `~/.multi-account-tool/audit.jsonl` 에 best-effort redacted JSONL event 를 append 한다. persistent audit entry 는 profile/session identifier 를 hash 처리하고 secret-like string 을 redact 한다.
 
 **지원 CLI** (자격증명 디렉토리를 env 로 재배치할 수 있는 것):
 
@@ -304,9 +304,9 @@ mat freshness --check-only
 mat doctor [--json]
 ```
 
-알려진 모든 CLI 에 대해 metadata-only 안전 진단을 실행한다. `doctor` 는 활성 프로필 상태, 프로필 디렉토리 존재 여부, 비밀값을 읽지 않고 확인 가능한 라이브 source 존재 여부, session 지원 플래그, plugin 경고, provider API-key env var 나 project-local config 파일 같은 high-confidence ambient override 채널을 보고한다.
+알려진 모든 CLI 에 대해 metadata-only 안전 진단을 실행한다. `doctor` 는 활성 프로필 상태, 저장된 경우 sanitized capture-time identity metadata, 프로필 디렉토리 존재 여부, 비밀값을 읽지 않고 확인 가능한 라이브 source 존재 여부, session 지원 플래그, plugin 경고, provider API-key env var 나 project-local config 파일 같은 high-confidence ambient override 채널을 보고한다.
 
-`mat doctor` 는 저장본/라이브 자격증명 내용을 비교하지 않으며, secret 값을 출력할 수 있는 OS keyring entry 조회도 하지 않는다. OAuth rotation 까지 포함한 deep 비교가 필요하면 명시적으로 `mat freshness <cli>` 를 사용한다.
+`mat doctor` 는 저장본/라이브 자격증명 내용을 비교하지 않고, identity backfill 을 위해 profile credential file 을 파싱하지 않으며, secret 값을 출력할 수 있는 OS keyring entry 조회도 하지 않는다. OAuth rotation 까지 포함한 deep 비교가 필요하면 명시적으로 `mat freshness <cli>` 를 사용한다.
 
 ```bash
 # 사람이 읽는 보고서
@@ -325,7 +325,7 @@ mat support <cli> [--json]
 mat explain <cli> [--json]
 ```
 
-하나의 CLI 에 대해 `mat` 이 정확히 무엇을 지원하고 왜 그런지 보여준다. 보고서에는 profile swap, freshness/drift 점검, `mat session start`, `mat session run`, source type(라이브 경로나 자격증명 값 제외), ambient/project override 위험, 지원 판단의 마지막 upstream 확인 가정이 포함된다.
+하나의 CLI 에 대해 `mat` 이 정확히 무엇을 지원하고 왜 그런지 보여준다. 보고서에는 profile swap, freshness/drift 점검, `mat session start`, `mat session run`, source type(라이브 경로나 자격증명 값 제외), capture-time profile identity signal 의 static 지원 여부, ambient/project override 위험, 지원 판단의 마지막 upstream 확인 가정이 포함된다.
 
 `explain` 은 `support` 의 alias 다. `agy` 처럼 의도적으로 blocked 된 CLI 도 profile-swap 대상이 아니더라도 설명 가능하다. 사용자 plugin CLI 는 profile-swap only + fallback freshness 로 표시되며, 신뢰된 session boundary 는 없다고 보고한다.
 

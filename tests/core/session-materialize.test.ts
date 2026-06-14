@@ -32,8 +32,10 @@ import {
   removeSessionDir
 } from '../../src/core/session.js';
 import {
+  createProfile,
   writeProfileFile,
   readProfileFile,
+  readMeta,
   stageProfileFile,
   commitStagedFile
 } from '../../src/core/profile-store.js';
@@ -728,6 +730,28 @@ describe('recaptureSession — 2-phase stage/commit 원자성 (H1)', () => {
     const dir = join(profileFilePath('qwen', 'work', 'qwen.env'), '..');
     const leftover = (await fs.readdir(dir)).filter((f) => f.includes('.recap-'));
     expect(leftover).toEqual([]);
+  });
+
+  it('정상: recapture 성공 후 profile identity metadata 를 기록', async () => {
+    const account = 'codex-person@example.test';
+    await createProfile('codex', 'work');
+    await writeProfileFile('codex', 'work', 'auth.json', JSON.stringify({ tokens: { account_id: 'old' } }));
+    const plan = planSession(findCliDef('codex')!, 'work', SID);
+    await materializeSession(plan);
+    await fs.writeFile(
+      join(plan.roots[0].dir, 'auth.json'),
+      JSON.stringify({ tokens: { account_id: account }, auth_mode: 'ChatGPT' })
+    );
+
+    await recaptureSession(plan);
+
+    const meta = await readMeta('codex', 'work');
+    const serialized = JSON.stringify(meta);
+    expect(meta?.identity?.status).toBe('available');
+    expect(meta?.identity?.signals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'account', fingerprint: expect.stringMatching(/^<hash:[0-9a-f]{12}>$/) })
+    ]));
+    expect(serialized).not.toContain(account);
   });
 
   it('commit 실패: 2번째 commit reject → 1번째 backup 원복(split 0) + 에러', async () => {
