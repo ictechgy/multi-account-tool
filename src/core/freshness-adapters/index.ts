@@ -16,6 +16,8 @@ import { geminiAdapter } from './gemini.js';
 import { gooseAdapter } from './goose.js';
 import { opencodeAdapter } from './opencode.js';
 
+export const BUILTIN_FRESHNESS_ADAPTER_IDS = ['claude', 'codex', 'gemini', 'goose', 'opencode'] as const;
+
 /**
  * 모든 builtin adapter 등록. idempotent (registerAdapter 가 Map.set).
  *

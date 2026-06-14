@@ -169,3 +169,89 @@ describe('mat doctor — read-only diagnostics', () => {
     await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
+
+describe('mat support/explain — support boundary diagnostics', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  it('prints parseable support JSON for a builtin CLI', () => {
+    const result = runMat(['support', 'codex', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      schemaVersion?: number;
+      cli?: { id?: string };
+      capabilities?: { sessionStart?: { status?: string } };
+    };
+    expect(report.schemaVersion).toBe(1);
+    expect(report.cli?.id).toBe('codex');
+    expect(report.capabilities?.sessionStart?.status).toBe('supported');
+  });
+
+  it('supports explain alias with human output for partial session run', () => {
+    const result = runMat(['explain', 'aider'], tmp.home);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/mat support — aider/);
+    expect(result.stdout).toMatch(/session run: partial/);
+    expect(result.stdout).toMatch(/session start: unsupported/);
+  });
+
+  it('explains known blocked CLIs', () => {
+    const result = runMat(['support', 'agy', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as { cli?: { kind?: string }; capabilities?: { swap?: { status?: string } } };
+    expect(report.cli?.kind).toBe('known-blocked');
+    expect(report.capabilities?.swap?.status).toBe('blocked');
+  });
+
+  it('keeps known-blocked ids blocked even if a user plugin uses the same id', async () => {
+    const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      join(dir, 'agy.json'),
+      JSON.stringify({
+        id: 'agy',
+        name: 'User Claimed Agy',
+        sources: [{ type: 'file', path: '~/.agy/token', saveAs: 'token.json' }]
+      })
+    );
+
+    const result = runMat(['support', 'agy', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as { cli?: { kind?: string }; capabilities?: { swap?: { status?: string } } };
+    expect(report.cli?.kind).toBe('known-blocked');
+    expect(report.capabilities?.swap?.status).toBe('blocked');
+  });
+
+  it('does not run legacy data-dir migration before support or explain help', async () => {
+    const legacy = join(tmp.home, '.multi-sub-terminal');
+    const current = join(tmp.home, '.multi-account-tool');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(join(legacy, 'sentinel.txt'), 'legacy');
+
+    const supportResult = runMat(['support', 'codex', '--json'], tmp.home);
+    const helpResult = runMat(['explain', '--help'], tmp.home);
+
+    expect(supportResult.code).toBe(0);
+    expect(helpResult.code).toBe(0);
+    await expect(fs.stat(legacy)).resolves.toBeTruthy();
+    await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('invalid support args exit 2', () => {
+    expect(runMat(['support'], tmp.home).code).toBe(2);
+    expect(runMat(['support', 'codex', 'extra'], tmp.home).code).toBe(2);
+    expect(runMat(['support', 'codex', '--bogus'], tmp.home).code).toBe(2);
+    expect(runMat(['support', 'unknown-cli'], tmp.home).code).toBe(2);
+  });
+});

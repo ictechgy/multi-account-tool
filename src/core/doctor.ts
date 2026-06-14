@@ -16,6 +16,7 @@ import { errorMessage, redactMessage } from './errors.js';
 import { expandTilde, dataDir } from './paths.js';
 import { listProfiles, profileExists } from './profile-store.js';
 import { sourceExists } from './sources.js';
+import { doctorSessionSupportForCli } from './support.js';
 import type { CliDef, Config, Source } from './types.js';
 
 export type DoctorStatus = 'ok' | 'warning' | 'error';
@@ -259,12 +260,6 @@ async function ambientIssues(cliId: string, env: NodeJS.ProcessEnv, cwd: string)
   return issues;
 }
 
-function sessionStartStatus(cli: CliDef): DoctorCliReport['session']['start'] {
-  if (!cli.session) return 'unsupported';
-  const hasExperimentalWarning = cli.session.roots.some((root) => /EXPERIMENTAL/i.test(root.warning ?? ''));
-  return hasExperimentalWarning ? 'experimental' : 'supported';
-}
-
 async function inspectCli(cli: CliDef, activeProfile: string | undefined, env: NodeJS.ProcessEnv, cwd: string): Promise<DoctorCliReport> {
   const issues: DoctorIssue[] = [];
   let profilesCount = 0;
@@ -300,6 +295,8 @@ async function inspectCli(cli: CliDef, activeProfile: string | undefined, env: N
 
   issues.push(...await ambientIssues(cli.id, env, cwd));
 
+  const session = doctorSessionSupportForCli(cli);
+
   return {
     id: cli.id,
     name: redactMessage(cli.name),
@@ -307,10 +304,7 @@ async function inspectCli(cli: CliDef, activeProfile: string | undefined, env: N
     activeProfileExists,
     profilesCount,
     sources,
-    session: {
-      start: sessionStartStatus(cli),
-      run: cli.sessionRun ? 'supported' : 'unsupported'
-    },
+    session,
     freshness: {
       status: 'not-run',
       reason: 'doctor avoids credential-value reads; run explicit freshness check when needed',

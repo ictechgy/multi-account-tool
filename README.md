@@ -74,6 +74,8 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 
 "⚠️ untested" = swap logic is platform-agnostic file I/O, but the project's CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI's documentation, not exercised. Patches and bug reports welcome.
 
+For a CLI-specific explanation of these support boundaries, run `mat support <cli>` (or `mat explain <cli>`). It prints the current swap/freshness/session status, caveats, ambient override risks, and last-verified upstream assumptions.
+
 ### Switch flow (lossless)
 
 0. **Pre-swap freshness check** — if the live credentials drifted from the active profile (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before steps 1–3 below. See "OAuth Rotation Safety Matrix" above for per-CLI classification.
@@ -302,6 +304,23 @@ mat doctor --json
 ```
 
 See the OAuth Rotation Safety Matrix at the top of this README for per-CLI classification confidence.
+
+### `mat support` / `mat explain` — explain CLI support boundaries
+
+```bash
+mat support <cli> [--json]
+mat explain <cli> [--json]
+```
+
+Show what `mat` supports for one CLI and why. The report covers profile swap, freshness/drift checks, `mat session start`, `mat session run`, source types (without live paths or credential values), ambient/project override risks, and the last-verified upstream assumptions behind the support claim.
+
+`explain` is an alias for `support`. Known blocked CLIs such as `agy` are explainable even when they are not valid profile-swap targets; user plugin CLIs are reported as profile-swap only with fallback freshness and no trusted session boundary.
+
+```bash
+mat support codex
+mat support aider --json
+mat explain agy
+```
 
 ---
 
