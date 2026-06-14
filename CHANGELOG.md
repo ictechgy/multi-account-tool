@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-14
+
+Support-boundary explainability, read-only diagnostics, session-run preflight, and observability surfaces for automation/statusline consumers.
+
 ### Added
 
 - `mat doctor [--json]` read-only safety diagnostics command. It reports active-profile/profile-directory state, metadata-safe live source presence, session support flags, plugin warnings, and high-confidence ambient override channels without reading credential values or OS-keyring secret entries.
@@ -14,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Warning-only ambient credential/config bypass notices for foreground profile switching and `mat exec`, reusing the same detector as `mat doctor`.
 - `mat session run <cli> <profile> --check|--explain [--json] -- [cli-args...]` dry-run preflight reports. The check path reuses the exact real-run support/profile/executable/Aider/OpenCode validators without spawning the CLI or creating session state, exits `0` on pass, `1` on validation blockers, and `2` for usage errors.
 - Observability substrate: `mat status [--json]`, `mat session list --json`, and best-effort redacted session lifecycle audit JSONL at `~/.multi-account-tool/audit.jsonl`.
+
+### Changed
+
+- Polished README and generated site wording for session observability, support-boundary explanation, OAuth rotation safety, and data-layout documentation.
 
 ## [0.5.2] - 2026-06-14
 
@@ -373,7 +381,10 @@ Manager source type 도입 후 재PR 예정으로 보류.
 - **Homebrew**: `ictechgy/homebrew-mat` tap (mat.rb @ 0.2.0) — `brew tap ictechgy/mat && brew install mat`.
 - **GitHub**: https://github.com/ictechgy/multi-account-tool
 
-[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ictechgy/multi-account-tool/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.5.2...v0.6.0
+[0.5.2]: https://github.com/ictechgy/multi-account-tool/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/ictechgy/multi-account-tool/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ictechgy/multi-account-tool/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ictechgy/multi-account-tool/compare/v0.3.1...v0.4.0
