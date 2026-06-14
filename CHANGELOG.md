@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `mat doctor [--json]` read-only safety diagnostics command. It reports active-profile/profile-directory state, metadata-safe live source presence, session support flags, plugin warnings, and high-confidence ambient override channels without reading credential values or OS-keyring secret entries.
+
 ## [0.5.2] - 2026-06-14
 
 세션 안의 Codex skill 사용성을 복구하고, 관련 copy-isolation 설명 문서를 다듬은 patch 릴리스.

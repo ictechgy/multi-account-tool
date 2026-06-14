@@ -114,7 +114,7 @@ npm link
 
 ```bash
 mat --version                  # 설치된 semver 출력
-mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat session` / `mat freshness`)
+mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat session` / `mat freshness` / `mat doctor`)
 node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke test (CLI 정의 로드 + path resolve 확인, 자격증명 미수정)
 ```
 
@@ -127,7 +127,7 @@ smoke test 는 read-only 라 활성 mat 프로필이 있는 환경에서도 안�
 ```bash
 mat              # TUI 실행
 mat --version    # 설치된 버전 출력
-mat --help       # 짧은 사용법 (subcommand: exec / session / freshness)
+mat --help       # 짧은 사용법 (subcommand: exec / session / freshness / doctor)
 ```
 
 TUI 가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
@@ -282,6 +282,24 @@ mat freshness --check-only
 | `1` | 하나 이상의 source 가 `stale`, low-confidence `rotated`, `inflight` — **swap 전 조치 필요** (`--check-only` 제외) |
 | `2` | 사용 오류 |
 | `74` | 내부 검사 실패 (source 읽기 에러 등) |
+
+### `mat doctor` — read-only 안전 진단
+
+```bash
+mat doctor [--json]
+```
+
+알려진 모든 CLI 에 대해 metadata-only 안전 진단을 실행한다. `doctor` 는 활성 프로필 상태, 프로필 디렉토리 존재 여부, 비밀값을 읽지 않고 확인 가능한 라이브 source 존재 여부, session 지원 플래그, plugin 경고, provider API-key env var 나 project-local config 파일 같은 high-confidence ambient override 채널을 보고한다.
+
+`mat doctor` 는 저장본/라이브 자격증명 내용을 비교하지 않으며, secret 값을 출력할 수 있는 OS keyring entry 조회도 하지 않는다. OAuth rotation 까지 포함한 deep 비교가 필요하면 명시적으로 `mat freshness <cli>` 를 사용한다.
+
+```bash
+# 사람이 읽는 보고서
+mat doctor
+
+# CI/statusline 친화 JSON 보고서
+mat doctor --json
+```
 
 CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 참고.
 

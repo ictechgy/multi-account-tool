@@ -135,3 +135,37 @@ describe('mat freshness — exit code 정책', () => {
     expect(reports[0].sources[0].result.kind).toBe('stale');
   });
 });
+
+describe('mat doctor — read-only diagnostics', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  it('prints parseable JSON and exits 0', () => {
+    const result = runMat(['doctor', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as { schemaVersion?: number; clis?: unknown[] };
+    expect(report.schemaVersion).toBe(1);
+    expect(Array.isArray(report.clis)).toBe(true);
+  });
+
+  it('does not run legacy data-dir migration before doctor', async () => {
+    const legacy = join(tmp.home, '.multi-sub-terminal');
+    const current = join(tmp.home, '.multi-account-tool');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(join(legacy, 'sentinel.txt'), 'legacy');
+
+    const result = runMat(['doctor', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    await expect(fs.stat(legacy)).resolves.toBeTruthy();
+    await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});

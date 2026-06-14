@@ -114,7 +114,7 @@ npm link
 
 ```bash
 mat --version                  # prints the installed semver
-mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat freshness`)
+mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat freshness` / `mat doctor`)
 node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (CLI defs load + paths resolve, never touches credentials)
 ```
 
@@ -127,7 +127,7 @@ The smoke test is read-only and safe to run on a machine with active mat profile
 ```bash
 mat              # launch the TUI
 mat --version    # print installed version
-mat --help       # short usage summary (subcommands: exec, session, freshness)
+mat --help       # short usage summary (subcommands: exec, session, freshness, doctor)
 ```
 
 The TUI opens with **CLI → profile → switch**.
@@ -282,6 +282,24 @@ Exit codes:
 | `1` | One or more sources are `stale`, low-confidence `rotated`, or `inflight` — **fix before swap** (unless `--check-only`) |
 | `2` | Usage error |
 | `74` | Internal check failed (e.g., source read error) |
+
+### `mat doctor` — read-only safety diagnostics
+
+```bash
+mat doctor [--json]
+```
+
+Run a metadata-only safety audit for every known CLI. `doctor` reports active-profile state, profile directory presence, live source presence where it can be checked without reading secret values, session support flags, plugin warnings, and high-confidence ambient override channels such as provider API-key env vars or project-local config files.
+
+`mat doctor` intentionally does **not** compare stored/live credential contents and does not query OS keyring entries that would print secret values. Use `mat freshness <cli>` when you explicitly want the deeper OAuth rotation comparison.
+
+```bash
+# Human-readable report
+mat doctor
+
+# CI/statusline-friendly JSON report
+mat doctor --json
+```
 
 See the OAuth Rotation Safety Matrix at the top of this README for per-CLI classification confidence.
 

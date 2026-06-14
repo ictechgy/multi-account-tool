@@ -53,7 +53,7 @@
     <details class="toc-collapse">
       <summary class="toc-title">On this page</summary>
       <nav class="toc" aria-label="On this page">
-<ul class="toc-list"><li><a href="#why" data-toc="why">Why</a></li><li><a href="#how-it-works" data-toc="how-it-works">How it works</a><ul class="toc-sub"><li><a href="#oauth-rotation-safety-matrix" data-toc="oauth-rotation-safety-matrix">OAuth Rotation Safety Matrix</a></li><li><a href="#platform-support" data-toc="platform-support">Platform support</a></li><li><a href="#switch-flow-lossless" data-toc="switch-flow-lossless">Switch flow (lossless)</a></li></ul></li><li><a href="#install" data-toc="install">Install</a><ul class="toc-sub"><li><a href="#homebrew-recommended-on-macos" data-toc="homebrew-recommended-on-macos">Homebrew (recommended on macOS)</a></li><li><a href="#npm" data-toc="npm">npm</a></li><li><a href="#from-source" data-toc="from-source">From source</a></li><li><a href="#verify-the-install" data-toc="verify-the-install">Verify the install</a></li></ul></li><li><a href="#usage" data-toc="usage">Usage</a><ul class="toc-sub"><li><a href="#first-run" data-toc="first-run">First run</a></li><li><a href="#adding-a-new-account" data-toc="adding-a-new-account">Adding a new account</a></li><li><a href="#key-bindings" data-toc="key-bindings">Key bindings</a></li><li><a href="#mat-exec-one-shot-swap-around-a-command" data-toc="mat-exec-one-shot-swap-around-a-command">mat exec — one-shot swap around a command</a></li><li><a href="#mat-session-per-session-isolation-different-account-per-terminal-concurrently" data-toc="mat-session-per-session-isolation-different-account-per-terminal-concurrently">mat session — per-session isolation (different account per terminal, concurrently)</a></li><li><a href="#mat-freshness-pre-swap-safety-check" data-toc="mat-freshness-pre-swap-safety-check">mat freshness — pre-swap safety check</a></li></ul></li><li><a href="#data-layout" data-toc="data-layout">Data layout</a></li><li><a href="#security" data-toc="security">Security</a><ul class="toc-sub"><li><a href="#accepted-trade-offs-by-design" data-toc="accepted-trade-offs-by-design">Accepted trade-offs (by design)</a></li><li><a href="#built-in-safeguards" data-toc="built-in-safeguards">Built-in safeguards</a></li><li><a href="#not-recommended-on" data-toc="not-recommended-on">Not recommended on</a></li></ul></li><li><a href="#adding-a-new-cli" data-toc="adding-a-new-cli">Adding a new CLI</a><ul class="toc-sub"><li><a href="#1-user-plugin-no-code-change-required-recommended-for-personal-use" data-toc="1-user-plugin-no-code-change-required-recommended-for-personal-use">1. User plugin — no code change required (recommended for personal use)</a></li><li><a href="#2-built-in-addition-requires-mat-repo-pr" data-toc="2-built-in-addition-requires-mat-repo-pr">2. Built-in addition — requires mat repo PR</a></li></ul></li><li><a href="#changelog" data-toc="changelog">Changelog</a></li><li><a href="#roadmap" data-toc="roadmap">Roadmap</a></li><li><a href="#license" data-toc="license">License</a></li></ul>
+<ul class="toc-list"><li><a href="#why" data-toc="why">Why</a></li><li><a href="#how-it-works" data-toc="how-it-works">How it works</a><ul class="toc-sub"><li><a href="#oauth-rotation-safety-matrix" data-toc="oauth-rotation-safety-matrix">OAuth Rotation Safety Matrix</a></li><li><a href="#platform-support" data-toc="platform-support">Platform support</a></li><li><a href="#switch-flow-lossless" data-toc="switch-flow-lossless">Switch flow (lossless)</a></li></ul></li><li><a href="#install" data-toc="install">Install</a><ul class="toc-sub"><li><a href="#homebrew-recommended-on-macos" data-toc="homebrew-recommended-on-macos">Homebrew (recommended on macOS)</a></li><li><a href="#npm" data-toc="npm">npm</a></li><li><a href="#from-source" data-toc="from-source">From source</a></li><li><a href="#verify-the-install" data-toc="verify-the-install">Verify the install</a></li></ul></li><li><a href="#usage" data-toc="usage">Usage</a><ul class="toc-sub"><li><a href="#first-run" data-toc="first-run">First run</a></li><li><a href="#adding-a-new-account" data-toc="adding-a-new-account">Adding a new account</a></li><li><a href="#key-bindings" data-toc="key-bindings">Key bindings</a></li><li><a href="#mat-exec-one-shot-swap-around-a-command" data-toc="mat-exec-one-shot-swap-around-a-command">mat exec — one-shot swap around a command</a></li><li><a href="#mat-session-per-session-isolation-different-account-per-terminal-concurrently" data-toc="mat-session-per-session-isolation-different-account-per-terminal-concurrently">mat session — per-session isolation (different account per terminal, concurrently)</a></li><li><a href="#mat-freshness-pre-swap-safety-check" data-toc="mat-freshness-pre-swap-safety-check">mat freshness — pre-swap safety check</a></li><li><a href="#mat-doctor-read-only-safety-diagnostics" data-toc="mat-doctor-read-only-safety-diagnostics">mat doctor — read-only safety diagnostics</a></li></ul></li><li><a href="#data-layout" data-toc="data-layout">Data layout</a></li><li><a href="#security" data-toc="security">Security</a><ul class="toc-sub"><li><a href="#accepted-trade-offs-by-design" data-toc="accepted-trade-offs-by-design">Accepted trade-offs (by design)</a></li><li><a href="#built-in-safeguards" data-toc="built-in-safeguards">Built-in safeguards</a></li><li><a href="#not-recommended-on" data-toc="not-recommended-on">Not recommended on</a></li></ul></li><li><a href="#adding-a-new-cli" data-toc="adding-a-new-cli">Adding a new CLI</a><ul class="toc-sub"><li><a href="#1-user-plugin-no-code-change-required-recommended-for-personal-use" data-toc="1-user-plugin-no-code-change-required-recommended-for-personal-use">1. User plugin — no code change required (recommended for personal use)</a></li><li><a href="#2-built-in-addition-requires-mat-repo-pr" data-toc="2-built-in-addition-requires-mat-repo-pr">2. Built-in addition — requires mat repo PR</a></li></ul></li><li><a href="#changelog" data-toc="changelog">Changelog</a></li><li><a href="#roadmap" data-toc="roadmap">Roadmap</a></li><li><a href="#license" data-toc="license">License</a></li></ul>
       </nav>
     </details>
   </aside>
@@ -282,7 +282,7 @@ npm link
 </code></pre>
 <h3 id="verify-the-install">Verify the install</h3>
 <pre><code class="language-bash">mat --version                  # prints the installed semver
-mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat freshness`)
+mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat freshness` / `mat doctor`)
 node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (CLI defs load + paths resolve, never touches credentials)
 </code></pre>
 <p>The smoke test is read-only and safe to run on a machine with active mat profiles.</p>
@@ -290,7 +290,7 @@ node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (
 <h2 id="usage">Usage</h2>
 <pre><code class="language-bash">mat              # launch the TUI
 mat --version    # print installed version
-mat --help       # short usage summary (subcommands: exec, session, freshness)
+mat --help       # short usage summary (subcommands: exec, session, freshness, doctor)
 </code></pre>
 <p>The TUI opens with <strong>CLI → profile → switch</strong>.</p>
 <h3 id="first-run">First run</h3>
@@ -531,6 +531,17 @@ mat freshness --check-only
 <td>Internal check failed (e.g., source read error)</td>
 </tr>
 </tbody></table></div>
+<h3 id="mat-doctor-read-only-safety-diagnostics"><code>mat doctor</code> — read-only safety diagnostics</h3>
+<pre><code class="language-bash">mat doctor [--json]
+</code></pre>
+<p>Run a metadata-only safety audit for every known CLI. <code>doctor</code> reports active-profile state, profile directory presence, live source presence where it can be checked without reading secret values, session support flags, plugin warnings, and high-confidence ambient override channels such as provider API-key env vars or project-local config files.</p>
+<p><code>mat doctor</code> intentionally does <strong>not</strong> compare stored/live credential contents and does not query OS keyring entries that would print secret values. Use <code>mat freshness &lt;cli&gt;</code> when you explicitly want the deeper OAuth rotation comparison.</p>
+<pre><code class="language-bash"># Human-readable report
+mat doctor
+
+# CI/statusline-friendly JSON report
+mat doctor --json
+</code></pre>
 <p>See the OAuth Rotation Safety Matrix at the top of this README for per-CLI classification confidence.</p>
 <hr>
 <h2 id="data-layout">Data layout</h2>
