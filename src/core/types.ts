@@ -89,6 +89,27 @@ export interface OsKeyringSource {
 export type Source = FileSource | KeychainSource | OsKeyringSource;
 
 /**
+ * 세션 시작 시 base 하위 디렉토리를 세션 root 로 재귀 복사할 allow-list 항목.
+ *
+ * `share` 는 단일 UTF-8 설정 파일 전용으로 유지한다. `shareDirs` 는 Codex `skills/` 처럼
+ * nested 파일/asset 트리가 필요한 경우에만 별도 opt-in 하는 copy-isolate 경계다. 복사본은
+ * 세션 종료 시 폐기되며 재캡처/write-back 대상이 아니다.
+ */
+export interface SessionShareDir {
+  /**
+   * base 기준 상대 디렉토리. 현재 보안 모델은 source root 를 단일 세그먼트로 제한한다
+   * (예: `skills`). 내부 자식 경로는 materialize 단계에서 개별 검증하며, symlink 는 항상 거부된다.
+   */
+  rel: string;
+  /** 선택. 복사할 전체 regular-file byte 상한. */
+  maxBytes?: number;
+  /** 선택. 복사할 regular-file 개수 상한. */
+  maxFiles?: number;
+  /** 선택. root 하위 재귀 깊이 상한(root 직속 파일/디렉토리 depth=1). */
+  maxDepth?: number;
+}
+
+/**
  * 세션 격리(`mat session`)용 env-redirect 매핑.
  *
  * CLI 가 자신의 config/credential 디렉토리 위치를 env var 로 override 할 수 있을 때,
@@ -138,6 +159,14 @@ export interface SessionRoot {
    * 세그먼트면 복사 대상 부모가 항상 credRoot(이미 생성·검증)라 중간 컴포넌트가 없다.
    */
   share?: string[];
+  /**
+   * 선택. base 상대 디렉토리 allow-list — 세션 시작 시 base 에서 세션 root 로 재귀 복사한다.
+   *
+   * `share` 와 달리 디렉토리/asset 트리를 다루므로 별도 필드로 둔다. top-level rel 은 단일
+   * 세그먼트만 허용하고, 복사 중 모든 하위 항목은 regular file/directory 만 허용한다. symlink,
+   * 특수파일, traversal, 용량/파일수/깊이 초과는 fail-closed. 복사본은 재캡처/write-back 되지 않는다.
+   */
+  shareDirs?: SessionShareDir[];
 }
 
 /** 세션 격리 명세. roots 가 1개 이상일 때 그 CLI 는 세션 격리를 지원한다. */

@@ -8,7 +8,7 @@
  *
  * 자격증명은 env 에 실리지 않고 격리 디렉토리 파일로만 전달됨을 함께 확인한다.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const home = process.env.CODEX_HOME;
@@ -18,6 +18,14 @@ if (!home) {
 }
 const authPath = join(home, 'auth.json');
 const seen = readFileSync(authPath, 'utf8');
+if (process.env.EXPECT_CODEX_SKILL) {
+  const skillPath = join(home, 'skills', 'demo', 'SKILL.md');
+  if (!existsSync(skillPath)) {
+    process.stderr.write('fake-cli: CODEX_HOME skills/demo/SKILL.md 미복사\n');
+    process.exit(4);
+  }
+  writeFileSync(skillPath, '# session mutation');
+}
 // 격리본을 rewrite — 어느 세션이 어떤 토큰을 봤는지 마커로 기록.
 writeFileSync(authPath, `${seen}+ROT:${process.env.MAT_SESSION ?? '?'}`);
 process.exit(0);

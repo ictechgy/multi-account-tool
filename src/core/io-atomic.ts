@@ -65,7 +65,11 @@ async function syncDirectoryBestEffort(dir: string): Promise<void> {
  * 파일을 원자적으로 쓴다. 권한 0600, 부모 디렉토리 자동 생성.
  * path 는 이미 expanded 된 절대 경로여야 한다 (`~/` 확장은 호출자 책임).
  */
-export async function writeFileAtomic(path: string, value: string, opts: WriteFileAtomicOptions = {}): Promise<void> {
+export async function writeFileAtomic(
+  path: string,
+  value: string | Uint8Array,
+  opts: WriteFileAtomicOptions = {}
+): Promise<void> {
   const durable = opts.durable !== false;
   const dir = dirname(path);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });

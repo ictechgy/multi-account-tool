@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Codex `mat session start` now copy-isolates `~/.codex/skills` into the session `CODEX_HOME/skills`, so skills are available in isolated profile shells without live-sharing or write-back to the source tree.
+
 ## [0.5.1] - 2026-06-13
 
 v0.5.0 이후 세션 command-run 확장, OpenCode/Aider command-scoped 경계,

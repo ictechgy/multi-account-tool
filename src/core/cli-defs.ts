@@ -188,8 +188,18 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     // config.toml 은 secret-free read-mostly 설정(모델/MCP/feature flag 등)이라 세션 시작 시
     // base 에서 **0600 복사**(copy-isolate, issue #72) — 시작 시점 설정 재현(UX)은 유지하되,
     // 세션 내 `codex mcp add`/`plugin add` 가 config.toml 에 써도 base 가 오염되지 않는다(write-back
-    // 없음). OAuth 토큰은 auth.json 에만 있으며 source 로 격리 복사된다 (issue #63-3).
-    session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex', share: ['config.toml'] }] },
+    // 없음). skills/ 도 같은 copy-isolate 경계로 세션에 스냅샷 복사한다(세션 내 skill 변경은 폐기).
+    // OAuth 토큰은 auth.json 에만 있으며 source 로 격리 복사된다 (issue #63-3).
+    session: {
+      roots: [
+        {
+          env: 'CODEX_HOME',
+          base: '~/.codex',
+          share: ['config.toml'],
+          shareDirs: [{ rel: 'skills', maxBytes: 10 * 1024 * 1024, maxFiles: 2000, maxDepth: 16 }]
+        }
+      ]
+    },
     sessionRun: { executable: 'codex' }
   },
   {

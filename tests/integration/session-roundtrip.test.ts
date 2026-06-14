@@ -28,16 +28,20 @@ const FAKE_CLI_GEMINI = join(FIXTURES, 'fake-cli-gemini.mjs');
 
 let tmp: TmpHome;
 let originalShell: string | undefined;
+let originalExpectCodexSkill: string | undefined;
 
 beforeEach(async () => {
   tmp = await setupTmpHome();
   await fs.chmod(FAKE_CLI, 0o755); // git +x 미보존 환경 대비
   originalShell = process.env.SHELL;
+  originalExpectCodexSkill = process.env.EXPECT_CODEX_SKILL;
   process.env.SHELL = FAKE_CLI; // runSession 이 spawn 할 "subshell"
 });
 afterEach(async () => {
   if (originalShell === undefined) delete process.env.SHELL;
   else process.env.SHELL = originalShell;
+  if (originalExpectCodexSkill === undefined) delete process.env.EXPECT_CODEX_SKILL;
+  else process.env.EXPECT_CODEX_SKILL = originalExpectCodexSkill;
   await tmp.cleanup();
 });
 
@@ -88,6 +92,22 @@ describe('session 통합 — 라운드트립 + 동시 격리', () => {
     expect(await fs.readFile(join(baseDir, 'config.toml'), 'utf8')).toBe('model=gpt');
     // 프로필만 재캡처됨.
     expect(await readProfileFile('codex', 'work', 'auth.json')).toMatch(/^ORIG\+ROT:/);
+  });
+
+  it('codex skills/ 는 세션 CODEX_HOME 으로 복사되지만 base 로 write-back 되지 않음', async () => {
+    process.env.EXPECT_CODEX_SKILL = '1';
+    await writeProfileFile('codex', 'work', 'auth.json', 'ORIG');
+    const baseDir = join(tmp.home, '.codex');
+    await fs.mkdir(join(baseDir, 'skills', 'demo'), { recursive: true });
+    await fs.writeFile(join(baseDir, 'skills', 'demo', 'SKILL.md'), '# Demo skill');
+
+    const result = await runSession({ cliId: 'codex', profileName: 'work' });
+
+    expect(result.code).toBe(0);
+    expect(result.recaptureError).toBeUndefined();
+    expect(await fs.readFile(join(baseDir, 'skills', 'demo', 'SKILL.md'), 'utf8')).toBe('# Demo skill');
+    expect(await readProfileFile('codex', 'work', 'auth.json')).toMatch(/^ORIG\+ROT:/);
+    await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
   });
 });
 
