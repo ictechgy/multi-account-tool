@@ -741,10 +741,74 @@ describe('runSessionCommand', () => {
       blockers: []
     });
     expect(mockProfileExists).toHaveBeenCalledWith('codex', 'work');
-    expect(mockReadProfile).not.toHaveBeenCalled();
+    expect(mockReadProfile).toHaveBeenCalledWith('codex', 'work', 'auth.json');
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(mockStage).not.toHaveBeenCalled();
     expect(mockCommit).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight blocked report: profile exists but missing credential file returns blocker without spawn', async () => {
+    mockProfileExists.mockResolvedValue(true);
+    mockReadProfile.mockResolvedValue(null);
+
+    const err = await runSessionCommand({
+      cliId: 'codex',
+      profileName: 'empty_profile',
+      args: []
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(UsageError);
+
+    const report = await preflightSessionRunCommand({
+      cliId: 'codex',
+      profileName: 'empty_profile',
+      args: []
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.profileExists).toBe(true);
+    expect(report.blockers[0]).toMatchObject({
+      phase: 'profile',
+      code: 'profile-credential-missing',
+      message: (err as Error).message
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight blocked report: unsupported session isolation (e.g. keychain source) returns blocker', async () => {
+    mockFindCliDef.mockReturnValue({
+      id: 'claude',
+      name: 'Claude Code',
+      sources: [{ type: 'keychain', service: 'Claude Code-credentials', saveAs: 'credentials.json' }],
+      session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] },
+      sessionRun: { executable: 'claude' }
+    } as CliDef);
+
+    const err = await runSessionCommand({ cliId: 'claude', profileName: 'work', args: [] }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(UsageError);
+
+    const report = await preflightSessionRunCommand({
+      cliId: 'claude',
+      profileName: 'work',
+      args: []
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.blockers[0]).toMatchObject({
+      phase: 'support',
+      code: 'session-isolation-unsupported',
+      message: (err as Error).message
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
     expect(mockWriteFileAtomic).not.toHaveBeenCalled();
     await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
   });

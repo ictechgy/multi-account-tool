@@ -30,7 +30,7 @@ export const SESSION_USAGE =
   `  mat session start <cli> <profile>   격리된 subshell 실행\n` +
   `  mat session run <cli> <profile> -- [cli-args...]\n` +
   `                                        builtin CLI 를 격리 env 로 직접 실행\n` +
-  `  mat session run <cli> <profile> --check [--json] -- [cli-args...]\n` +
+  `  mat session run <cli> <profile> --check|--explain [--json] -- [cli-args...]\n` +
   `                                        spawn 없는 session run 사전 점검\n` +
   `  mat session list                    세션 목록\n` +
   `  mat session stop <id>               세션 종료/정리\n`;

@@ -270,6 +270,7 @@ describe('mat session run --check — dry-run preflight', () => {
   it('prints JSON report and does not create session state or spawn the builtin CLI', async () => {
     const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');
     await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(join(profileDir, 'auth.json'), '{"v":1}');
 
     const result = runMat(['session', 'run', 'codex', 'p', '--check', '--json', '--', '--help'], tmp.home);
 
@@ -291,6 +292,27 @@ describe('mat session run --check — dry-run preflight', () => {
     await expect(fs.stat(join(tmp.home, '.multi-account-tool/sessions'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('existing profile without required credential is exit 1 report before session state', async () => {
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/empty');
+    await fs.mkdir(profileDir, { recursive: true });
+
+    const result = runMat(['session', 'run', 'codex', 'empty', '--check', '--json', '--'], tmp.home);
+
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      ok?: boolean;
+      profileExists?: boolean;
+      blockers?: Array<{ phase?: string; code?: string; message?: string }>;
+    };
+    expect(report.ok).toBe(false);
+    expect(report.profileExists).toBe(true);
+    expect(report.blockers?.[0]).toMatchObject({
+      phase: 'profile',
+      code: 'profile-credential-missing'
+    });
+    await expect(fs.stat(join(tmp.home, '.multi-account-tool/sessions'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('missing profile is exit 1 report, not usage error', () => {
     const result = runMat(['session', 'run', 'codex', 'missing', '--check', '--json', '--'], tmp.home);
 
@@ -307,5 +329,19 @@ describe('mat session run --check — dry-run preflight', () => {
       code: 'profile-missing',
       message: '프로필을 찾을 수 없습니다: codex/missing'
     });
+  });
+
+  it('does not run legacy data-dir migration before session run preflight', async () => {
+    const legacy = join(tmp.home, '.multi-sub-terminal');
+    const current = join(tmp.home, '.multi-account-tool');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(join(legacy, 'sentinel.txt'), 'legacy');
+
+    const result = runMat(['session', 'run', 'codex', 'missing', '--explain', '--json', '--'], tmp.home);
+
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout).blockers[0]).toMatchObject({ code: 'profile-missing' });
+    await expect(fs.stat(legacy)).resolves.toBeTruthy();
+    await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

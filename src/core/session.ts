@@ -1385,13 +1385,38 @@ export async function preflightSessionRunCommand(opts: SessionCommandOptions): P
     return blockPreflight(report, 'executable', 'executable-invalid', err);
   }
 
-  if (def.id !== 'aider' && (!def.session || def.session.roots.length === 0)) {
-    return blockPreflight(
-      report,
-      'support',
-      'session-isolation-unsupported',
-      `'${opts.cliId}' 는 세션 격리를 지원하지 않습니다 (env override 미지원).`
-    );
+  let plan: SessionPlan | undefined;
+  try {
+    const dummySessionId = makeSessionId(def.id, profileName);
+    if (def.id === 'aider') {
+      plan = planAiderCommandSession(def, profileName, dummySessionId);
+    } else {
+      plan = planSession(def, profileName, dummySessionId);
+    }
+    okPhase(report, 'plan');
+  } catch (err) {
+    return blockPreflight(report, 'support', 'session-isolation-unsupported', err);
+  }
+
+  if (plan && def.id !== 'aider') {
+    for (const root of plan.roots) {
+      for (const cred of root.creds) {
+        try {
+          const value = await readProfileFile(plan.cli, plan.profile, cred.saveAs);
+          if (value == null) {
+            return blockPreflight(
+              report,
+              'profile',
+              'profile-credential-missing',
+              `프로필에 캡처된 자격증명이 없습니다: ${plan.cli}/${plan.profile}/${cred.saveAs}. ` +
+                `먼저 mat 으로 자격증명을 캡처하세요.`
+            );
+          }
+        } catch (err) {
+          return blockPreflight(report, 'profile', 'profile-credential-check-failed', err);
+        }
+      }
+    }
   }
 
   if (def.id === 'aider') {

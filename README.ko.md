@@ -210,7 +210,7 @@ lterm send-keys "mat exec claude work -- claude" Enter
 mat session start <cli> <profile>   # <profile> 로 격리된 subshell 실행
 mat session run <cli> <profile> -- [cli-args...]
                                   # builtin CLI executable 을 격리 env 로 직접 실행
-mat session run <cli> <profile> --check [--json] -- [cli-args...]
+mat session run <cli> <profile> --check|--explain [--json] -- [cli-args...]
                                   # spawn 없이 정확한 session-run validator 사전 점검
 mat session list                    # 실행 중 / orphan 세션 목록
 mat session stop <id>               # 세션 종료 또는 orphan 정리

@@ -210,7 +210,7 @@ Note: `2` / `74` / `75` are reserved by `mat`'s own error model (pre-spawn valid
 mat session start <cli> <profile>   # launch an isolated subshell on <profile>
 mat session run <cli> <profile> -- [cli-args...]
                                   # run the builtin CLI executable directly in isolation
-mat session run <cli> <profile> --check [--json] -- [cli-args...]
+mat session run <cli> <profile> --check|--explain [--json] -- [cli-args...]
                                   # dry-run the exact session-run validators without spawning
 mat session list                    # running / orphan sessions
 mat session stop <id>               # terminate a session or reap an orphan

@@ -431,7 +431,7 @@ lterm send-keys &quot;mat exec claude work -- claude&quot; Enter
 <pre><code class="language-bash">mat session start &lt;cli&gt; &lt;profile&gt;   # launch an isolated subshell on &lt;profile&gt;
 mat session run &lt;cli&gt; &lt;profile&gt; -- [cli-args...]
                                   # run the builtin CLI executable directly in isolation
-mat session run &lt;cli&gt; &lt;profile&gt; --check [--json] -- [cli-args...]
+mat session run &lt;cli&gt; &lt;profile&gt; --check|--explain [--json] -- [cli-args...]
                                   # dry-run the exact session-run validators without spawning
 mat session list                    # running / orphan sessions
 mat session stop &lt;id&gt;               # terminate a session or reap an orphan
