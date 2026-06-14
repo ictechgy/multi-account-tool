@@ -206,6 +206,10 @@ function selectionWarnings(
   return warnings;
 }
 
+function sameDisplayLogin(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
 export function selectCopilotAccount(
   stateOrAccounts: CopilotAppStateParseSuccess | readonly CopilotAccountCandidate[],
   binding: CopilotAccountBinding
@@ -215,16 +219,12 @@ export function selectCopilotAccount(
   const storeAccountKey = nonEmptyString(binding.storeAccountKey);
   const displayLogin = nonEmptyString(binding.displayLogin);
 
-  let matches: CopilotAccountCandidate[];
-  if (stableAccountId) {
-    matches = accounts.filter((account) => account.stableAccountId === stableAccountId);
-  } else if (storeAccountKey) {
-    matches = accounts.filter((account) => account.storeAccountKey === storeAccountKey);
-  } else if (displayLogin) {
-    matches = accounts.filter((account) => account.displayLogin === displayLogin);
-  } else {
-    matches = [];
-  }
+  const matches = accounts.filter((account) => {
+    if (stableAccountId && account.stableAccountId !== stableAccountId) return false;
+    if (storeAccountKey && account.storeAccountKey !== storeAccountKey) return false;
+    if (displayLogin && !sameDisplayLogin(account.displayLogin, displayLogin)) return false;
+    return Boolean(stableAccountId || storeAccountKey || displayLogin);
+  });
 
   if (matches.length === 0) {
     return { ok: false, code: 'account-missing', message: 'Bound Copilot account is not present in app-state.' };

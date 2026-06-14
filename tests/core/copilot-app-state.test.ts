@@ -148,6 +148,62 @@ describe('Copilot app-state fixture parser safety gate', () => {
     });
   });
 
+  it('matches displayLogin case-insensitively but fails when provided identifiers disagree', () => {
+    const parsed = expectParsed('selected-bound-account.json');
+
+    expect(selectCopilotAccount(parsed, {
+      displayLogin: 'WORK@fixture.example',
+      stableAccountId: 'acct-fixture-work',
+      storeAccountKey: 'store-fixture-work'
+    })).toEqual({
+      ok: true,
+      account: expect.objectContaining({ stableAccountId: 'acct-fixture-work' }),
+      warnings: []
+    });
+
+    expect(selectCopilotAccount(parsed, {
+      displayLogin: 'personal@fixture.example',
+      stableAccountId: 'acct-fixture-work'
+    })).toEqual({
+      ok: false,
+      code: 'account-missing',
+      message: 'Bound Copilot account is not present in app-state.'
+    });
+
+    expect(selectCopilotAccount(parsed, {
+      displayLogin: 'work@fixture.example',
+      stableAccountId: 'acct-fixture-work',
+      storeAccountKey: 'store-fixture-personal'
+    })).toEqual({
+      ok: false,
+      code: 'account-missing',
+      message: 'Bound Copilot account is not present in app-state.'
+    });
+  });
+
+  it('fails on invalid JSON and non-object root', () => {
+    const invalidJson = parseCopilotAppState('{invalid');
+    expect(invalidJson).toEqual({
+      ok: false,
+      code: 'invalid-json',
+      message: 'Copilot app-state is not valid JSON.'
+    });
+
+    const invalidRootArray = parseCopilotAppState('[]');
+    expect(invalidRootArray).toEqual({
+      ok: false,
+      code: 'invalid-root',
+      message: 'Copilot app-state root must be a JSON object.'
+    });
+
+    const invalidRootNumber = parseCopilotAppState(123);
+    expect(invalidRootNumber).toEqual({
+      ok: false,
+      code: 'invalid-root',
+      message: 'Copilot app-state root must be a JSON object.'
+    });
+  });
+
   it('keeps the parser pure and avoids product-support wiring', () => {
     const source = readFileSync(sourceUrl, 'utf8');
 
