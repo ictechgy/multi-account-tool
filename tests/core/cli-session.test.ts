@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/core/session.js', () => ({
+  buildSessionListReport: vi.fn(),
   formatSessionRunPreflightReport: vi.fn(),
   runSession: vi.fn(),
   runSessionCommand: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('../../src/core/session.js', () => ({
 
 import { handleSession } from '../../src/core/session-cli.js';
 import {
+  buildSessionListReport,
   formatSessionRunPreflightReport,
   listSessions,
   preflightSessionRunCommand,
@@ -27,6 +29,7 @@ import {
 } from '../../src/core/session.js';
 
 const mockFormatPreflight = vi.mocked(formatSessionRunPreflightReport);
+const mockBuildSessionListReport = vi.mocked(buildSessionListReport);
 const mockRun = vi.mocked(runSession);
 const mockRunCommand = vi.mocked(runSessionCommand);
 const mockPreflight = vi.mocked(preflightSessionRunCommand);
@@ -227,13 +230,53 @@ describe('handleSession — list', () => {
 
   it('세션 있으면 테이블 출력 + exitCode 0', async () => {
     mockList.mockResolvedValue([
-      { id: 'codex-work-aaaa', cli: 'codex', profile: 'work', pid: 1, startedAt: 'T', alive: true }
+      { id: 'codex-work-aaaa', cli: 'codex', profile: 'work', pid: 1, startedAt: 'T', alive: true, status: 'active' }
     ]);
     const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const r = await handleSession(['list']);
     expect(r).toEqual({ exitCode: 0 });
     expect(writeSpy.mock.calls.some((c) => String(c[0]).includes('codex-work-aaaa'))).toBe(true);
+    expect(writeSpy.mock.calls.some((c) => String(c[0]).includes('\tactive\n'))).toBe(true);
     writeSpy.mockRestore();
+  });
+
+  it('--json → schema report 출력 + exitCode 0', async () => {
+    const report = {
+      schemaVersion: 1 as const,
+      generatedAt: '2026-06-14T00:00:00.000Z',
+      summary: { total: 1, active: 1, orphan: 0, unknown: 0 },
+      sessions: [
+        {
+          id: 'codex-work-aaaa',
+          cli: 'codex',
+          profile: 'work',
+          startedAt: 'T',
+          status: 'active' as const,
+          ownerStatus: 'owner' as const,
+          childStatus: 'dead-or-reused' as const,
+          ownerPid: 1,
+          rootEnvs: ['CODEX_HOME']
+        }
+      ]
+    };
+    mockBuildSessionListReport.mockResolvedValue(report);
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+    expect(await handleSession(['list', '--json'])).toEqual({ exitCode: 0 });
+
+    expect(JSON.parse(String(writeSpy.mock.calls[0][0]))).toEqual(report);
+    expect(mockList).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
+
+  it('알 수 없는 옵션 → exitCode 2', async () => {
+    const errSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    expect(await handleSession(['list', '--bad'])).toEqual({ exitCode: 2 });
+
+    expect(String(errSpy.mock.calls[0][0])).toContain('mat session list: 알 수 없는 옵션');
+    expect(mockList).not.toHaveBeenCalled();
+    expect(mockBuildSessionListReport).not.toHaveBeenCalled();
   });
 });
 

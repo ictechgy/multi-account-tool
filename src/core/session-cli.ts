@@ -14,6 +14,7 @@
  */
 
 import {
+  buildSessionListReport,
   formatSessionRunPreflightReport,
   listSessions,
   preflightSessionRunCommand,
@@ -32,7 +33,7 @@ export const SESSION_USAGE =
   `                                        builtin CLI 를 격리 env 로 직접 실행\n` +
   `  mat session run <cli> <profile> --check|--explain [--json] -- [cli-args...]\n` +
   `                                        spawn 없는 session run 사전 점검\n` +
-  `  mat session list                    세션 목록\n` +
+  `  mat session list [--json]           세션 목록\n` +
   `  mat session stop <id>               세션 종료/정리\n`;
 
 export interface SessionDispatchResult {
@@ -95,6 +96,15 @@ export async function handleSession(rest: string[]): Promise<SessionDispatchResu
   }
 
   if (sub === 'list') {
+    const parsed = parseSessionListArgs(subArgs);
+    if (!parsed.ok) {
+      process.stderr.write(`${parsed.error}\n`);
+      return { exitCode: 2 };
+    }
+    if (parsed.asJson) {
+      process.stdout.write(`${JSON.stringify(await buildSessionListReport(), null, 2)}\n`);
+      return { exitCode: 0 };
+    }
     const sessions = await listSessions();
     if (sessions.length === 0) {
       process.stdout.write('실행 중인 세션이 없습니다.\n');
@@ -102,9 +112,7 @@ export async function handleSession(rest: string[]): Promise<SessionDispatchResu
     }
     process.stdout.write('ID\tCLI\tPROFILE\tSTARTED\tSTATUS\n');
     for (const s of sessions) {
-      process.stdout.write(
-        `${s.id}\t${s.cli}\t${s.profile}\t${s.startedAt}\t${s.alive ? 'active' : 'orphan'}\n`
-      );
+      process.stdout.write(`${s.id}\t${s.cli}\t${s.profile}\t${s.startedAt}\t${s.status}\n`);
     }
     return { exitCode: 0 };
   }
@@ -134,6 +142,28 @@ interface ParsedSessionRunArgs {
 interface SessionRunArgError {
   ok: false;
   error: string;
+}
+
+interface ParsedSessionListArgs {
+  ok: true;
+  asJson: boolean;
+}
+
+interface SessionListArgError {
+  ok: false;
+  error: string;
+}
+
+function parseSessionListArgs(subArgs: string[]): ParsedSessionListArgs | SessionListArgError {
+  let asJson = false;
+  for (const arg of subArgs) {
+    if (arg === '--json') {
+      asJson = true;
+      continue;
+    }
+    return { ok: false, error: `mat session list: 알 수 없는 옵션: ${arg}` };
+  }
+  return { ok: true, asJson };
 }
 
 function parseSessionRunArgs(subArgs: string[]): ParsedSessionRunArgs | SessionRunArgError {

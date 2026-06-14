@@ -108,6 +108,11 @@ export function appLogPath(): string {
   return join(dataDir(), 'app.log');
 }
 
+/** 안정 JSONL 감사 로그 경로 (session lifecycle observability). */
+export function auditLogPath(): string {
+  return join(dataDir(), 'audit.jsonl');
+}
+
 /** 특정 CLI 의 lock 디렉토리 경로 (mkdir-lock 패턴). cliId 자체 검증. */
 export function cliLockPath(cliId: string): string {
   const safeCli = validateCliId(cliId);
