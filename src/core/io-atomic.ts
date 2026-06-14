@@ -46,6 +46,8 @@ export interface WriteFileAtomicOptions {
    * false: keep atomic replace/permissions but skip fsync for ephemeral session scratch files.
    */
   durable?: boolean;
+  /** File mode for newly-created files. Defaults to owner read/write only (0600). */
+  mode?: number;
 }
 
 async function syncDirectoryBestEffort(dir: string): Promise<void> {
@@ -71,12 +73,13 @@ export async function writeFileAtomic(
   opts: WriteFileAtomicOptions = {}
 ): Promise<void> {
   const durable = opts.durable !== false;
+  const mode = opts.mode ?? 0o600;
   const dir = dirname(path);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
   let handle: FileHandle | undefined;
   try {
-    handle = await fs.open(tmp, ATOMIC_FLAGS, 0o600);
+    handle = await fs.open(tmp, ATOMIC_FLAGS, mode);
     await handle.writeFile(value);
     if (durable) await handle.sync();
     await handle.close();

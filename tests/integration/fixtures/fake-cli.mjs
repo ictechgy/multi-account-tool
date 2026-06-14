@@ -18,7 +18,7 @@ if (!home) {
 }
 const authPath = join(home, 'auth.json');
 const seen = readFileSync(authPath, 'utf8');
-if (process.env.EXPECT_CODEX_SKILL) {
+if (process.env.EXPECT_CODEX_SKILL === '1') {
   const skillPath = join(home, 'skills', 'demo', 'SKILL.md');
   if (!existsSync(skillPath)) {
     process.stderr.write('fake-cli: CODEX_HOME skills/demo/SKILL.md 미복사\n');

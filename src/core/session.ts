@@ -34,6 +34,7 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
@@ -63,7 +64,9 @@ import type { CliDef, SessionShareDir } from './types.js';
 
 const DEFAULT_SHARE_DIR_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_SHARE_DIR_MAX_FILES = 2000;
+const DEFAULT_SHARE_DIR_MAX_ENTRIES = 2500;
 const DEFAULT_SHARE_DIR_MAX_DEPTH = 16;
+const SHARE_DIR_READ_CHUNK_BYTES = 64 * 1024;
 
 /** 시작 시점에 고정되는 자격증명 매핑 (종료 시 재계산 금지 — 시작/종료 불일치 차단). */
 interface SessionCred {
@@ -80,7 +83,15 @@ interface MaterializedShareDir {
   rel: string;
   maxBytes: number;
   maxFiles: number;
+  maxEntries: number;
   maxDepth: number;
+}
+
+interface ShareDirRootGuard {
+  path: string;
+  real: string;
+  dev: number;
+  ino: number;
 }
 
 /** 한 env-root 의 materialize 계획. */
@@ -159,6 +170,7 @@ function validateShareDir(rawDir: SessionShareDir): MaterializedShareDir {
     rel,
     maxBytes: validatePositiveLimit(rawDir.maxBytes, DEFAULT_SHARE_DIR_MAX_BYTES, 'shareDirs.maxBytes'),
     maxFiles: validatePositiveLimit(rawDir.maxFiles, DEFAULT_SHARE_DIR_MAX_FILES, 'shareDirs.maxFiles'),
+    maxEntries: validatePositiveLimit(rawDir.maxEntries, DEFAULT_SHARE_DIR_MAX_ENTRIES, 'shareDirs.maxEntries'),
     maxDepth: validatePositiveLimit(rawDir.maxDepth, DEFAULT_SHARE_DIR_MAX_DEPTH, 'shareDirs.maxDepth')
   };
 }
@@ -451,6 +463,7 @@ async function materializeShareCopy(root: MaterializedRoot, shareRel: string): P
 interface ShareDirCopyStats {
   files: number;
   bytes: number;
+  entries: number;
 }
 
 async function materializeShareDirCopy(root: MaterializedRoot, shareDir: MaterializedShareDir): Promise<void> {
@@ -470,7 +483,13 @@ async function materializeShareDirCopy(root: MaterializedRoot, shareDir: Materia
   if (!sourceStat.isDirectory()) {
     throw new Error(`allow-list 디렉토리 대상이 디렉토리가 아닙니다: ${sessionPathForError(sourceRoot)}`);
   }
-  await assertContainedRealpath(root.baseAbs, sourceRoot);
+  const sourceRootReal = await assertContainedRealpath(root.baseAbs, sourceRoot);
+  const guard: ShareDirRootGuard = {
+    path: sourceRoot,
+    real: sourceRootReal,
+    dev: sourceStat.dev,
+    ino: sourceStat.ino
+  };
 
   const destRoot = join(root.credRoot, shareDir.rel);
   if (dirname(destRoot) !== root.credRoot) {
@@ -480,56 +499,62 @@ async function materializeShareDirCopy(root: MaterializedRoot, shareDir: Materia
   await fs.mkdir(destRoot, { mode: 0o700 });
   await assertSafeDestinationDir(destRoot);
 
-  const stats: ShareDirCopyStats = { files: 0, bytes: 0 };
-  await copyShareDirChildren(sourceRoot, sourceRoot, destRoot, shareDir, 0, stats);
+  const stats: ShareDirCopyStats = { files: 0, bytes: 0, entries: 0 };
+  await copyShareDirChildren(guard, sourceRoot, destRoot, shareDir, 0, stats);
 }
 
 async function copyShareDirChildren(
-  sourceRoot: string,
+  guard: ShareDirRootGuard,
   sourceDir: string,
   destDir: string,
   shareDir: MaterializedShareDir,
   depth: number,
   stats: ShareDirCopyStats
 ): Promise<void> {
-  await assertContainedRealpath(sourceRoot, sourceDir);
+  const beforeStat = await assertShareDirSourceDirectory(guard, sourceDir);
   const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  await assertShareDirSourceDirectory(guard, sourceDir, beforeStat);
   for (const entry of entries) {
     const sourcePath = join(sourceDir, entry.name);
     const destPath = join(destDir, entry.name);
     const entryDepth = depth + 1;
     assertShareDirDepth(shareDir, entryDepth, sourcePath);
-    assertLexicallyContained(sourceRoot, sourcePath);
+    assertLexicallyContained(guard.path, sourcePath);
     assertLexicallyContained(destDir, destPath);
+    assertShareDirEntryLimit(shareDir, stats, sourcePath);
 
     const stat = await fs.lstat(sourcePath);
     if (stat.isSymbolicLink()) {
       throw new Error(`allow-list 디렉토리 하위 symlink 입니다 (복사 거부): ${sessionPathForError(sourcePath)}`);
     }
     if (stat.isDirectory()) {
-      await assertContainedRealpath(sourceRoot, sourcePath);
+      await assertShareDirSourceDirectory(guard, sourcePath, stat);
       await fs.mkdir(destPath, { mode: 0o700 });
       await assertSafeDestinationDir(destPath);
-      await copyShareDirChildren(sourceRoot, sourcePath, destPath, shareDir, entryDepth, stats);
+      await copyShareDirChildren(guard, sourcePath, destPath, shareDir, entryDepth, stats);
       continue;
     }
     if (!stat.isFile()) {
       throw new Error(`allow-list 디렉토리 하위 항목이 일반 파일이 아닙니다: ${sessionPathForError(sourcePath)}`);
     }
-    await copyShareDirFile(sourcePath, destPath, shareDir, stats);
+    await copyShareDirFile(guard, sourcePath, destPath, shareDir, stats, stat);
   }
 }
 
 async function copyShareDirFile(
+  guard: ShareDirRootGuard,
   sourcePath: string,
   destPath: string,
   shareDir: MaterializedShareDir,
-  stats: ShareDirCopyStats
+  stats: ShareDirCopyStats,
+  preOpenStat: { dev: number; ino: number; isFile(): boolean; isSymbolicLink(): boolean; mode: number }
 ): Promise<void> {
   await assertSafeDestinationDir(dirname(destPath));
   const handle = await fs.open(sourcePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const openedStat = await handle.stat();
+    assertSameInode(preOpenStat, openedStat, sourcePath);
+    await assertRealpathContained(guard.real, sourcePath);
     if (!openedStat.isFile()) {
       throw new Error(`allow-list 디렉토리 하위 항목이 일반 파일이 아닙니다: ${sessionPathForError(sourcePath)}`);
     }
@@ -542,16 +567,81 @@ async function copyShareDirFile(
     if (stats.bytes + openedStat.size > shareDir.maxBytes) {
       throw new Error(`allow-list 디렉토리 용량 초과 (${shareDir.maxBytes} bytes): ${sessionPathForError(sourcePath)}`);
     }
-    const content = await handle.readFile();
-    if (stats.bytes + content.byteLength > shareDir.maxBytes) {
-      throw new Error(`allow-list 디렉토리 용량 초과 (${shareDir.maxBytes} bytes): ${sessionPathForError(sourcePath)}`);
-    }
+    const content = await readBoundedFile(handle, shareDir.maxBytes - stats.bytes, sourcePath);
     stats.files += 1;
     stats.bytes += content.byteLength;
-    await writeFileAtomic(destPath, content, { durable: false });
+    await writeFileAtomic(destPath, content, { durable: false, mode: copiedShareDirFileMode(openedStat.mode) });
   } finally {
     await handle.close();
   }
+}
+
+async function readBoundedFile(handle: FileHandle, maxBytes: number, sourcePath: string): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (true) {
+    const buf = Buffer.allocUnsafe(Math.min(SHARE_DIR_READ_CHUNK_BYTES, Math.max(1, maxBytes - total + 1)));
+    const { bytesRead } = await handle.read(buf, 0, buf.length, null);
+    if (bytesRead === 0) break;
+    if (total + bytesRead > maxBytes) {
+      throw new Error(`allow-list 디렉토리 용량 초과 (${maxBytes} bytes remaining): ${sessionPathForError(sourcePath)}`);
+    }
+    chunks.push(buf.subarray(0, bytesRead));
+    total += bytesRead;
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function copiedShareDirFileMode(sourceMode: number): number {
+  return (sourceMode & 0o111) !== 0 ? 0o700 : 0o600;
+}
+
+async function assertShareDirSourceDirectory(
+  guard: ShareDirRootGuard,
+  sourceDir: string,
+  expected?: { dev: number; ino: number; isDirectory(): boolean; isSymbolicLink(): boolean }
+): Promise<{ dev: number; ino: number; isDirectory(): boolean; isSymbolicLink(): boolean }> {
+  await assertShareDirRootUnchanged(guard);
+  assertLexicallyContained(guard.path, sourceDir);
+  const stat = await fs.lstat(sourceDir);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`allow-list 디렉토리 하위 symlink 입니다 (복사 거부): ${sessionPathForError(sourceDir)}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`allow-list 디렉토리 하위 항목이 디렉토리가 아닙니다: ${sessionPathForError(sourceDir)}`);
+  }
+  if (expected) assertSameInode(expected, stat, sourceDir);
+  await assertRealpathContained(guard.real, sourceDir);
+  return stat;
+}
+
+async function assertShareDirRootUnchanged(guard: ShareDirRootGuard): Promise<void> {
+  const stat = await fs.lstat(guard.path);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`allow-list 디렉토리가 materialize 중 변경되었습니다: ${sessionPathForError(guard.path)}`);
+  }
+  assertSameInode(guard, stat, guard.path);
+}
+
+function assertSameInode(
+  expected: { dev: number; ino: number },
+  actual: { dev: number; ino: number },
+  path: string
+): void {
+  if (expected.dev !== actual.dev || expected.ino !== actual.ino) {
+    throw new Error(`allow-list 디렉토리 항목이 materialize 중 변경되었습니다: ${sessionPathForError(path)}`);
+  }
+}
+
+function assertShareDirEntryLimit(
+  shareDir: MaterializedShareDir,
+  stats: ShareDirCopyStats,
+  sourcePath: string
+): void {
+  if (stats.entries + 1 > shareDir.maxEntries) {
+    throw new Error(`allow-list 디렉토리 항목 수 초과 (${shareDir.maxEntries}): ${sessionPathForError(sourcePath)}`);
+  }
+  stats.entries += 1;
 }
 
 function assertShareDirDepth(shareDir: MaterializedShareDir, depth: number, sourcePath: string): void {
@@ -581,9 +671,20 @@ function assertLexicallyContained(baseAbs: string, childAbs: string): void {
 }
 
 /** child 의 realpath 가 base realpath 하위(또는 동일)인지 — symlink 컴포넌트 escape 차단. */
-async function assertContainedRealpath(baseAbs: string, childAbs: string): Promise<void> {
+async function assertContainedRealpath(baseAbs: string, childAbs: string): Promise<string> {
   const baseReal = await fs.realpath(baseAbs);
   const childReal = await fs.realpath(childAbs);
+  assertRealpathStringContained(baseReal, childReal, childAbs);
+  return childReal;
+}
+
+async function assertRealpathContained(baseReal: string, childAbs: string): Promise<string> {
+  const childReal = await fs.realpath(childAbs);
+  assertRealpathStringContained(baseReal, childReal, childAbs);
+  return childReal;
+}
+
+function assertRealpathStringContained(baseReal: string, childReal: string, childAbs: string): void {
   const rel = relative(baseReal, childReal);
   if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
     throw new Error(`allow-list 대상이 base 밖을 가리킵니다: ${sessionPathForError(childAbs)}`);

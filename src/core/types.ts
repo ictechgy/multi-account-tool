@@ -105,6 +105,8 @@ export interface SessionShareDir {
   maxBytes?: number;
   /** 선택. 복사할 regular-file 개수 상한. */
   maxFiles?: number;
+  /** 선택. 복사할 전체 항목(file + directory) 개수 상한. 빈 디렉토리 폭탄 방지용. */
+  maxEntries?: number;
   /** 선택. root 하위 재귀 깊이 상한(root 직속 파일/디렉토리 depth=1). */
   maxDepth?: number;
 }
@@ -164,7 +166,7 @@ export interface SessionRoot {
    *
    * `share` 와 달리 디렉토리/asset 트리를 다루므로 별도 필드로 둔다. top-level rel 은 단일
    * 세그먼트만 허용하고, 복사 중 모든 하위 항목은 regular file/directory 만 허용한다. symlink,
-   * 특수파일, traversal, 용량/파일수/깊이 초과는 fail-closed. 복사본은 재캡처/write-back 되지 않는다.
+   * 특수파일, traversal, 용량/파일수/항목수/깊이 초과는 fail-closed. 복사본은 재캡처/write-back 되지 않는다.
    */
   shareDirs?: SessionShareDir[];
 }

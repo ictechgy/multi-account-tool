@@ -35,6 +35,7 @@ beforeEach(async () => {
   await fs.chmod(FAKE_CLI, 0o755); // git +x 미보존 환경 대비
   originalShell = process.env.SHELL;
   originalExpectCodexSkill = process.env.EXPECT_CODEX_SKILL;
+  delete process.env.EXPECT_CODEX_SKILL;
   process.env.SHELL = FAKE_CLI; // runSession 이 spawn 할 "subshell"
 });
 afterEach(async () => {

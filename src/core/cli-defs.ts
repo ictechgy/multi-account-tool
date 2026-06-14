@@ -196,7 +196,7 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
           env: 'CODEX_HOME',
           base: '~/.codex',
           share: ['config.toml'],
-          shareDirs: [{ rel: 'skills', maxBytes: 10 * 1024 * 1024, maxFiles: 2000, maxDepth: 16 }]
+          shareDirs: [{ rel: 'skills' }]
         }
       ]
     },

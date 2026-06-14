@@ -70,22 +70,33 @@ mat session start codex personal   # CODEX_HOME=<세션B>/codex — A 와 독립
 ### 3.2 `CliDef.session` 메타데이터 (types.ts)
 ```ts
 export interface SessionSpec { roots: SessionRoot[]; }
+export interface SessionShareDir {
+  rel: string;         // base 기준 단일 세그먼트 directory root (예: 'skills')
+  maxBytes?: number;   // optional; planSession 이 기본값으로 정규화
+  maxFiles?: number;
+  maxEntries?: number; // file + directory 전체 항목 수 상한
+  maxDepth?: number;
+}
 export interface SessionRoot {
-  env: string;        // 주입할 env var (예: 'CODEX_HOME')
-  base: string;       // 이 env 가 재배치하는 CLI 기본 base (예: '~/.codex') — source.path 상대경로 기준
-  share?: string[];   // 명시 allow-list: base 에서 0600 복사할 read-mostly 비-secret config (base 상대경로, copy-isolate #72 — write-back 없음). 자격증명은 절대 불포함.
+  env: string;          // 주입할 env var (예: 'CODEX_HOME')
+  base: string;         // 이 env 가 재배치하는 CLI 기본 base (예: '~/.codex')
+  envSubdir?: string;   // env 가 base 의 부모를 가리킬 때의 단일 하위 세그먼트 (예: Gemini '.gemini')
+  warning?: string;     // broad env 사용 시 session start stderr 경고
+  share?: string[];     // 단일 파일 allow-list: 0600 copy-isolate, write-back 없음
+  shareDirs?: SessionShareDir[]; // directory allow-list: 재귀 copy-isolate, write-back 없음
 }
 // CliDef 에 `session?: SessionSpec` 추가 (optional — backward compat).
 ```
-빌트인 매핑 — **1차 구현은 전 CLI `share` 생략(=∅)** (M-A, fail-closed). codex `config.toml`
-은 OAuth state 포함 여부 미검증이라 follow-up 으로 켠다 (켜기 전에 `validateShareRel` +
-materialize 양측 경로 봉쇄 검증을 이미 구현해 둠 — PR #61):
+빌트인 매핑(요약):
 ```ts
-codex:  { roots: [{ env: 'CODEX_HOME', base: '~/.codex' }] }     // share 후보 config.toml — follow-up
+codex:  { roots: [{ env: 'CODEX_HOME', base: '~/.codex', share: ['config.toml'], shareDirs: [{ rel: 'skills' }] }] }
 qwen:   { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] }       // 혼재 → 공유 없음
 kimi:   { roots: [{ env: 'KIMI_SHARE_DIR', base: '~/.kimi' }] }  // 혼재 → 공유 없음
 crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
-                  { env: 'CRUSH_GLOBAL_DATA',   base: '~/.local/share/crush' }] } // 1차 보수적 공유 없음
+                  { env: 'CRUSH_GLOBAL_DATA',   base: '~/.local/share/crush' }] }
+gemini: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] }
+claude: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] } // Linux file-source only
+opencode: { roots: [{ env: 'XDG_DATA_HOME', base: '~/.local/share/opencode', envSubdir: 'opencode', warning: '...' }] }
 ```
 `session` 없는 CLI → `mat session start` 시 미지원 명시 에러.
 
@@ -104,7 +115,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 
 1. **자격증명 파일 (항상 격리 복사)**: 해당 root 에 속한 `FileSource` 들을, 프로필에 저장된 값으로 세션 디렉토리 내 네이티브 상대경로에 **복사**(`writeFileAtomic`, 0600). 세션 디렉토리는 우리가 만든 fresh 경로라 path 에 symlink 가 없어 io-atomic 안전 전제가 성립.
 2. **allow-list config (0600 복사 — copy-isolate, #72)**: `SessionRoot.share` 의 각 항목만 실제 base 에서 세션 디렉토리로 **복사**(`writeFileAtomic`, 0600). 생성 전 (a) 세션 측 경로 부모가 실제 디렉토리인지 `lstat` 검증, (b) 실제 base 측 대상이 symlink 가 아닌지 `lstat` 검증(symlink 면 거부, `config.ts:122` 선례) + 읽기는 `O_NOFOLLOW`. 세션 수정은 격리본에만 남아 base write-back 없음(이전 symlink 공유 폐기).
-3. **allow-list directory (재귀 복사 — copy-isolate)**: `SessionRoot.shareDirs` 의 각 top-level 디렉토리만 실제 base 에서 세션 디렉토리로 **재귀 복사**한다. 현재 Codex `skills/` 전용. root 는 단일 세그먼트만 허용하고, 하위 항목은 regular file/directory 만 허용한다. symlink/hardlink/special file, traversal, maxDepth/maxFiles/maxBytes 초과는 fail-closed. 세션 내 skill 수정은 격리본에만 남고 write-back/재캡처 없음.
+3. **allow-list directory (재귀 복사 — copy-isolate)**: `SessionRoot.shareDirs` 의 각 top-level 디렉토리만 실제 base 에서 세션 디렉토리로 **재귀 복사**한다. 현재 Codex `skills/` 전용. root 는 단일 세그먼트만 허용하고, 하위 항목은 regular file/directory 만 허용한다. symlink/hardlink/special file, traversal, maxDepth/maxFiles/maxEntries/maxBytes 초과는 fail-closed. 세션 내 skill 수정은 격리본에만 남고 write-back/재캡처 없음.
 4. **그 외 base 내용**: **materialize 하지 않는다**(fail-closed). CLI 는 격리 디렉토리에서 해당 파일을 못 찾으면 자체 기본값을 쓰거나 새로 만든다(세션 내 ephemeral, 종료 시 폐기).
 5. `<env>` 를 세션 디렉토리로 set 한 subshell spawn.
 
@@ -115,7 +126,7 @@ crush:  { roots: [{ env: 'CRUSH_GLOBAL_CONFIG', base: '~/.config/crush' },
 - 4 CLI 자격증명은 모두 base 직속(`auth.json`/`settings.json`/`.env`/`config.toml`/`crush.json`)이라 1차 충족. 디렉토리 내부 자격증명은 follow-up.
 
 ### 4.2 io-atomic 안전성 (개정 — "미러"가 아니라 신규 보장)
-`writeFileAtomic` 의 `O_NOFOLLOW` 는 tmp 열기에만 적용되고 `rename(tmp,path)`·`mkdir(dirname)` 은 symlink-safe 가 아니다. copy-isolate 는 **자격증명과 allow-list config/dir 를 우리가 만든 fresh 세션 디렉토리(절대 symlink 아님)에만** 쓰므로 이 위험을 회피한다. allow-list 파일 복사는 base 원본을 `O_NOFOLLOW` 로 읽고(마지막 컴포넌트 symlink swap 차단) 부모 realpath 봉쇄로 escape 를 막은 뒤 `writeFileAtomic` 로 쓴다. allow-list 디렉토리 복사는 root/하위 symlink 를 거부하고 regular file 은 `O_NOFOLLOW` 로 열며 용량·파일수·깊이 제한을 적용한다. 세션 디렉토리 생성·복사 경로에 대해 부모 `lstat` 검증을 명시한다.
+`writeFileAtomic` 의 `O_NOFOLLOW` 는 tmp 열기에만 적용되고 `rename(tmp,path)`·`mkdir(dirname)` 은 symlink-safe 가 아니다. copy-isolate 는 **자격증명과 allow-list config/dir 를 우리가 만든 fresh 세션 디렉토리(절대 symlink 아님)에만** 쓰므로 이 위험을 회피한다. allow-list 파일 복사는 base 원본을 `O_NOFOLLOW` 로 읽고(마지막 컴포넌트 symlink swap 차단) 부모 realpath 봉쇄로 escape 를 막은 뒤 `writeFileAtomic` 로 쓴다. allow-list 디렉토리 복사는 root/하위 symlink 를 거부하고 regular file 은 `O_NOFOLLOW` 로 열며 용량·파일수·항목수·깊이 제한을 적용한다. 세션 디렉토리 생성·복사 경로에 대해 부모 `lstat` 검증을 명시한다.
 
 ---
 

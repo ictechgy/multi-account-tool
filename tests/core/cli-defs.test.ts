@@ -359,7 +359,7 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
           env: 'CODEX_HOME',
           base: '~/.codex',
           share: ['config.toml'],
-          shareDirs: [{ rel: 'skills', maxBytes: 10 * 1024 * 1024, maxFiles: 2000, maxDepth: 16 }]
+          shareDirs: [{ rel: 'skills' }]
         }
       ]
     });
@@ -442,9 +442,7 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
       for (const root of def.session?.roots ?? []) {
         if (def.id === 'codex' && root.env === 'CODEX_HOME') {
           expect(root.share).toEqual(['config.toml']);
-          expect(root.shareDirs).toEqual([
-            { rel: 'skills', maxBytes: 10 * 1024 * 1024, maxFiles: 2000, maxDepth: 16 }
-          ]);
+          expect(root.shareDirs).toEqual([{ rel: 'skills' }]);
         } else {
           expect(root.share ?? []).toEqual([]);
           expect(root.shareDirs ?? []).toEqual([]);

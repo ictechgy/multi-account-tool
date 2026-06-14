@@ -105,7 +105,7 @@ describe('planSession', () => {
     expect(plan.roots[0].env).toBe('CODEX_HOME');
     expect(plan.roots[0].share).toEqual(['config.toml']);
     expect(plan.roots[0].shareDirs).toEqual([
-      { rel: 'skills', maxBytes: 10 * 1024 * 1024, maxFiles: 2000, maxDepth: 16 }
+      { rel: 'skills', maxBytes: 10 * 1024 * 1024, maxFiles: 2000, maxEntries: 2500, maxDepth: 16 }
     ]);
     expect(plan.roots[0].creds).toEqual([
       expect.objectContaining({ saveAs: 'auth.json', rel: 'auth.json' })
@@ -306,15 +306,24 @@ describe('materializeSession — 빌트인 경로 (copy-isolate, share=[config.t
     await writeBaseFile('.codex/config.toml', 'model=gpt');
     await writeBaseFile('.codex/skills/demo/SKILL.md', '# Demo skill');
     await writeBaseFile('.codex/skills/demo/assets/prompt.txt', 'asset');
+    const binaryAsset = Buffer.from([0, 255, 128, 65]);
+    const scriptPath = join(tmp.home, '.codex', 'skills', 'demo', 'scripts', 'run.sh');
+    await fs.mkdir(join(scriptPath, '..'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.codex', 'skills', 'demo', 'assets', 'bin.dat'), binaryAsset);
+    await fs.writeFile(scriptPath, '#!/bin/sh\n', { mode: 0o755 });
     const plan = planSession(findCliDef('codex')!, 'work', SID);
 
     await materializeSession(plan);
 
     const skillCopy = join(plan.roots[0].dir, 'skills', 'demo', 'SKILL.md');
     const assetCopy = join(plan.roots[0].dir, 'skills', 'demo', 'assets', 'prompt.txt');
+    const binaryCopy = join(plan.roots[0].dir, 'skills', 'demo', 'assets', 'bin.dat');
+    const scriptCopy = join(plan.roots[0].dir, 'skills', 'demo', 'scripts', 'run.sh');
     expect(await fs.readFile(skillCopy, 'utf8')).toBe('# Demo skill');
     expect(await fs.readFile(assetCopy, 'utf8')).toBe('asset');
+    expect(await fs.readFile(binaryCopy)).toEqual(binaryAsset);
     expect((await fs.lstat(skillCopy)).isSymbolicLink()).toBe(false);
+    expect((await fs.lstat(scriptCopy)).mode & 0o777).toBe(0o700);
 
     await fs.writeFile(skillCopy, '# Mutated in session');
     expect(await fs.readFile(join(tmp.home, '.codex', 'skills', 'demo', 'SKILL.md'), 'utf8')).toBe('# Demo skill');
@@ -546,6 +555,33 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
       await expect(fs.access(sessionDir(SID))).rejects.toThrow();
     });
 
+    it('shareDirs root 가 readdir 중 symlink 로 교체되면 거부 + 세션 디렉토리 미잔류', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      await writeBaseFile('.fake/outside/leak.txt', 'LEAK');
+      const sourceRoot = join(tmp.home, '.fake', 'skills');
+      const safeRoot = join(tmp.home, '.fake', 'skills-safe');
+      const outsideRoot = join(tmp.home, '.fake', 'outside');
+      const realReaddir = fs.readdir.bind(fs);
+      let swapped = false;
+      const spy = vi.spyOn(fs, 'readdir').mockImplementation((async (...args: Parameters<typeof fs.readdir>) => {
+        if (!swapped && args[0] === sourceRoot) {
+          swapped = true;
+          await fs.rename(sourceRoot, safeRoot);
+          await fs.symlink(outsideRoot, sourceRoot);
+        }
+        return realReaddir(...args);
+      }) as typeof fs.readdir);
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      try {
+        await expect(materializeSession(plan)).rejects.toThrow(/materialize 중 변경|하위 symlink/);
+        await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('shareDirs 하위 symlink 는 거부 + 세션 디렉토리 미잔류', async () => {
       await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
       await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
@@ -567,7 +603,7 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
       await expect(fs.access(sessionDir(SID))).rejects.toThrow();
     });
 
-    it('shareDirs maxFiles/maxBytes/maxDepth 초과는 거부', async () => {
+    it('shareDirs maxFiles/maxBytes/maxEntries/maxDepth 초과는 거부', async () => {
       await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
       await writeBaseFile('.fake/skills/a.txt', 'a');
       await writeBaseFile('.fake/skills/b.txt', 'b');
@@ -577,6 +613,11 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
 
       await expect(materializeSession(planSession(dirDef([{ rel: 'skills', maxBytes: 1 }]), 'work', SID)))
         .rejects.toThrow(/용량 초과/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+
+      await fs.mkdir(join(tmp.home, '.fake', 'skills', 'empty'), { recursive: true });
+      await expect(materializeSession(planSession(dirDef([{ rel: 'skills', maxEntries: 2 }]), 'work', SID)))
+        .rejects.toThrow(/항목 수 초과/);
       await expect(fs.access(sessionDir(SID))).rejects.toThrow();
 
       await writeBaseFile('.fake/skills/deep/c.txt', 'c');
