@@ -97,13 +97,16 @@ async function rejectedMessage(promise: Promise<unknown>): Promise<string> {
 }
 
 describe('planSession', () => {
-  it('codex: 단일 root/cred (auth.json, rel auth.json), share=[config.toml] (issue #63-3)', () => {
-    // config.toml 은 secret-free 검증 완료 — base 공유 허용 (토큰은 auth.json 에 분리).
+  it('codex: 단일 root/cred, share=[config.toml], shareDirs=[skills]', () => {
+    // config.toml 과 skills/ 는 세션에 copy-isolate 로만 복사된다 (토큰은 auth.json 에 분리).
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     expect(plan).toMatchObject({ cli: 'codex', profile: 'work', id: SID });
     expect(plan.roots).toHaveLength(1);
     expect(plan.roots[0].env).toBe('CODEX_HOME');
     expect(plan.roots[0].share).toEqual(['config.toml']);
+    expect(plan.roots[0].shareDirs).toEqual([
+      { rel: 'skills', maxBytes: 10 * 1024 * 1024, maxFiles: 2000, maxEntries: 2500, maxDepth: 16 }
+    ]);
     expect(plan.roots[0].creds).toEqual([
       expect.objectContaining({ saveAs: 'auth.json', rel: 'auth.json' })
     ]);
@@ -189,6 +192,35 @@ describe('planSession', () => {
     };
     expect(() => planSession(def, 'work', SID)).toThrow(/단일 세그먼트/);
   });
+
+  it('shareDirs nested(다중 세그먼트) 항목은 거부 — 디렉토리 root 도 단일 세그먼트만 허용', () => {
+    const def: CliDef = {
+      id: 'fakecli', name: 'Fake',
+      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', shareDirs: [{ rel: 'sub/skills' }] }] }
+    };
+    expect(() => planSession(def, 'work', SID)).toThrow(/shareDirs.*단일 세그먼트/);
+  });
+
+  it('shareDirs 가 cred/share 와 겹치거나 limit 이 잘못되면 거부', () => {
+    const base = {
+      id: 'fakecli',
+      name: 'Fake',
+      sources: [{ type: 'file' as const, path: '~/.fake/auth.json', saveAs: 'a.json' }]
+    };
+    expect(() => planSession({
+      ...base,
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', shareDirs: [{ rel: 'auth.json' }] }] }
+    }, 'work', SID)).toThrow(/자격증명과 겹칩니다/);
+    expect(() => planSession({
+      ...base,
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', share: ['skills'], shareDirs: [{ rel: 'skills' }] }] }
+    }, 'work', SID)).toThrow(/share 파일 allow-list 와 겹칩니다/);
+    expect(() => planSession({
+      ...base,
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', shareDirs: [{ rel: 'skills', maxFiles: 0 }] }] }
+    }, 'work', SID)).toThrow(/양의 정수/);
+  });
 });
 
 describe('materializeSession — 빌트인 경로 (copy-isolate, share=[config.toml])', () => {
@@ -269,17 +301,60 @@ describe('materializeSession — 빌트인 경로 (copy-isolate, share=[config.t
     expect(authSt.isSymbolicLink()).toBe(false); // 자격증명도 실파일
   });
 
+  it('codex shareDirs=[skills] → nested skill tree 를 세션 CODEX_HOME/skills 로 copy-isolate', async () => {
+    await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    await writeBaseFile('.codex/config.toml', 'model=gpt');
+    await writeBaseFile('.codex/skills/demo/SKILL.md', '# Demo skill');
+    await writeBaseFile('.codex/skills/demo/assets/prompt.txt', 'asset');
+    const binaryAsset = Buffer.from([0, 255, 128, 65]);
+    const scriptPath = join(tmp.home, '.codex', 'skills', 'demo', 'scripts', 'run.sh');
+    await fs.mkdir(join(scriptPath, '..'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.codex', 'skills', 'demo', 'assets', 'bin.dat'), binaryAsset);
+    await fs.writeFile(scriptPath, '#!/bin/sh\n', { mode: 0o755 });
+    const plan = planSession(findCliDef('codex')!, 'work', SID);
+
+    await materializeSession(plan);
+
+    const skillCopy = join(plan.roots[0].dir, 'skills', 'demo', 'SKILL.md');
+    const assetCopy = join(plan.roots[0].dir, 'skills', 'demo', 'assets', 'prompt.txt');
+    const binaryCopy = join(plan.roots[0].dir, 'skills', 'demo', 'assets', 'bin.dat');
+    const scriptCopy = join(plan.roots[0].dir, 'skills', 'demo', 'scripts', 'run.sh');
+    expect(await fs.readFile(skillCopy, 'utf8')).toBe('# Demo skill');
+    expect(await fs.readFile(assetCopy, 'utf8')).toBe('asset');
+    expect(await fs.readFile(binaryCopy)).toEqual(binaryAsset);
+    expect((await fs.lstat(skillCopy)).isSymbolicLink()).toBe(false);
+    expect((await fs.lstat(scriptCopy)).mode & 0o777).toBe(0o700);
+
+    await fs.writeFile(skillCopy, '# Mutated in session');
+    expect(await fs.readFile(join(tmp.home, '.codex', 'skills', 'demo', 'SKILL.md'), 'utf8')).toBe('# Demo skill');
+  });
+
+  it('recaptureSession 은 shareDirs(skills)를 재캡처하지 않음 — write-back 없음', async () => {
+    await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
+    await writeBaseFile('.codex/skills/demo/SKILL.md', '# Demo skill');
+    const plan = planSession(findCliDef('codex')!, 'work', SID);
+    await materializeSession(plan);
+
+    await fs.writeFile(join(plan.roots[0].dir, 'skills', 'demo', 'SKILL.md'), '# Session-only mutation');
+    await recaptureSession(plan);
+
+    expect(await fs.readFile(join(tmp.home, '.codex', 'skills', 'demo', 'SKILL.md'), 'utf8')).toBe('# Demo skill');
+    expect(await readProfileFile('codex', 'work', 'skills')).toBeNull();
+    expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('TOKEN-A');
+  });
+
   it('base 에 config.toml 부재 시 — throw 없이 materialize 성공, config.toml 복사본 미생성 (optional skip)', async () => {
     // config.toml 은 read-mostly 설정이므로 부재해도 세션 진행에 지장 없다.
-    // materializeShareCopy 는 ENOENT 를 skip(return)하고 세션을 정상 완료해야 한다.
+    // materializeShareCopy/shareDirs 는 ENOENT 를 skip(return)하고 세션을 정상 완료해야 한다.
     await writeProfileFile('codex', 'work', 'auth.json', 'TOKEN-A');
-    // config.toml 미생성 — base 에 없음
+    // config.toml/skills 미생성 — base 에 없음
     const plan = planSession(findCliDef('codex')!, 'work', SID);
     // throw 없이 완료 (optional share skip)
     await expect(materializeSession(plan)).resolves.toBeUndefined();
     // config.toml 복사본 미생성
     const copyPath = join(plan.roots[0].dir, 'config.toml');
     await expect(fs.access(copyPath)).rejects.toThrow();
+    await expect(fs.access(join(plan.roots[0].dir, 'skills'))).rejects.toThrow();
     // creds 격리본(auth.json)은 정상 생성됨
     expect(await fs.readFile(join(plan.roots[0].dir, 'auth.json'), 'utf8')).toBe('TOKEN-A');
   });
@@ -420,6 +495,186 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
     const plan = planSession(fakeDef, 'work', SID);
     await expect(materializeSession(plan)).rejects.toThrow(/일반 파일이 아닙니다/);
     await expect(fs.access(sessionDir(SID))).rejects.toThrow(); // 세션 디렉토리 미잔류
+  });
+
+  describe('shareDirs — 디렉토리 copy-isolate', () => {
+    const dirDef = (shareDirs: NonNullable<CliDef['session']>['roots'][number]['shareDirs']): CliDef => ({
+      id: 'fakecli',
+      name: 'Fake',
+      sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+      session: { roots: [{ env: 'FAKE_HOME', base: '~/.fake', shareDirs }] }
+    });
+
+    it('nested directory tree 를 0700/0600 실파일로 복사하고 base 는 무손상', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      await writeBaseFile('.fake/skills/demo/assets/a.txt', 'asset');
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      await materializeSession(plan);
+
+      const skillCopy = join(plan.roots[0].dir, 'skills', 'demo', 'SKILL.md');
+      const assetCopy = join(plan.roots[0].dir, 'skills', 'demo', 'assets', 'a.txt');
+      expect(await fs.readFile(skillCopy, 'utf8')).toBe('# Demo');
+      expect(await fs.readFile(assetCopy, 'utf8')).toBe('asset');
+      expect((await fs.lstat(join(plan.roots[0].dir, 'skills'))).mode & 0o777).toBe(0o700);
+      expect((await fs.lstat(skillCopy)).mode & 0o777).toBe(0o600);
+
+      await fs.writeFile(skillCopy, '# mutated');
+      expect(await fs.readFile(join(tmp.home, '.fake', 'skills', 'demo', 'SKILL.md'), 'utf8')).toBe('# Demo');
+    });
+
+    it('envSubdir + shareDirs 조합: 디렉토리 복사도 credRoot 하위에 떨어진다', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      const def: CliDef = {
+        id: 'fakecli',
+        name: 'Fake',
+        sources: [{ type: 'file', path: '~/.fake/auth.json', saveAs: 'a.json' }],
+        session: {
+          roots: [{ env: 'FAKE_HOME', base: '~/.fake', envSubdir: '.fake', shareDirs: [{ rel: 'skills' }] }]
+        }
+      };
+      const plan = planSession(def, 'work', SID);
+
+      await materializeSession(plan);
+
+      await expect(
+        fs.readFile(join(plan.roots[0].dir, '.fake', 'skills', 'demo', 'SKILL.md'), 'utf8')
+      ).resolves.toBe('# Demo');
+      await expect(fs.access(join(plan.roots[0].dir, 'skills'))).rejects.toThrow();
+    });
+
+    it('shareDirs root 가 symlink 면 거부 + 세션 디렉토리 미잔류', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/real-skills/demo/SKILL.md', '# Demo');
+      await fs.symlink(join(tmp.home, '.fake', 'real-skills'), join(tmp.home, '.fake', 'skills'));
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      await expect(materializeSession(plan)).rejects.toThrow(/디렉토리가 symlink/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+    });
+
+    it('shareDirs root 가 opendir 중 symlink 로 교체되면 거부 + 세션 디렉토리 미잔류', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      await writeBaseFile('.fake/outside/leak.txt', 'LEAK');
+      const sourceRoot = join(tmp.home, '.fake', 'skills');
+      const safeRoot = join(tmp.home, '.fake', 'skills-safe');
+      const outsideRoot = join(tmp.home, '.fake', 'outside');
+      const realOpendir = fs.opendir.bind(fs);
+      let swapped = false;
+      const spy = vi.spyOn(fs, 'opendir').mockImplementation((async (...args: Parameters<typeof fs.opendir>) => {
+        if (!swapped && args[0] === sourceRoot) {
+          swapped = true;
+          await fs.rename(sourceRoot, safeRoot);
+          await fs.symlink(outsideRoot, sourceRoot);
+        }
+        return realOpendir(...args);
+      }) as typeof fs.opendir);
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      try {
+        await expect(materializeSession(plan)).rejects.toThrow(/materialize 중 변경|하위 symlink/);
+        await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('shareDirs 복사는 fs.readdir 배열 적재 대신 streaming opendir 를 사용한다', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      const sourceRoot = join(tmp.home, '.fake', 'skills');
+      const realReaddir = fs.readdir.bind(fs);
+      const spy = vi.spyOn(fs, 'readdir').mockImplementation((async (...args: Parameters<typeof fs.readdir>) => {
+        if (args[0] === sourceRoot) {
+          throw new Error('shareDirs must not use fs.readdir');
+        }
+        return realReaddir(...args);
+      }) as typeof fs.readdir);
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      try {
+        await materializeSession(plan);
+        await expect(fs.readFile(join(plan.roots[0].dir, 'skills', 'demo', 'SKILL.md'), 'utf8'))
+          .resolves.toBe('# Demo');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('shareDirs 하위 파일 open 중 부모 디렉토리가 symlink 로 교체되면 거부', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      await writeBaseFile('.fake/outside/SKILL.md', 'LEAK');
+      const demoDir = join(tmp.home, '.fake', 'skills', 'demo');
+      const safeDemoDir = join(tmp.home, '.fake', 'skills', 'demo-safe');
+      const outsideDir = join(tmp.home, '.fake', 'outside');
+      const targetFile = join(demoDir, 'SKILL.md');
+      const realOpen = fs.open.bind(fs);
+      let swapped = false;
+      const spy = vi.spyOn(fs, 'open').mockImplementation((async (...args: Parameters<typeof fs.open>) => {
+        if (!swapped && args[0] === targetFile) {
+          swapped = true;
+          await fs.rename(demoDir, safeDemoDir);
+          await fs.symlink(outsideDir, demoDir);
+        }
+        return realOpen(...args);
+      }) as typeof fs.open);
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      try {
+        await expect(materializeSession(plan)).rejects.toThrow(/base 밖|materialize 중 변경/);
+        await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('shareDirs 하위 symlink 는 거부 + 세션 디렉토리 미잔류', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      await fs.symlink(join(tmp.home, '.fake', 'auth.json'), join(tmp.home, '.fake', 'skills', 'demo', 'leak'));
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      await expect(materializeSession(plan)).rejects.toThrow(/하위 symlink/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+    });
+
+    it('shareDirs 하위 hardlink 파일은 거부 + 세션 디렉토리 미잔류', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/auth.json', 'BASE-SECRET');
+      await fs.mkdir(join(tmp.home, '.fake', 'skills'), { recursive: true });
+      await fs.link(join(tmp.home, '.fake', 'auth.json'), join(tmp.home, '.fake', 'skills', 'linked-auth.json'));
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      await expect(materializeSession(plan)).rejects.toThrow(/hardlink/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+    });
+
+    it('shareDirs maxFiles/maxBytes/maxEntries/maxDepth 초과는 거부', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/a.txt', 'a');
+      await writeBaseFile('.fake/skills/b.txt', 'b');
+      await expect(materializeSession(planSession(dirDef([{ rel: 'skills', maxFiles: 1 }]), 'work', SID)))
+        .rejects.toThrow(/파일 수 초과/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+
+      await expect(materializeSession(planSession(dirDef([{ rel: 'skills', maxBytes: 1 }]), 'work', SID)))
+        .rejects.toThrow(/용량 초과/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+
+      await fs.mkdir(join(tmp.home, '.fake', 'skills', 'empty'), { recursive: true });
+      await expect(materializeSession(planSession(dirDef([{ rel: 'skills', maxEntries: 2 }]), 'work', SID)))
+        .rejects.toThrow(/항목 수 초과/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+
+      await writeBaseFile('.fake/skills/deep/c.txt', 'c');
+      await expect(materializeSession(planSession(dirDef([{ rel: 'skills', maxDepth: 1 }]), 'work', SID)))
+        .rejects.toThrow(/깊이 초과/);
+      await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+    });
   });
 });
 

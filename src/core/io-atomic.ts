@@ -46,6 +46,8 @@ export interface WriteFileAtomicOptions {
    * false: keep atomic replace/permissions but skip fsync for ephemeral session scratch files.
    */
   durable?: boolean;
+  /** File mode for newly-created files. Defaults to owner read/write only (0600). */
+  mode?: number;
 }
 
 async function syncDirectoryBestEffort(dir: string): Promise<void> {
@@ -65,14 +67,19 @@ async function syncDirectoryBestEffort(dir: string): Promise<void> {
  * 파일을 원자적으로 쓴다. 권한 0600, 부모 디렉토리 자동 생성.
  * path 는 이미 expanded 된 절대 경로여야 한다 (`~/` 확장은 호출자 책임).
  */
-export async function writeFileAtomic(path: string, value: string, opts: WriteFileAtomicOptions = {}): Promise<void> {
+export async function writeFileAtomic(
+  path: string,
+  value: string | Uint8Array,
+  opts: WriteFileAtomicOptions = {}
+): Promise<void> {
   const durable = opts.durable !== false;
+  const mode = opts.mode ?? 0o600;
   const dir = dirname(path);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = atomicTmpPath(path);
   let handle: FileHandle | undefined;
   try {
-    handle = await fs.open(tmp, ATOMIC_FLAGS, 0o600);
+    handle = await fs.open(tmp, ATOMIC_FLAGS, mode);
     await handle.writeFile(value);
     if (durable) await handle.sync();
     await handle.close();
