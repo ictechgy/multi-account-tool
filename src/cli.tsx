@@ -20,6 +20,7 @@ import { describeError, UnknownCliError } from './core/errors.js';
 import { runExec } from './core/exec.js';
 import { handleSession } from './core/session-cli.js';
 import { formatDoctorReport, runDoctor } from './core/doctor.js';
+import { buildCliSupportReport, formatSupportReport } from './core/support.js';
 import { registerAllBuiltinAdapters } from './core/freshness-adapters/index.js';
 import {
   inspectLiveFreshness,
@@ -42,6 +43,8 @@ const USAGE =
   `                                                 모든 builtin/plugin CLI 보고. --check-only 면\n` +
   `                                                 stale 감지해도 exit 0 (read-only 모니터링).\n` +
   `  mat doctor [--json]                           read-only 안전 진단 (자격증명 값 미열람)\n` +
+  `  mat support <cli> [--json]                    CLI 지원 범위/한계/계약 설명\n` +
+  `  mat explain <cli> [--json]                    support 의 alias\n` +
   `  mat --help                                     이 도움말 출력\n` +
   `  mat --version                                  버전 출력\n`;
 
@@ -104,6 +107,10 @@ async function main(): Promise<void> {
     await handleFreshness(rest);
     return;
   }
+  if (first === 'support' || first === 'explain') {
+    await handleSupport(first, rest);
+    return;
+  }
   if (first === 'session') {
     const r = await handleSession(rest);
     // signal 종료 시 self-raise (exitCode 무시) — 자식 종료 상태를 부모에 정확히 전파.
@@ -159,6 +166,64 @@ function parseDoctorArgs(rest: string[]): DoctorArgs {
     process.exit(2);
   }
   return out;
+}
+
+async function handleSupport(command: 'support' | 'explain', rest: string[]): Promise<void> {
+  const parsed = parseSupportArgs(command, rest);
+  if (parsed.help) {
+    process.stdout.write(
+      `사용법:\n` +
+      `  mat support <cli> [--json]\n` +
+      `  mat explain <cli> [--json]\n` +
+      `\n` +
+      `CLI 별 mat 지원 범위와 한계를 설명합니다. swap, freshness, session start/run,\n` +
+      `ambient/project override 위험, 마지막으로 확인한 upstream 계약을 보여줍니다.\n`
+    );
+    return;
+  }
+  const report = buildCliSupportReport(parsed.cliId);
+  if (parsed.asJson) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    process.stdout.write(formatSupportReport(report));
+  }
+}
+
+interface SupportArgs {
+  cliId: string;
+  asJson: boolean;
+  help: boolean;
+}
+
+function parseSupportArgs(command: 'support' | 'explain', rest: string[]): SupportArgs {
+  let cliId: string | undefined;
+  let asJson = false;
+  let help = false;
+  for (const a of rest) {
+    if (a === '--json') {
+      asJson = true;
+      continue;
+    }
+    if (a === '--help' || a === '-h') {
+      help = true;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      process.stderr.write(`mat ${command}: 알 수 없는 옵션: ${a}\n`);
+      process.exit(2);
+    }
+    if (cliId != null) {
+      process.stderr.write(`mat ${command}: <cli> 는 하나만 지정할 수 있습니다.\n`);
+      process.exit(2);
+    }
+    cliId = a;
+  }
+  if (help) return { cliId: cliId ?? '', asJson, help };
+  if (cliId == null) {
+    process.stderr.write(`mat ${command}: <cli> 인자가 필요합니다.\n`);
+    process.exit(2);
+  }
+  return { cliId, asJson, help };
 }
 
 function runTui(): void {

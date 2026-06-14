@@ -16,6 +16,34 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/core/cli-defs.js', () => ({
+  BUILTIN_CLI_DEFS: [
+    {
+      id: 'codex',
+      name: 'Codex CLI',
+      sources: [{ type: 'file', path: '~/.codex/auth.json', saveAs: 'auth.json' }],
+      session: { roots: [{ env: 'CODEX_HOME', base: '~/.codex' }] },
+      sessionRun: { executable: 'codex' }
+    },
+    {
+      id: 'gemini',
+      name: 'Gemini CLI',
+      sources: [{ type: 'file', path: '~/.gemini/oauth_creds.json', saveAs: 'oauth_creds.json' }],
+      session: { roots: [{ env: 'GEMINI_CLI_HOME', base: '~/.gemini', envSubdir: '.gemini' }] },
+      sessionRun: { executable: 'gemini' }
+    },
+    {
+      id: 'claude',
+      name: 'Claude Code',
+      sources: [{ type: 'keychain', service: 'Claude Code-credentials', saveAs: 'credentials.json' }],
+      sessionRun: { executable: 'claude' }
+    },
+    {
+      id: 'aider',
+      name: 'Aider',
+      sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }],
+      sessionRun: { executable: 'aider' }
+    }
+  ],
   getAllCliDefs: mocks.getAllCliDefs,
   getCliDefsWarnings: mocks.getCliDefsWarnings
 }));

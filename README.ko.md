@@ -74,6 +74,8 @@
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.
 
+CLI 별 지원 경계와 이유를 바로 보려면 `mat support <cli>` (또는 `mat explain <cli>`) 를 실행한다. 현재 swap/freshness/session 상태, caveat, ambient override 위험, 마지막으로 확인한 upstream 가정을 출력한다.
+
 ### 전환 흐름 (데이터 손실 없음)
 
 0. **swap 전 freshness 점검** — 라이브 자격증명이 활성 프로필 저장본과 drift (OAuth refresh 토큰 회전 등) 가 감지되면, 아래 1~3 단계 전에 **재캡처 / 폐기 / 취소** dialog 가 먼저 표시된다. CLI 별 분류 신뢰도는 위의 "OAuth Rotation 안전성 매트릭스" 참고.
@@ -302,6 +304,23 @@ mat doctor --json
 ```
 
 CLI 별 분류 신뢰도는 README 상단 OAuth Rotation 안전성 매트릭스 참고.
+
+### `mat support` / `mat explain` — CLI 지원 경계 설명
+
+```bash
+mat support <cli> [--json]
+mat explain <cli> [--json]
+```
+
+하나의 CLI 에 대해 `mat` 이 무엇을 지원하고 왜 그런지 보여준다. 보고서에는 profile swap, freshness/drift 점검, `mat session start`, `mat session run`, source type(라이브 경로나 자격증명 값 제외), ambient/project override 위험, 지원 판단의 마지막 upstream 확인 가정이 포함된다.
+
+`explain` 은 `support` 의 alias 다. `agy` 처럼 의도적으로 blocked 된 CLI 도 profile-swap 대상이 아니더라도 설명 가능하다. 사용자 plugin CLI 는 profile-swap only + fallback freshness 로 표시되며, 신뢰된 session boundary 는 없다고 보고한다.
+
+```bash
+mat support codex
+mat support aider --json
+mat explain agy
+```
 
 ---
 
