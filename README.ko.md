@@ -210,6 +210,8 @@ lterm send-keys "mat exec claude work -- claude" Enter
 mat session start <cli> <profile>   # <profile> 로 격리된 subshell 실행
 mat session run <cli> <profile> -- [cli-args...]
                                   # builtin CLI executable 을 격리 env 로 직접 실행
+mat session run <cli> <profile> --check|--explain [--json] -- [cli-args...]
+                                  # spawn 없이 정확한 session-run validator 사전 점검
 mat session list                    # 실행 중 / orphan 세션 목록
 mat session stop <id>               # 세션 종료 또는 orphan 정리
 ```
@@ -227,6 +229,8 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 **메커니즘 — env 주입 + copy-isolation.** `mat session start` 는 `$SHELL` 을 실행하면서 CLI 의 config-directory env(예: `CODEX_HOME`)가 `~/.multi-account-tool/sessions/<id>/` 아래 새 세션 전용 디렉토리를 가리키게 한다. mat 은 선택한 프로필의 자격증명을 그곳에 **복사**(`0600`)하므로, subshell 안의 CLI 는 격리된 계정만 읽는다. 또한 작은 non-credential allow-list 를 세션 전용 스냅샷으로 복사한다. Codex 의 경우 `config.toml` 과 `skills/` 가 격리된 `CODEX_HOME` 으로 복사되어, live `~/.codex` tree 를 공유하지 않고도 사용자 skill 을 사용할 수 있다. 종료 시 mat 은 (OAuth rotation 등으로) 바뀐 자격증명만 프로필로 **재캡처**하고 세션 디렉토리를 삭제한다. OS 전역 자격증명과 `mat exec` lock 은 건드리지 않으므로 세션은 서로 간섭하지 않고 동시에 실행된다.
 
 `mat session run` 은 같은 materialize → env 주입 → 재캡처 → cleanup lifecycle 을 쓰지만 shell 을 열지 않는다. 대신 mat 이 `<cli>` 에 대응하는 builtin CLI executable(예: `codex`)을 선택하고 `[cli-args...]` 를 그 executable 의 argv 로 넘긴다. `--` 뒤는 임의 명령이 아니라 선택된 builtin CLI 의 인자다. 현재는 안전한 command-scoped 경계가 있는 builtin(Codex, Qwen, Kimi, Crush, Gemini CLI, Linux Claude, OpenCode safer-run, Aider partial-run)에만 열려 있다.
+
+실행 전에 `mat session run <cli> <profile> --check -- [cli-args...]` (또는 `--explain`) 으로 **동일한** 지원 여부, profile, executable, Aider, OpenCode hard-stop validator 를 spawn/session directory 생성 없이 점검할 수 있다. 실제 실행 preflight 를 통과하면 exit `0`, validation blocker 가 있으면 exit `1`, 사용법/parser 오류는 exit `2` 다. 자동화가 필요하면 `--check`/`--explain` 과 함께 `--json` 을 붙여 blocker, phase, 선택 executable, profile 존재 여부, 정확한 argv 를 포함한 report 를 받는다.
 
 **지원 CLI** (자격증명 디렉토리를 env 로 재배치할 수 있는 것):
 

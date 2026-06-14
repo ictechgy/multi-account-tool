@@ -35,6 +35,8 @@ const USAGE =
   `  mat exec <cli> <profile> -- <cmd...>          <profile> 로 swap 후 <cmd> 실행, 종료 후 원복\n` +
   `  mat session start <cli> <profile>             <profile> 로 격리된 subshell 실행 (동시 다계정)\n` +
   `  mat session run <cli> <profile> -- [args...]  builtin CLI 를 격리 env 로 직접 실행\n` +
+  `  mat session run <cli> <profile> --check|--explain [--json] -- [args...]\n` +
+  `                                                 spawn 없는 session run 사전 점검\n` +
   `  mat session list                              실행 중/orphan 세션 목록\n` +
   `  mat session stop <id>                         세션 종료 또는 orphan 정리\n` +
   `  mat freshness [<cli>] [--profile <name>] [--json] [--check-only]\n` +
@@ -75,15 +77,18 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const [first, ...rest] = args;
 
-  // `mat doctor` 는 read-only 안전 진단이어야 하므로, startup mutation 인 legacy
-  // data-dir migration 보다 먼저 dispatch 한다. `support`/`explain` 도 정적 metadata
-  // 설명 명령이므로 같은 read-only startup contract 를 따른다. 일반 명령은 기존처럼 migration 수행.
+  // read-only 안전 진단/설명/dry-run 은 startup mutation 인 legacy data-dir migration 보다 먼저
+  // dispatch 한다. 일반 명령은 기존처럼 migration 수행.
   if (first === 'doctor') {
     await handleDoctor(rest);
     return;
   }
   if (first === 'support' || first === 'explain') {
     await handleSupport(first, rest);
+    return;
+  }
+  if (first === 'session' && isSessionRunPreflightRequest(rest)) {
+    await dispatchSession(rest);
     return;
   }
 
@@ -113,17 +118,29 @@ async function main(): Promise<void> {
     return;
   }
   if (first === 'session') {
-    const r = await handleSession(rest);
-    // signal 종료 시 self-raise (exitCode 무시) — 자식 종료 상태를 부모에 정확히 전파.
-    if (r.raiseSignal) {
-      process.kill(process.pid, r.raiseSignal);
-      return;
-    }
-    process.exit(r.exitCode);
+    await dispatchSession(rest);
+    return;
   }
 
   process.stderr.write(`mat: 알 수 없는 명령: ${first}\n${USAGE}`);
   process.exit(2);
+}
+
+function isSessionRunPreflightRequest(rest: string[]): boolean {
+  if (rest[0] !== 'run') return false;
+  const sepIdx = rest.indexOf('--');
+  const beforeSeparator = sepIdx >= 0 ? rest.slice(1, sepIdx) : rest.slice(1);
+  return beforeSeparator.includes('--check') || beforeSeparator.includes('--explain');
+}
+
+async function dispatchSession(rest: string[]): Promise<void> {
+  const r = await handleSession(rest);
+  // signal 종료 시 self-raise (exitCode 무시) — 자식 종료 상태를 부모에 정확히 전파.
+  if (r.raiseSignal) {
+    process.kill(process.pid, r.raiseSignal);
+    return;
+  }
+  process.exit(r.exitCode);
 }
 
 async function handleDoctor(rest: string[]): Promise<void> {

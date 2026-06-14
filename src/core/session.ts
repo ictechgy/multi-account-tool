@@ -39,7 +39,7 @@ import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 import { findCliDef } from './cli-defs.js';
-import { UsageError } from './errors.js';
+import { UsageError, errorMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
 import { acquireRecaptureLock, isProcessAlive, sanitizeForStderr } from './lockfile.js';
 import {
@@ -127,6 +127,31 @@ export interface SessionPlan {
   commandCreds?: SessionCred[];
   /** Command-scoped session run 전용 보조 파일. 재캡처 대상이 아니며 세션 종료 시 폐기된다. */
   commandExtraFiles?: Array<{ rel: string; absInSession: string; content: string }>;
+}
+
+export interface SessionRunPreflightBlocker {
+  phase: string;
+  code: string;
+  message: string;
+}
+
+export interface SessionRunPreflightPhase {
+  id: string;
+  status: 'ok' | 'blocked' | 'skipped';
+}
+
+export interface SessionRunPreflightReport {
+  schemaVersion: 1;
+  cliId: string;
+  profileName: string;
+  args: string[];
+  ok: boolean;
+  supported: boolean;
+  profileExists: boolean | null;
+  executable?: string;
+  blockers: SessionRunPreflightBlocker[];
+  warnings: string[];
+  phases: SessionRunPreflightPhase[];
 }
 
 /** source(file)가 base 의 직속 자식인지 — rel 이 비어있지 않고 `..`/구분자 미포함. */
@@ -1273,16 +1298,12 @@ export async function runSession(opts: SessionStartOptions): Promise<SessionResu
  * 전역 swap/lock 없이 기존 session copy-isolate + 재캡처 lifecycle 을 그대로 쓴다.
  */
 export async function runSessionCommand(opts: SessionCommandOptions): Promise<SessionResult> {
+  const preflight = await preflightSessionRunCommand(opts);
+  assertSessionRunPreflightOk(preflight);
+
   const def = findCliDef(opts.cliId);
-  if (!def) throw new UsageError(`알 수 없는 CLI: ${opts.cliId}`);
-  if (!def.sessionRun) {
-    throw new UsageError(`'${opts.cliId}' 는 session run 을 지원하지 않습니다 (builtin executable 미정의).`);
-  }
-  await preflightSessionRun(def.id, opts.args);
+  if (!def?.sessionRun) throw new UsageError(`'${opts.cliId}' 는 session run 을 지원하지 않습니다 (builtin executable 미정의).`);
   const profileName = validateProfileName(opts.profileName);
-  if (!(await profileExists(opts.cliId, profileName))) {
-    throw new UsageError(`프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
-  }
 
   await reapOrphans().catch(() => {
     /* best-effort — start 를 막지 않는다 */
@@ -1313,6 +1334,173 @@ export async function runSessionCommand(opts: SessionCommandOptions): Promise<Se
     env: sessionRunEnvOverrides(def.id)
   };
   return runPlannedSession(plan, target);
+}
+
+export async function preflightSessionRunCommand(opts: SessionCommandOptions): Promise<SessionRunPreflightReport> {
+  const report = makeSessionRunPreflightReport(opts);
+  const def = findCliDef(opts.cliId);
+  if (!def) {
+    return blockPreflight(report, 'cli', 'unknown-cli', `알 수 없는 CLI: ${opts.cliId}`);
+  }
+  if (!def.sessionRun) {
+    return blockPreflight(
+      report,
+      'support',
+      'session-run-unsupported',
+      `'${opts.cliId}' 는 session run 을 지원하지 않습니다 (builtin executable 미정의).`
+    );
+  }
+  report.supported = true;
+
+  try {
+    await preflightSessionRun(def.id, opts.args);
+    okPhase(report, 'preflight');
+  } catch (err) {
+    return blockPreflight(report, preflightPhaseForCli(def.id), 'session-run-hard-stop', err);
+  }
+
+  let profileName: string;
+  try {
+    profileName = validateProfileName(opts.profileName);
+    okPhase(report, 'profile-name');
+  } catch (err) {
+    return blockPreflight(report, 'profile', 'profile-name-invalid', err);
+  }
+
+  try {
+    report.profileExists = await profileExists(opts.cliId, profileName);
+  } catch (err) {
+    report.profileExists = null;
+    return blockPreflight(report, 'profile', 'profile-check-failed', err);
+  }
+  if (!report.profileExists) {
+    return blockPreflight(report, 'profile', 'profile-missing', `프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
+  }
+  okPhase(report, 'profile');
+
+  try {
+    report.executable = validateSessionRunExecutable(def.sessionRun.executable);
+    okPhase(report, 'executable');
+  } catch (err) {
+    return blockPreflight(report, 'executable', 'executable-invalid', err);
+  }
+
+  let plan: SessionPlan | undefined;
+  try {
+    const dummySessionId = makeSessionId(def.id, profileName);
+    if (def.id === 'aider') {
+      plan = planAiderCommandSession(def, profileName, dummySessionId);
+    } else {
+      plan = planSession(def, profileName, dummySessionId);
+    }
+    okPhase(report, 'plan');
+  } catch (err) {
+    return blockPreflight(report, 'support', 'session-isolation-unsupported', err);
+  }
+
+  if (plan && def.id !== 'aider') {
+    for (const root of plan.roots) {
+      for (const cred of root.creds) {
+        try {
+          const value = await readProfileFile(plan.cli, plan.profile, cred.saveAs);
+          if (value == null) {
+            return blockPreflight(
+              report,
+              'profile',
+              'profile-credential-missing',
+              `프로필에 캡처된 자격증명이 없습니다: ${plan.cli}/${plan.profile}/${cred.saveAs}. ` +
+                `먼저 mat 으로 자격증명을 캡처하세요.`
+            );
+          }
+        } catch (err) {
+          return blockPreflight(report, 'profile', 'profile-credential-check-failed', err);
+        }
+      }
+    }
+  }
+
+  if (def.id === 'aider') {
+    try {
+      const text = await readProfileFile(def.id, profileName, 'aider.yml');
+      if (text == null) {
+        throw new UsageError(`aider session run 차단: profile config aider.yml 이 프로필에 없습니다.`);
+      }
+      inspectAiderProfileConfigText(text);
+      okPhase(report, 'aider-profile');
+    } catch (err) {
+      return blockPreflight(report, 'aider-profile', 'aider-profile-hard-stop', err);
+    }
+  }
+
+  report.ok = true;
+  return report;
+}
+
+function makeSessionRunPreflightReport(opts: SessionCommandOptions): SessionRunPreflightReport {
+  return {
+    schemaVersion: 1,
+    cliId: opts.cliId,
+    profileName: opts.profileName,
+    args: opts.args.slice(),
+    ok: false,
+    supported: false,
+    profileExists: null,
+    blockers: [],
+    warnings: [],
+    phases: []
+  };
+}
+
+function okPhase(report: SessionRunPreflightReport, id: string): void {
+  report.phases.push({ id, status: 'ok' });
+}
+
+function blockPreflight(
+  report: SessionRunPreflightReport,
+  phase: string,
+  code: string,
+  errOrMessage: unknown
+): SessionRunPreflightReport {
+  const message = errOrMessage instanceof UsageError
+    ? errOrMessage.message
+    : typeof errOrMessage === 'string'
+      ? errOrMessage
+      : errorMessage(errOrMessage);
+  report.ok = false;
+  report.blockers.push({ phase, code, message });
+  report.phases.push({ id: phase, status: 'blocked' });
+  return report;
+}
+
+function preflightPhaseForCli(cliId: string): string {
+  if (cliId === 'aider') return 'aider-preflight';
+  if (cliId === 'opencode') return 'opencode-preflight';
+  return 'preflight';
+}
+
+function assertSessionRunPreflightOk(report: SessionRunPreflightReport): void {
+  if (report.ok) return;
+  const blocker = report.blockers[0];
+  throw new UsageError(blocker?.message ?? 'session run preflight failed');
+}
+
+export function formatSessionRunPreflightReport(report: SessionRunPreflightReport): string {
+  const lines: string[] = [];
+  lines.push(`session run preflight: ${report.ok ? 'ok' : 'blocked'} (${report.cliId}/${report.profileName})`);
+  if (report.executable) {
+    lines.push(`would execute: ${report.executable}${report.args.length ? ` ${report.args.join(' ')}` : ''}`);
+  }
+  if (report.blockers.length > 0) {
+    lines.push('blockers:');
+    for (const blocker of report.blockers) {
+      lines.push(`  - [${blocker.phase}] ${blocker.message}`);
+    }
+  }
+  if (report.warnings.length > 0) {
+    lines.push('warnings:');
+    for (const warning of report.warnings) lines.push(`  - ${warning}`);
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 async function runSessionWithTarget(
@@ -1538,6 +1726,10 @@ function aiderForcedArgs(plan: SessionPlan, userArgs: readonly string[]): string
 async function inspectAiderMaterializedProfile(plan: SessionPlan): Promise<void> {
   const path = aiderCommandCred(plan, 'aider.yml').absInSession;
   const text = await fs.readFile(path, 'utf8');
+  inspectAiderProfileConfigText(text);
+}
+
+function inspectAiderProfileConfigText(text: string): void {
   const bypass = findAiderProfileSidecarPointer(text);
   if (bypass) {
     throw new UsageError(

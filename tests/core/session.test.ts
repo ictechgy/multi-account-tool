@@ -66,6 +66,7 @@ import {
   listSessions,
   materializeSession,
   planSession,
+  preflightSessionRunCommand,
   recaptureSession,
   reapOrphans,
   removeSessionDir,
@@ -427,6 +428,15 @@ function sessionChildHardeningValueForTest(name: string): string | undefined {
     : undefined;
 }
 
+async function sessionDirEntriesIfAny(): Promise<string[]> {
+  try {
+    return await fs.readdir(sessionsDir());
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
 beforeEach(async () => {
   tmp = await setupTmpHome();
   originalCwd = process.cwd();
@@ -648,7 +658,7 @@ describe('runSession', () => {
       const result = await runSession({ cliId: 'codex', profileName: 'work' });
       expect(result.signal).toBe(sig);
       expect(mockStage).toHaveBeenCalled();
-      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
     }
   );
 
@@ -712,6 +722,144 @@ describe('runSession', () => {
 });
 
 describe('runSessionCommand', () => {
+  it('preflight success report: profile/executable/preflight checks pass without mutation or spawn', async () => {
+    const report = await preflightSessionRunCommand({
+      cliId: 'codex',
+      profileName: 'work',
+      args: ['--help']
+    });
+
+    expect(report).toMatchObject({
+      schemaVersion: 1,
+      cliId: 'codex',
+      profileName: 'work',
+      args: ['--help'],
+      ok: true,
+      supported: true,
+      profileExists: true,
+      executable: 'codex',
+      blockers: []
+    });
+    expect(mockProfileExists).toHaveBeenCalledWith('codex', 'work');
+    expect(mockReadProfile).toHaveBeenCalledWith('codex', 'work', 'auth.json');
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockStage).not.toHaveBeenCalled();
+    expect(mockCommit).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight blocked report: profile exists but missing credential file returns blocker without spawn', async () => {
+    mockProfileExists.mockResolvedValue(true);
+    mockReadProfile.mockResolvedValue(null);
+
+    const err = await runSessionCommand({
+      cliId: 'codex',
+      profileName: 'empty_profile',
+      args: []
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(UsageError);
+
+    const report = await preflightSessionRunCommand({
+      cliId: 'codex',
+      profileName: 'empty_profile',
+      args: []
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.profileExists).toBe(true);
+    expect(report.blockers[0]).toMatchObject({
+      phase: 'profile',
+      code: 'profile-credential-missing',
+      message: (err as Error).message
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight blocked report: unsupported session isolation (e.g. keychain source) returns blocker', async () => {
+    mockFindCliDef.mockReturnValue({
+      id: 'claude',
+      name: 'Claude Code',
+      sources: [{ type: 'keychain', service: 'Claude Code-credentials', saveAs: 'credentials.json' }],
+      session: { roots: [{ env: 'CLAUDE_CONFIG_DIR', base: '~/.claude' }] },
+      sessionRun: { executable: 'claude' }
+    } as CliDef);
+
+    const err = await runSessionCommand({ cliId: 'claude', profileName: 'work', args: [] }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(UsageError);
+
+    const report = await preflightSessionRunCommand({
+      cliId: 'claude',
+      profileName: 'work',
+      args: []
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.blockers[0]).toMatchObject({
+      phase: 'support',
+      code: 'session-isolation-unsupported',
+      message: (err as Error).message
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight blocked report: missing profile returns exit-friendly blocker without spawn', async () => {
+    mockProfileExists.mockResolvedValue(false);
+
+    const report = await preflightSessionRunCommand({
+      cliId: 'codex',
+      profileName: 'missing',
+      args: []
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.profileExists).toBe(false);
+    expect(report.blockers[0]).toMatchObject({
+      phase: 'profile',
+      code: 'profile-missing',
+      message: '프로필을 찾을 수 없습니다: codex/missing'
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight blocked report: sessionRun executable without env root matches real run and stays non-mutating', async () => {
+    mockFindCliDef.mockReturnValue({
+      id: 'fixture',
+      name: 'Fixture CLI',
+      sources: [],
+      sessionRun: { executable: 'fixture' }
+    } as CliDef);
+
+    const err = await runSessionCommand({ cliId: 'fixture', profileName: 'work', args: [] }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(UsageError);
+
+    const report = await preflightSessionRunCommand({ cliId: 'fixture', profileName: 'work', args: [] });
+    expect(report.ok).toBe(false);
+    expect(report.blockers[0]).toMatchObject({
+      phase: 'support',
+      code: 'session-isolation-unsupported',
+      message: (err as Error).message
+    });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
   it('성공: builtin executable spawn(env + argv) → exit 0 → 재캡처 → 세션 디렉토리 삭제', async () => {
     mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
 
@@ -910,6 +1058,26 @@ describe('runSessionCommand', () => {
       expect(mockSpawn).not.toHaveBeenCalled();
     }
 
+    async function expectOpenCodePreflightMatchesRunBlock(args: string[] = []): Promise<void> {
+      const err = await runSessionCommand({ cliId: 'opencode', profileName: 'work', args }).then(
+        () => undefined,
+        (caught: unknown) => caught
+      );
+      expect(err).toBeInstanceOf(UsageError);
+
+      const report = await preflightSessionRunCommand({ cliId: 'opencode', profileName: 'work', args });
+      expect(report.ok).toBe(false);
+      expect(report.blockers[0]).toMatchObject({
+        phase: 'opencode-preflight',
+        code: 'session-run-hard-stop',
+        message: (err as Error).message
+      });
+      expect(mockProfileExists).not.toHaveBeenCalled();
+      expect(mockReadProfile).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+    }
+
     beforeEach(async () => {
       mockFindCliDef.mockReturnValue(OPENCODE_DEF);
       await enterProject();
@@ -972,6 +1140,26 @@ describe('runSessionCommand', () => {
       expect(env.OPENCODE_DISABLE_CLAUDE_CODE).not.toBe('true');
       expect(env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT).toBe('true');
       expect(env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS).toBe('true');
+    });
+
+    it('preflight report 는 OpenCode argv hard-stop 메시지를 real run 과 동일하게 반환한다', async () => {
+      const other = join(tmp.home, 'preflight-bypass-project');
+      await fs.mkdir(other);
+
+      await expectOpenCodePreflightMatchesRunBlock(['run', '--dir', other]);
+    });
+
+    it('preflight report 는 OpenCode env hard-stop 메시지를 real run 과 동일하게 반환한다', async () => {
+      process.env.OPENCODE_CONFIG = '/tmp/opencode.json';
+
+      await expectOpenCodePreflightMatchesRunBlock(['run', 'hello']);
+    });
+
+    it('preflight report 는 OpenCode project config hard-stop 메시지를 real run 과 동일하게 반환한다', async () => {
+      const path = join(process.cwd(), 'opencode.json');
+      await fs.writeFile(path, '{"apiKey":"sk-test"}');
+
+      await expectOpenCodePreflightMatchesRunBlock(['run', 'hello']);
     });
 
     it.each(OPENCODE_BLOCK_ENV_KEYS)(
@@ -1680,6 +1868,22 @@ describe('runSessionCommand', () => {
       expect(mockSpawn).not.toHaveBeenCalled();
     }
 
+    async function expectAiderPreflightMatchesRunBlock(
+      args: string[] = ['--message', 'hi']
+    ): Promise<void> {
+      const err = await runSessionCommand({ cliId: 'aider', profileName: 'work', args }).then(
+        () => undefined,
+        (caught: unknown) => caught
+      );
+      expect(err).toBeInstanceOf(UsageError);
+
+      const report = await preflightSessionRunCommand({ cliId: 'aider', profileName: 'work', args });
+      expect(report.ok).toBe(false);
+      expect(report.blockers[0]?.message).toBe((err as Error).message);
+      expect(mockSpawn).not.toHaveBeenCalled();
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+    }
+
     beforeEach(async () => {
       mockFindCliDef.mockReturnValue(AIDER_DEF);
       await enterProject();
@@ -1740,7 +1944,21 @@ describe('runSessionCommand', () => {
       child.emit('exit', 0, null);
       await expect(runPromise).resolves.toEqual({ code: 0, signal: null, recaptureError: undefined });
       expect(mockStage).toHaveBeenCalledWith('aider', 'work', 'aider.yml', 'TOK');
-      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+    });
+
+    it('preflight report 는 Aider argv hard-stop 메시지를 real run 과 동일하게 반환한다', async () => {
+      await expectAiderPreflightMatchesRunBlock(['--config=/tmp/aider.yml']);
+      expect(mockProfileExists).not.toHaveBeenCalled();
+      expect(mockReadProfile).not.toHaveBeenCalled();
+    });
+
+    it('preflight report 는 Aider env hard-stop 메시지를 real run 과 동일하게 반환한다', async () => {
+      process.env.AIDER_CONFIG = '/tmp/aider.yml';
+
+      await expectAiderPreflightMatchesRunBlock(['--message', 'hi']);
+      expect(mockProfileExists).not.toHaveBeenCalled();
+      expect(mockReadProfile).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -1942,7 +2160,20 @@ describe('runSessionCommand', () => {
       expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
       expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
       expect(mockSpawn).not.toHaveBeenCalled();
-      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+    });
+
+    it.each([
+      ['sidecar pointer', 'model-settings-file: /tmp/aider-settings.yml\n'],
+      ['set-env', 'set-env:\n  - AWS_SHARED_CREDENTIALS_FILE=/tmp/aws-creds\n'],
+      ['host-chain model', 'model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0\n'],
+      ['host-chain alias', 'alias: safe:bedrock/anthropic.claude-v2\nmodel: safe\n']
+    ])('preflight report 는 Aider profile %s hard-stop 메시지를 real run 과 동일하게 반환한다', async (_label, profileText) => {
+      mockReadProfile.mockResolvedValue(profileText);
+
+      await expectAiderPreflightMatchesRunBlock(['--message', 'hi']);
+      expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
+      expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
     });
 
     it.each([
@@ -1958,7 +2189,7 @@ describe('runSessionCommand', () => {
       expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
       expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
       expect(mockSpawn).not.toHaveBeenCalled();
-      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
     });
 
     it.each([
@@ -1977,7 +2208,7 @@ describe('runSessionCommand', () => {
       expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
       expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
       expect(mockSpawn).not.toHaveBeenCalled();
-      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
     });
 
     it.each([
@@ -1996,7 +2227,7 @@ describe('runSessionCommand', () => {
       expect(mockProfileExists).toHaveBeenCalledWith('aider', 'work');
       expect(mockReadProfile).toHaveBeenCalledWith('aider', 'work', 'aider.yml');
       expect(mockSpawn).not.toHaveBeenCalled();
-      await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+      await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
     });
   });
 });
