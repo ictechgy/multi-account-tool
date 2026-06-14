@@ -582,6 +582,34 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
       }
     });
 
+    it('shareDirs 하위 파일 open 중 부모 디렉토리가 symlink 로 교체되면 거부', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      await writeBaseFile('.fake/outside/SKILL.md', 'LEAK');
+      const demoDir = join(tmp.home, '.fake', 'skills', 'demo');
+      const safeDemoDir = join(tmp.home, '.fake', 'skills', 'demo-safe');
+      const outsideDir = join(tmp.home, '.fake', 'outside');
+      const targetFile = join(demoDir, 'SKILL.md');
+      const realOpen = fs.open.bind(fs);
+      let swapped = false;
+      const spy = vi.spyOn(fs, 'open').mockImplementation((async (...args: Parameters<typeof fs.open>) => {
+        if (!swapped && args[0] === targetFile) {
+          swapped = true;
+          await fs.rename(demoDir, safeDemoDir);
+          await fs.symlink(outsideDir, demoDir);
+        }
+        return realOpen(...args);
+      }) as typeof fs.open);
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      try {
+        await expect(materializeSession(plan)).rejects.toThrow(/base 밖|materialize 중 변경/);
+        await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('shareDirs 하위 symlink 는 거부 + 세션 디렉토리 미잔류', async () => {
       await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
       await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');

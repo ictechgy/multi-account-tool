@@ -550,10 +550,16 @@ async function copyShareDirFile(
   preOpenStat: { dev: number; ino: number; isFile(): boolean; isSymbolicLink(): boolean; mode: number }
 ): Promise<void> {
   await assertSafeDestinationDir(dirname(destPath));
+  await assertRealpathContained(guard.real, sourcePath);
   const handle = await fs.open(sourcePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const openedStat = await handle.stat();
     assertSameInode(preOpenStat, openedStat, sourcePath);
+    const postOpenStat = await fs.lstat(sourcePath);
+    if (postOpenStat.isSymbolicLink()) {
+      throw new Error(`allow-list 디렉토리 하위 symlink 입니다 (복사 거부): ${sessionPathForError(sourcePath)}`);
+    }
+    assertSameInode(openedStat, postOpenStat, sourcePath);
     await assertRealpathContained(guard.real, sourcePath);
     if (!openedStat.isFile()) {
       throw new Error(`allow-list 디렉토리 하위 항목이 일반 파일이 아닙니다: ${sessionPathForError(sourcePath)}`);
