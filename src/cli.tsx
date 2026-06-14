@@ -19,6 +19,7 @@ import { getActiveProfile } from './core/config.js';
 import { describeError, UnknownCliError } from './core/errors.js';
 import { runExec } from './core/exec.js';
 import { handleSession } from './core/session-cli.js';
+import { formatDoctorReport, runDoctor } from './core/doctor.js';
 import { registerAllBuiltinAdapters } from './core/freshness-adapters/index.js';
 import {
   inspectLiveFreshness,
@@ -40,6 +41,7 @@ const USAGE =
   `                                                 refresh rotation 안전성 점검). cli 미지정 시\n` +
   `                                                 모든 builtin/plugin CLI 보고. --check-only 면\n` +
   `                                                 stale 감지해도 exit 0 (read-only 모니터링).\n` +
+  `  mat doctor [--json]                           read-only 안전 진단 (자격증명 값 미열람)\n` +
   `  mat --help                                     이 도움말 출력\n` +
   `  mat --version                                  버전 출력\n`;
 
@@ -67,13 +69,20 @@ main().catch((err) => {
 });
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const [first, ...rest] = args;
+
+  // `mat doctor` 는 read-only 안전 진단이어야 하므로, startup mutation 인 legacy
+  // data-dir migration 보다 먼저 dispatch 한다. 일반 명령은 기존처럼 migration 수행.
+  if (first === 'doctor') {
+    await handleDoctor(rest);
+    return;
+  }
+
   // v0.1 (~/.multi-sub-terminal) → v0.2 (~/.multi-account-tool) 일회성 데이터 마이그레이션.
   migrateLegacyDataDir();
   // OAuth refresh rotation 인지용 freshness adapter (Codex/Gemini/OpenCode) 등록.
   registerAllBuiltinAdapters();
-
-  const args = process.argv.slice(2);
-  const [first, ...rest] = args;
 
   if (first == null) {
     runTui();
@@ -107,6 +116,49 @@ async function main(): Promise<void> {
 
   process.stderr.write(`mat: 알 수 없는 명령: ${first}\n${USAGE}`);
   process.exit(2);
+}
+
+async function handleDoctor(rest: string[]): Promise<void> {
+  const parsed = parseDoctorArgs(rest);
+  if (parsed.help) {
+    process.stdout.write(
+      `사용법:\n` +
+      `  mat doctor [--json]\n` +
+      `\n` +
+      `read-only 안전 진단을 실행합니다. 자격증명 값/Keychain secret 값은 읽지 않고,\n` +
+      `active profile, source 존재 여부, ambient env/project config 우회 가능성,\n` +
+      `session 지원 상태를 보고합니다. OAuth deep 비교는 명시적으로 mat freshness 를 사용하세요.\n`
+    );
+    return;
+  }
+  const report = await runDoctor();
+  if (parsed.asJson) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    process.stdout.write(formatDoctorReport(report));
+  }
+}
+
+interface DoctorArgs {
+  asJson: boolean;
+  help: boolean;
+}
+
+function parseDoctorArgs(rest: string[]): DoctorArgs {
+  const out: DoctorArgs = { asJson: false, help: false };
+  for (const a of rest) {
+    if (a === '--json') {
+      out.asJson = true;
+      continue;
+    }
+    if (a === '--help' || a === '-h') {
+      out.help = true;
+      continue;
+    }
+    process.stderr.write(`mat doctor: 알 수 없는 옵션: ${a}\n`);
+    process.exit(2);
+  }
+  return out;
 }
 
 function runTui(): void {
