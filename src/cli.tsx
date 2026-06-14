@@ -76,9 +76,14 @@ async function main(): Promise<void> {
   const [first, ...rest] = args;
 
   // `mat doctor` 는 read-only 안전 진단이어야 하므로, startup mutation 인 legacy
-  // data-dir migration 보다 먼저 dispatch 한다. 일반 명령은 기존처럼 migration 수행.
+  // data-dir migration 보다 먼저 dispatch 한다. `support`/`explain` 도 정적 metadata
+  // 설명 명령이므로 같은 read-only startup contract 를 따른다. 일반 명령은 기존처럼 migration 수행.
   if (first === 'doctor') {
     await handleDoctor(rest);
+    return;
+  }
+  if (first === 'support' || first === 'explain') {
+    await handleSupport(first, rest);
     return;
   }
 
@@ -105,10 +110,6 @@ async function main(): Promise<void> {
   }
   if (first === 'freshness') {
     await handleFreshness(rest);
-    return;
-  }
-  if (first === 'support' || first === 'explain') {
-    await handleSupport(first, rest);
     return;
   }
   if (first === 'session') {

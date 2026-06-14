@@ -8,6 +8,7 @@
 
 import { BUILTIN_CLI_DEFS, findCliDef } from './cli-defs.js';
 import { UnknownCliError, redactMessage } from './errors.js';
+import { BUILTIN_FRESHNESS_ADAPTER_IDS } from './freshness-adapters/index.js';
 import type { CliDef, Source } from './types.js';
 
 export type SupportStatus = 'supported' | 'partial' | 'experimental' | 'unsupported' | 'blocked' | 'unknown';
@@ -70,7 +71,7 @@ interface SupportMetadata {
 }
 
 const SCHEMA_VERSION = 1 as const;
-const ADAPTER_BACKED_FRESHNESS = new Set(['claude', 'codex', 'gemini', 'goose', 'opencode']);
+const ADAPTER_BACKED_FRESHNESS = new Set<string>(BUILTIN_FRESHNESS_ADAPTER_IDS);
 const BUILTIN_IDS = new Set(BUILTIN_CLI_DEFS.map((cli) => cli.id));
 
 const REGISTRY: Record<string, SupportMetadata> = {

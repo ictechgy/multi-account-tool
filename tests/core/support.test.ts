@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_CLI_DEFS, resetCliDefCache } from '../../src/core/cli-defs.js';
 import { UnknownCliError } from '../../src/core/errors.js';
+import { BUILTIN_FRESHNESS_ADAPTER_IDS } from '../../src/core/freshness-adapters/index.js';
 import { buildCliSupportReport } from '../../src/core/support.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
@@ -119,5 +120,12 @@ describe('support registry — support/explain reports', () => {
         ].length).toBeGreaterThan(0);
       }
     }
+  });
+
+  it('derives adapter-backed freshness claims from the shared builtin adapter id list', () => {
+    for (const id of BUILTIN_FRESHNESS_ADAPTER_IDS) {
+      expect(buildCliSupportReport(id).capabilities.freshness.status).toBe('supported');
+    }
+    expect(buildCliSupportReport('aider').capabilities.freshness.status).toBe('partial');
   });
 });
