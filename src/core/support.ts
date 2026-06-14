@@ -9,7 +9,9 @@
 import { BUILTIN_CLI_DEFS, findCliDef } from './cli-defs.js';
 import { UnknownCliError, redactMessage } from './errors.js';
 import { BUILTIN_FRESHNESS_ADAPTER_IDS } from './freshness-adapters/index.js';
+import { identityCapabilitiesForCli } from './profile-identity.js';
 import type { CliDef, Source } from './types.js';
+import type { ProfileIdentityCapability } from './profile-identity.js';
 
 export type SupportStatus = 'supported' | 'partial' | 'experimental' | 'unsupported' | 'blocked' | 'unknown';
 export type CliSupportKind = 'builtin' | 'plugin' | 'known-blocked';
@@ -44,6 +46,7 @@ export interface CliSupportReport {
     sessionRun: SupportCapability;
   };
   sources: Array<{ type: Source['type']; saveAs: string }>;
+  profileIdentity: ProfileIdentityCapability;
   ambientRisks: string[];
   driftContracts: DriftContract[];
   nextSteps: string[];
@@ -403,6 +406,7 @@ function buildFromCliDef(def: CliDef, kind: 'builtin' | 'plugin'): CliSupportRep
     cli: { id: def.id, name: redactMessage(def.name), builtin: kind === 'builtin', kind },
     capabilities,
     sources: sourceSummary(def),
+    profileIdentity: identityCapabilitiesForCli(kind === 'builtin' ? def.id : 'plugin'),
     ambientRisks: (metadata.ambientRisks ?? []).map(redactMessage),
     driftContracts: (metadata.driftContracts ?? []).map(redactDriftContract),
     nextSteps: (metadata.nextSteps ?? defaultNextSteps(def.id, capabilities)).map(redactMessage)
@@ -454,6 +458,7 @@ function buildKnownBlocked(id: string, entry: { name: string; metadata: SupportM
     cli: { id, name: redactMessage(entry.name), builtin: false, kind: 'known-blocked' },
     capabilities,
     sources: [],
+    profileIdentity: identityCapabilitiesForCli(id),
     ambientRisks: (metadata.ambientRisks ?? []).map(redactMessage),
     driftContracts: (metadata.driftContracts ?? []).map(redactDriftContract),
     nextSteps: (metadata.nextSteps ?? []).map(redactMessage)
@@ -535,6 +540,15 @@ export function formatSupportReport(report: CliSupportReport): string {
     lines.push('  (none)');
   } else {
     for (const src of report.sources) lines.push(`  - ${src.saveAs} [${src.type}]`);
+  }
+  lines.push('');
+  lines.push(`Profile identity: ${report.profileIdentity.status}`);
+  if (report.profileIdentity.signals.length === 0) {
+    lines.push('  (no static identity signals)');
+  } else {
+    for (const sig of report.profileIdentity.signals) {
+      lines.push(`  - ${sig.kind} from ${sig.source} (${sig.safety})`);
+    }
   }
   if (report.ambientRisks.length > 0) {
     lines.push('');

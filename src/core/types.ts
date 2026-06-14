@@ -223,6 +223,49 @@ export interface Profile {
   updatedAt: string;
   /** 선택적 사람이 읽는 라벨 */
   label?: string;
+  /** 선택. capture/recapture 시점에 저장한 non-secret identity 힌트. */
+  identity?: ProfileIdentitySummary;
+}
+
+export type ProfileIdentityStatus = 'available' | 'unavailable' | 'unsupported';
+export type ProfileIdentityCompleteness = 'complete' | 'partial' | 'unknown';
+export type ProfileIdentityConfidence = 'high' | 'medium' | 'low';
+export type ProfileIdentitySignalKind =
+  | 'account'
+  | 'email'
+  | 'subscription-tier'
+  | 'auth-mode'
+  | 'provider'
+  | 'routing'
+  | 'api-key-mode';
+export type ProfileIdentityWarningCode =
+  | 'missing-source'
+  | 'carried-forward'
+  | 'parse-error'
+  | 'no-identity'
+  | 'unsupported'
+  | 'lock-free-recapture';
+
+export interface ProfileIdentitySignal {
+  kind: ProfileIdentitySignalKind;
+  source: string;
+  confidence: ProfileIdentityConfidence;
+  fingerprint?: string;
+  value?: string;
+}
+
+export interface ProfileIdentityWarning {
+  code: ProfileIdentityWarningCode;
+  source?: string;
+}
+
+export interface ProfileIdentitySummary {
+  schemaVersion: 1;
+  status: ProfileIdentityStatus;
+  capturedAt: string;
+  completeness: ProfileIdentityCompleteness;
+  signals: ProfileIdentitySignal[];
+  warnings?: ProfileIdentityWarning[];
 }
 
 /**

@@ -50,10 +50,12 @@ import {
   validateSessionId,
   validateShareRel
 } from './paths.js';
+import { buildProfileIdentity, type IdentitySourceInput } from './profile-identity.js';
 import {
   commitStagedFile,
   discardStagedFile,
   profileExists,
+  recordProfileCapture,
   readProfileFile,
   removeProfileFile,
   stageProfileFile,
@@ -763,6 +765,10 @@ interface RecaptureItem {
   newValue: string;
 }
 
+interface RecaptureRunOptions {
+  lockHeld: boolean;
+}
+
 /**
  * 종료 재캡처 (2-phase commit + 프로필 단위 advisory 락 — split 방지, issue #62).
  *
@@ -792,7 +798,7 @@ export async function recaptureSession(plan: SessionPlan): Promise<void> {
     );
   }
   try {
-    await runRecaptureLocked(plan, items); // 락 안: backup-read(TOCTOU 차단) → stage → commit → rollback
+    await runRecaptureLocked(plan, items, { lockHeld: Boolean(release) }); // 락 안: backup-read → stage → commit
   } finally {
     if (release) await release(); // release 인덱스 > 마지막 commit/rollback 인덱스 보장
   }
@@ -834,7 +840,11 @@ async function collectRecaptureItems(plan: SessionPlan): Promise<RecaptureItem[]
  * 락 안 재캡처 본문 — backup-read(TOCTOU 차단) → 2-phase commit → 실패 시 rollback.
  * 본 함수 전체가 프로필 락 보유 구간이다(release 는 호출자 finally).
  */
-async function runRecaptureLocked(plan: SessionPlan, items: RecaptureItem[]): Promise<void> {
+async function runRecaptureLocked(
+  plan: SessionPlan,
+  items: RecaptureItem[],
+  options: RecaptureRunOptions
+): Promise<void> {
   // backup-read 는 반드시 락 획득 이후 (두 세션이 같은 backup 을 보는 TOCTOU 차단, 시나리오 3①).
   for (const it of items) {
     it.backup = await readProfileFile(plan.cli, plan.profile, it.saveAs);
@@ -885,6 +895,7 @@ async function runRecaptureLocked(plan: SessionPlan, items: RecaptureItem[]): Pr
       await commitStagedFile(s.path, plan.cli, plan.profile, s.it.saveAs);
       committed.push(s.it);
     }
+    await recordRecaptureIdentityBestEffort(plan, items, options.lockHeld);
   } catch (err) {
     for (const s of staged) {
       if (!committed.includes(s.it)) await discardStagedFile(s.path);
@@ -894,6 +905,51 @@ async function runRecaptureLocked(plan: SessionPlan, items: RecaptureItem[]): Pr
     }
     throw err;
   }
+}
+
+async function recordRecaptureIdentityBestEffort(
+  plan: SessionPlan,
+  items: RecaptureItem[],
+  lockHeld: boolean
+): Promise<void> {
+  try {
+    const sources = await collectIdentitySourcesAfterRecapture(plan, items);
+    const identity = buildProfileIdentity({ cliId: plan.cli, capturedAt: new Date(), sources, lockHeld });
+    await recordProfileCapture(plan.cli, plan.profile, identity);
+  } catch (err) {
+    process.stderr.write(
+      `[mat] identity metadata update failed: ${sanitizeForStderr(errorMessage(err))}\n`
+    );
+  }
+}
+
+async function collectIdentitySourcesAfterRecapture(
+  plan: SessionPlan,
+  items: RecaptureItem[]
+): Promise<IdentitySourceInput[]> {
+  const bySaveAs = new Map(items.map((it) => [it.saveAs, it.newValue]));
+  const saveAsList = sessionCredentialSaveAs(plan);
+  const out: IdentitySourceInput[] = [];
+  for (const saveAs of saveAsList) out.push(await identitySourceForSaveAs(plan, saveAs, bySaveAs));
+  return out;
+}
+
+function sessionCredentialSaveAs(plan: SessionPlan): string[] {
+  const names = new Set<string>();
+  for (const root of plan.roots) for (const cred of root.creds) names.add(cred.saveAs);
+  for (const cred of plan.commandCreds ?? []) names.add(cred.saveAs);
+  return [...names];
+}
+
+async function identitySourceForSaveAs(
+  plan: SessionPlan,
+  saveAs: string,
+  bySaveAs: Map<string, string>
+): Promise<IdentitySourceInput> {
+  const captured = bySaveAs.get(saveAs);
+  if (captured !== undefined) return { saveAs, value: captured, state: 'captured' };
+  const stored = await readProfileFile(plan.cli, plan.profile, saveAs);
+  return { saveAs, value: stored, state: stored == null ? 'missing' : 'carried-forward' };
 }
 
 /**

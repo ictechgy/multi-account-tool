@@ -31,6 +31,10 @@ describe('support registry — support/explain reports', () => {
     expect(report.capabilities.sessionStart.status).toBe('supported');
     expect(report.capabilities.sessionRun.status).toBe('supported');
     expect(report.sources).toEqual([{ type: 'file', saveAs: 'auth.json' }]);
+    expect(report.profileIdentity.status).toBe('available');
+    expect(report.profileIdentity.signals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'account', source: 'auth.json', safety: 'masked' })
+    ]));
     expect(report.sources).not.toEqual(expect.arrayContaining([expect.objectContaining({ path: expect.any(String) })]));
   });
 
@@ -49,6 +53,7 @@ describe('support registry — support/explain reports', () => {
 
     expect(report.cli).toMatchObject({ id: 'agy', kind: 'known-blocked', builtin: false });
     expect(report.sources).toEqual([]);
+    expect(report.profileIdentity.status).toBe('unsupported');
     expect(report.capabilities.swap.status).toBe('blocked');
     expect(report.capabilities.sessionStart.status).toBe('blocked');
     expect(JSON.stringify(report)).toMatch(/stable documented credential source contract/);
@@ -74,6 +79,7 @@ describe('support registry — support/explain reports', () => {
     expect(report.cli).toMatchObject({ id: 'sample', builtin: false, kind: 'plugin' });
     expect(report.capabilities.swap.status).toBe('supported');
     expect(report.capabilities.freshness.status).toBe('partial');
+    expect(report.profileIdentity.status).toBe('unsupported');
     expect(report.capabilities.sessionStart.status).toBe('unsupported');
     expect(report.capabilities.sessionRun.status).toBe('unsupported');
     expect(JSON.stringify(report)).toMatch(/profile-swap only|profile swap/i);

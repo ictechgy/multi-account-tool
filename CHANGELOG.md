@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Capture-time profile identity metadata for active-profile/status diagnostics. `mat status`, `mat doctor`, and `mat support` now surface only sanitized static identity hints (masked account/email fingerprints, allowlisted mode/tier signals) without parsing credential files or keyring secret entries during read-only diagnostics.
+
+
 ## [0.6.0] - 2026-06-14
 
 Support-boundary explainability, read-only diagnostics, session-run preflight, and observability surfaces for automation/statusline consumers.

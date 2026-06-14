@@ -29,7 +29,8 @@ vi.mock('../../src/core/profile-store.js', () => ({
   stageProfileFile: vi.fn(),
   commitStagedFile: vi.fn(),
   discardStagedFile: vi.fn(),
-  removeProfileFile: vi.fn()
+  removeProfileFile: vi.fn(),
+  recordProfileCapture: vi.fn()
 }));
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 vi.mock('../../src/core/switcher.js', () => ({ switchProfile: vi.fn(), snapshotLiveToProfile: vi.fn() }));
@@ -57,6 +58,7 @@ import { auditLogPath, sessionDir, sessionsDir } from '../../src/core/paths.js';
 import {
   commitStagedFile,
   profileExists,
+  recordProfileCapture,
   readProfileFile,
   removeProfileFile,
   stageProfileFile,
@@ -84,6 +86,7 @@ const mockReadProfile = vi.mocked(readProfileFile);
 const mockWriteProfile = vi.mocked(writeProfileFile);
 const mockStage = vi.mocked(stageProfileFile);
 const mockCommit = vi.mocked(commitStagedFile);
+const mockRecordProfileCapture = vi.mocked(recordProfileCapture);
 const mockRemoveProfile = vi.mocked(removeProfileFile);
 const mockSpawn = vi.mocked(spawn);
 const mockSwitch = vi.mocked(switchProfile);
@@ -462,6 +465,7 @@ beforeEach(async () => {
   mockWriteProfile.mockResolvedValue(undefined);
   mockStage.mockResolvedValue('/stub/staged'); // staging 경로 stub (commit 도 mock)
   mockCommit.mockResolvedValue(undefined);
+  mockRecordProfileCapture.mockResolvedValue(undefined);
   mockRemoveProfile.mockResolvedValue(undefined);
   mockAcquire.mockResolvedValue(vi.fn() as never);
   // 재캡처 락 기본값 — release 핸들 반환(획득 성공). null 폴백은 개별 테스트에서 override.
@@ -2882,6 +2886,22 @@ describe('recaptureSession — 프로필 단위 락 통합 (#62)', () => {
     const releaseIdx = order.lastIndexOf('release');
     expect(lastCommitIdx).toBeGreaterThanOrEqual(0);
     expect(releaseIdx).toBeGreaterThan(lastCommitIdx); // release 가 마지막 commit 이후
+  });
+
+  it('(14a-identity) identity metadata 실패는 commit 된 자격증명을 rollback 하지 않고 경고만 낸다', async () => {
+    mockRecordProfileCapture.mockRejectedValue(new Error('metadata write failed'));
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const plan = await makePlanWithIsolate('NEW-TOKEN');
+    let stderrOutput = '';
+    try {
+      await recaptureSession(plan as never);
+      stderrOutput = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    } finally {
+      stderrSpy.mockRestore();
+    }
+    expect(mockCommit).toHaveBeenCalledWith('/stub/staged', 'codex', 'work', 'auth.json');
+    expect(mockWriteProfile).not.toHaveBeenCalled(); // rollback path not entered
+    expect(stderrOutput).toContain('identity metadata update failed');
   });
 
   it('(14b) 부분 commit 실패 → rollback: release 인덱스 > 마지막 rollbackCred(write) 인덱스 (MAJOR-2)', async () => {
