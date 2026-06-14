@@ -210,6 +210,8 @@ Note: `2` / `74` / `75` are reserved by `mat`'s own error model (pre-spawn valid
 mat session start <cli> <profile>   # launch an isolated subshell on <profile>
 mat session run <cli> <profile> -- [cli-args...]
                                   # run the builtin CLI executable directly in isolation
+mat session run <cli> <profile> --check [--json] -- [cli-args...]
+                                  # dry-run the exact session-run validators without spawning
 mat session list                    # running / orphan sessions
 mat session stop <id>               # terminate a session or reap an orphan
 ```
@@ -227,6 +229,8 @@ mat session start codex personal    # independent isolated dir → "personal" ac
 **Mechanism — env injection + copy-isolation.** `mat session start` launches your `$SHELL` with the CLI's config-directory env var (for example, `CODEX_HOME`) pointing at a fresh per-session directory under `~/.multi-account-tool/sessions/<id>/`. mat **copies** the selected profile's credentials there with `0600` permissions, so CLI processes inside the subshell read only the isolated account. It also copies a small allow-list of non-credential data as session-only snapshots: for Codex, `config.toml` and `skills/` are copied into the isolated `CODEX_HOME`, so custom skills work without sharing the live `~/.codex` tree. On exit, mat **re-captures** only changed credentials back into the profile (for example, after OAuth rotation) and removes the session directory. mat never touches OS-global credentials or `mat exec`'s lock, so sessions can run concurrently without interfering with each other.
 
 `mat session run` uses the same materialize → env injection → re-capture → cleanup lifecycle, but it does **not** open a shell. Instead, mat chooses the built-in CLI executable for `<cli>` (for example, `codex`) and passes `[cli-args...]` to that executable. The `--` tail is argv for the selected builtin CLI, not an arbitrary command. This framework is enabled only for built-ins with a safe command-scoped boundary today (Codex, Qwen, Kimi, Crush, Gemini CLI, Claude on Linux, OpenCode safer-run, and Aider partial-run).
+
+Use `mat session run <cli> <profile> --check -- [cli-args...]` (or `--explain`) before a real run to exercise the **same** support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. It exits `0` when the real run would pass preflight, `1` when a validation blocker is reported, and `2` for usage/parser errors. Add `--json` with `--check`/`--explain` for an automation-friendly report containing blockers, phases, selected executable, profile existence, and the exact argv.
 
 **Supported CLIs** (those that relocate their *credential* directory via an env var):
 
