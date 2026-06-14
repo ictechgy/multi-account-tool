@@ -555,28 +555,50 @@ describe('materializeSession — allow-list 메커니즘 (가짜 def, share)', (
       await expect(fs.access(sessionDir(SID))).rejects.toThrow();
     });
 
-    it('shareDirs root 가 readdir 중 symlink 로 교체되면 거부 + 세션 디렉토리 미잔류', async () => {
+    it('shareDirs root 가 opendir 중 symlink 로 교체되면 거부 + 세션 디렉토리 미잔류', async () => {
       await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
       await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
       await writeBaseFile('.fake/outside/leak.txt', 'LEAK');
       const sourceRoot = join(tmp.home, '.fake', 'skills');
       const safeRoot = join(tmp.home, '.fake', 'skills-safe');
       const outsideRoot = join(tmp.home, '.fake', 'outside');
-      const realReaddir = fs.readdir.bind(fs);
+      const realOpendir = fs.opendir.bind(fs);
       let swapped = false;
-      const spy = vi.spyOn(fs, 'readdir').mockImplementation((async (...args: Parameters<typeof fs.readdir>) => {
+      const spy = vi.spyOn(fs, 'opendir').mockImplementation((async (...args: Parameters<typeof fs.opendir>) => {
         if (!swapped && args[0] === sourceRoot) {
           swapped = true;
           await fs.rename(sourceRoot, safeRoot);
           await fs.symlink(outsideRoot, sourceRoot);
+        }
+        return realOpendir(...args);
+      }) as typeof fs.opendir);
+      const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
+
+      try {
+        await expect(materializeSession(plan)).rejects.toThrow(/materialize 중 변경|하위 symlink/);
+        await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('shareDirs 복사는 fs.readdir 배열 적재 대신 streaming opendir 를 사용한다', async () => {
+      await writeProfileFile('fakecli', 'work', 'a.json', 'TOK');
+      await writeBaseFile('.fake/skills/demo/SKILL.md', '# Demo');
+      const sourceRoot = join(tmp.home, '.fake', 'skills');
+      const realReaddir = fs.readdir.bind(fs);
+      const spy = vi.spyOn(fs, 'readdir').mockImplementation((async (...args: Parameters<typeof fs.readdir>) => {
+        if (args[0] === sourceRoot) {
+          throw new Error('shareDirs must not use fs.readdir');
         }
         return realReaddir(...args);
       }) as typeof fs.readdir);
       const plan = planSession(dirDef([{ rel: 'skills' }]), 'work', SID);
 
       try {
-        await expect(materializeSession(plan)).rejects.toThrow(/materialize 중 변경|하위 symlink/);
-        await expect(fs.access(sessionDir(SID))).rejects.toThrow();
+        await materializeSession(plan);
+        await expect(fs.readFile(join(plan.roots[0].dir, 'skills', 'demo', 'SKILL.md'), 'utf8'))
+          .resolves.toBe('# Demo');
       } finally {
         spy.mockRestore();
       }

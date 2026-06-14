@@ -512,33 +512,56 @@ async function copyShareDirChildren(
   stats: ShareDirCopyStats
 ): Promise<void> {
   const beforeStat = await assertShareDirSourceDirectory(guard, sourceDir);
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
-  await assertShareDirSourceDirectory(guard, sourceDir, beforeStat);
-  for (const entry of entries) {
-    const sourcePath = join(sourceDir, entry.name);
-    const destPath = join(destDir, entry.name);
-    const entryDepth = depth + 1;
-    assertShareDirDepth(shareDir, entryDepth, sourcePath);
-    assertLexicallyContained(guard.path, sourcePath);
-    assertLexicallyContained(destDir, destPath);
-    assertShareDirEntryLimit(shareDir, stats, sourcePath);
+  const dir = await fs.opendir(sourceDir);
+  try {
+    await assertShareDirSourceDirectory(guard, sourceDir, beforeStat);
+    while (true) {
+      await assertShareDirSourceDirectory(guard, sourceDir, beforeStat);
+      const entry = await dir.read();
+      await assertShareDirSourceDirectory(guard, sourceDir, beforeStat);
+      if (entry == null) break;
 
-    const stat = await fs.lstat(sourcePath);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`allow-list 디렉토리 하위 symlink 입니다 (복사 거부): ${sessionPathForError(sourcePath)}`);
+      await copyShareDirEntry(guard, sourceDir, destDir, entry, shareDir, depth, stats);
     }
-    if (stat.isDirectory()) {
-      await assertShareDirSourceDirectory(guard, sourcePath, stat);
-      await fs.mkdir(destPath, { mode: 0o700 });
-      await assertSafeDestinationDir(destPath);
-      await copyShareDirChildren(guard, sourcePath, destPath, shareDir, entryDepth, stats);
-      continue;
-    }
-    if (!stat.isFile()) {
-      throw new Error(`allow-list 디렉토리 하위 항목이 일반 파일이 아닙니다: ${sessionPathForError(sourcePath)}`);
-    }
-    await copyShareDirFile(guard, sourcePath, destPath, shareDir, stats, stat);
+  } finally {
+    await dir.close().catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ERR_DIR_CLOSED') throw err;
+    });
   }
+}
+
+async function copyShareDirEntry(
+  guard: ShareDirRootGuard,
+  sourceDir: string,
+  destDir: string,
+  entry: { name: string },
+  shareDir: MaterializedShareDir,
+  depth: number,
+  stats: ShareDirCopyStats
+): Promise<void> {
+  const sourcePath = join(sourceDir, entry.name);
+  const destPath = join(destDir, entry.name);
+  const entryDepth = depth + 1;
+  assertShareDirDepth(shareDir, entryDepth, sourcePath);
+  assertLexicallyContained(guard.path, sourcePath);
+  assertLexicallyContained(destDir, destPath);
+  assertShareDirEntryLimit(shareDir, stats, sourcePath);
+
+  const stat = await fs.lstat(sourcePath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`allow-list 디렉토리 하위 symlink 입니다 (복사 거부): ${sessionPathForError(sourcePath)}`);
+  }
+  if (stat.isDirectory()) {
+    await assertShareDirSourceDirectory(guard, sourcePath, stat);
+    await fs.mkdir(destPath, { mode: 0o700 });
+    await assertSafeDestinationDir(destPath);
+    await copyShareDirChildren(guard, sourcePath, destPath, shareDir, entryDepth, stats);
+    return;
+  }
+  if (!stat.isFile()) {
+    throw new Error(`allow-list 디렉토리 하위 항목이 일반 파일이 아닙니다: ${sessionPathForError(sourcePath)}`);
+  }
+  await copyShareDirFile(guard, sourcePath, destPath, shareDir, stats, stat);
 }
 
 async function copyShareDirFile(
