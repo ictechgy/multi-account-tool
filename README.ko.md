@@ -235,7 +235,7 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 
 `mat session run` 은 같은 materialize → env 주입 → 재캡처 → cleanup lifecycle 을 쓰지만 shell 을 열지 않는다. `mat` 이 `<cli>` 에 대응하는 builtin executable(예: `codex`)을 선택하고 `[cli-args...]` 를 직접 넘긴다. `--` 뒤는 임의 shell 명령이 아니라 선택된 CLI 의 argv 다. 현재 이 command-scoped 경계는 안전한 run path 가 확인된 builtin(Codex, Qwen, Kimi, Crush, Gemini CLI, Linux Claude, OpenCode safer-run, Aider partial-run)에만 열려 있다.
 
-실행 전에는 `mat session run <cli> <profile> --check -- [cli-args...]` (또는 `--explain`) 으로 **동일한** 지원 여부, profile, executable, Aider, OpenCode hard-stop validator 를 점검할 수 있다. 이 경로는 CLI 를 spawn 하지 않고 session directory 도 만들지 않는다. 실제 실행 preflight 를 통과하면 exit `0`, validation blocker 가 있으면 `1`, 사용법/parser 오류는 `2` 다. 자동화가 필요하면 `--json` 을 붙여 blocker, phase, 선택 executable, profile 존재 여부, 정확한 argv 를 포함한 report 를 받는다.
+실행 전에는 `mat session run <cli> <profile> --check -- [cli-args...]` (또는 `--explain`) 으로 **동일한** 지원 여부, profile, executable, Aider, OpenCode hard-stop validator 를 점검할 수 있다. 이 경로는 CLI 를 spawn 하지 않고 session directory 도 만들지 않는다. 실제 실행 preflight 를 통과하면 exit `0`, validation blocker 가 있으면 `1`, 사용법/parser 오류는 `2` 다. 자동화가 필요하면 그 `--check`/`--explain` 명령에 `--json` 을 붙여 blocker, phase, 선택 executable, profile 존재 여부, 정확한 argv 를 포함한 report 를 받는다.
 
 dashboard/statusline 용도로 `mat status --json` 은 active profile 과 session 요약을 담은 안정 schema-v1 을 출력한다. `mat session list --json` 은 owner/child 상태와 root env 이름만 포함한 schema-v1 session lifecycle entry(`active` / `orphan` / `unknown`)를 출력하며, session root 절대 경로는 내보내지 않는다. 변이를 수행하는 session lifecycle 명령은 `~/.multi-account-tool/audit.jsonl` 에 best-effort redacted JSONL event 를 append 한다. persistent audit entry 는 profile/session identifier 를 hash 처리하고 secret-like string 을 redact 한다.
 

@@ -4,7 +4,7 @@
 
 📖 **Documentation:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from one TUI. Keep a profile per account, then switch with a keystroke instead of repeating `logout` / `login`.
+Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. Keep a profile per account, then switch with a keystroke instead of repeating `logout` / `login`.
 
 `mat` is conservative by default: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, documents plaintext-credential backup risks, and detects OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks you to recapture, discard, or cancel.
 
@@ -76,7 +76,7 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 
 "⚠️ untested" = swap logic is platform-agnostic file I/O, but the project's CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI's documentation, not exercised. Patches and bug reports welcome.
 
-For the exact boundary of one CLI, run `mat support <cli>` (or `mat explain <cli>`). The report shows the current swap, freshness, and session support; caveats; ambient override risks; and the last upstream assumptions `mat` verified.
+For the exact support boundary of one CLI, run `mat support <cli>` (or `mat explain <cli>`). The report shows the current swap, freshness, and session support; caveats; ambient override risks; and the last upstream assumptions `mat` verified.
 
 During foreground profile switching and `mat exec`, `mat` warns about high-confidence ambient bypass channels such as provider API-key env vars or project-local config files. The warning is informational: `mat` does **not** block or scrub those channels yet. If the override is intentional, continue; otherwise unset or remove the named env/config source before relying on the selected profile.
 
@@ -235,7 +235,7 @@ A small allow-list of non-credential data may also be copied as session-local sn
 
 `mat session run` uses the same materialize → env injection → re-capture → cleanup lifecycle without opening a shell. `mat` selects the built-in executable for `<cli>` (for example, `codex`) and passes `[cli-args...]` directly to it. The `--` tail is argv for that selected CLI, not an arbitrary shell command. Today this command-scoped boundary is enabled only for built-ins with a known safe run path: Codex, Qwen, Kimi, Crush, Gemini CLI, Claude on Linux, OpenCode safer-run, and Aider partial-run.
 
-Before a real run, use `mat session run <cli> <profile> --check -- [cli-args...]` (or `--explain`) to exercise the **same** support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. Exit code `0` means the real run would pass preflight, `1` means a validation blocker was found, and `2` means usage/parser error. Add `--json` for an automation-friendly report with blockers, phases, selected executable, profile existence, and exact argv.
+Before a real run, use `mat session run <cli> <profile> --check -- [cli-args...]` (or `--explain`) to exercise the **same** support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. Exit code `0` means the real run would pass preflight, `1` means a validation blocker was found, and `2` means usage/parser error. Add `--json` to that `--check`/`--explain` command for an automation-friendly report with blockers, phases, selected executable, profile existence, and exact argv.
 
 For dashboards and statuslines, `mat status --json` emits a stable schema-v1 summary of active profiles and sessions. `mat session list --json` emits schema-v1 lifecycle entries (`active` / `orphan` / `unknown`) with owner/child status and root env names only; it never includes session root paths. Mutating session lifecycle commands append best-effort, redacted JSONL events to `~/.multi-account-tool/audit.jsonl`; persistent audit entries hash profile/session identifiers and redact secret-like strings.
 
@@ -325,7 +325,7 @@ mat support <cli> [--json]
 mat explain <cli> [--json]
 ```
 
-Show exactly what `mat` supports for one CLI and why. The report covers profile swap, freshness/drift checks, `mat session start`, `mat session run`, source types (without live paths or credential values), ambient/project override risks, and the last upstream assumptions behind the support claim.
+Show exactly what `mat` supports for one CLI and why. The report covers profile swap, freshness/drift checks, `mat session start`, `mat session run`, source types (without live paths or credential values), ambient/project override risks, and the last verified upstream assumptions behind the support claim.
 
 `explain` is an alias for `support`. Known blocked CLIs such as `agy` are explainable even when they are not valid profile-swap targets; user plugin CLIs are reported as profile-swap only with fallback freshness and no trusted session boundary.
 
