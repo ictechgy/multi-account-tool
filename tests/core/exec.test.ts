@@ -260,6 +260,30 @@ describe('runExec', () => {
     }
   });
 
+  it('ambient cwd 검사 자체가 실패해도 stderr warning 후 실행은 계속함', async () => {
+    mockFindCliDef.mockReturnValue({ ...FAKE_CLI_DEF, id: 'aider', name: 'Aider (fixture)' });
+    const cwdSpy = vi.spyOn(process, 'cwd').mockImplementation(() => {
+      throw new Error('cwd unavailable');
+    });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    try {
+      const result = await runExec({
+        cliId: 'aider', profileName: 'work', command: 'echo', args: []
+      });
+      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+
+      expect(result.code).toBe(0);
+      expect(stderr).toMatch(/ambient credential\/config warning for aider/);
+      expect(stderr).toMatch(/could not inspect cwd/);
+      expect(mockSpawn).toHaveBeenCalledOnce();
+    } finally {
+      cwdSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+  });
+
   it('already-active: swap/restore 모두 skip, spawn 만 실행', async () => {
     mockGetActive.mockResolvedValue('work');
     mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));

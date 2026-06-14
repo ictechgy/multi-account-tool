@@ -490,7 +490,13 @@ function onSwitchAction(
   refresh: () => Promise<void>
 ): void {
   if (currentActive === to) {
-    void doSwitch(cli, to, dispatch, refresh, currentActive);
+    void pushSwitchConfirmWithAmbient(
+      cli,
+      currentActive,
+      to,
+      dispatch,
+      () => void doSwitch(cli, to, dispatch, refresh, currentActive)
+    );
     return;
   }
   // PR-G: 활성 프로필이 있을 때만 freshness 체크 의미 있음 — 없으면 백업 불필요.
@@ -1151,6 +1157,7 @@ export const __testHooks = {
   doCreateProfile,
   doDelete,
   doSwitch,
+  onSwitchAction,
   onFirstImport,
   switchConfirmBodyWithAmbient
 };

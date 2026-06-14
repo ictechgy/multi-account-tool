@@ -110,11 +110,26 @@ async function cwdEntryWarning(cliId: string, entry: string, cwd: string): Promi
   }
 }
 
+function currentWorkingDirectory(cliId: string): { cwd?: string; warning?: AmbientWarning } {
+  try {
+    return { cwd: process.cwd() };
+  } catch (err) {
+    return {
+      warning: warning(
+        'ambient.cwd.unreadable',
+        cliId,
+        'cwd',
+        '<cwd>',
+        `${cliId}: could not inspect cwd: ${errorMessage(err)}`
+      )
+    };
+  }
+}
+
 export async function detectAmbientWarnings(cliId: string, options: DetectAmbientOptions = {}): Promise<AmbientWarning[]> {
   const rules = AMBIENT_RULES[cliId];
   if (!rules) return [];
   const env = options.env ?? process.env;
-  const cwd = options.cwd ?? process.cwd();
   const warnings: AmbientWarning[] = [];
   const envKeys = Object.keys(env);
   for (const name of rules.envNames ?? []) {
@@ -141,9 +156,15 @@ export async function detectAmbientWarnings(cliId: string, options: DetectAmbien
       }
     }
   }
-  for (const entry of rules.cwdEntries ?? []) {
-    const found = await cwdEntryWarning(cliId, entry, cwd);
-    if (found) warnings.push(found);
+  if ((rules.cwdEntries?.length ?? 0) > 0) {
+    const cwdResult = options.cwd == null ? currentWorkingDirectory(cliId) : { cwd: options.cwd };
+    if (cwdResult.warning) warnings.push(cwdResult.warning);
+    if (cwdResult.cwd) {
+      for (const entry of rules.cwdEntries ?? []) {
+        const found = await cwdEntryWarning(cliId, entry, cwdResult.cwd);
+        if (found) warnings.push(found);
+      }
+    }
   }
   return warnings;
 }
@@ -156,4 +177,3 @@ export function formatAmbientWarnings(warnings: AmbientWarning[], options: { hea
   lines.push('Profile operation continues; unset/scrub these channels if unintended.');
   return lines.join('\n');
 }
-

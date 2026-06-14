@@ -65,6 +65,38 @@ describe('TUI foreground mutation stale-active guards', () => {
     }
   });
 
+  it('routes already-active switches through the ambient-aware confirmation body', async () => {
+    const cli = findCliDef('codex');
+    expect(cli).toBeDefined();
+    const oldOpenAi = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-secret-value-must-not-appear';
+
+    const { actions, dispatch } = dispatchRecorder();
+    const refresh = vi.fn();
+
+    try {
+      __testHooks.onSwitchAction(cli!, 'target', 'target', {} as any, dispatch as any, refresh);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const action = lastAction(actions);
+      expect(action).toMatchObject({
+        type: 'push',
+        screen: {
+          kind: 'confirm',
+          title: `${cli!.name} 프로필 전환`
+        }
+      });
+      expect(action.screen.body).toMatch(/target\s+→\s+target/);
+      expect(action.screen.body).toMatch(/OPENAI_API_KEY/);
+      expect(action.screen.body).toMatch(/mat support codex/);
+      expect(action.screen.body).not.toContain('sk-secret-value-must-not-appear');
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      if (oldOpenAi == null) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = oldOpenAi;
+    }
+  });
+
   it('cancels delete when active changes to the target after confirmation was shown', async () => {
     await createProfile('codex', 'safe');
     await createProfile('codex', 'target');
