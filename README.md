@@ -239,6 +239,72 @@ Before a real run, use `mat session run <cli> <profile> --check -- [cli-args...]
 
 For dashboards and statuslines, `mat status --json` emits a stable schema-v1 summary of active profiles and sessions. Active profiles may include capture-time identity metadata such as masked account/email fingerprints or allowlisted tier/provider-mode signals; status never parses credential files or keyring entries on demand. `mat session list --json` emits schema-v1 lifecycle entries (`active` / `orphan` / `unknown`) with owner/child status and root env names only; it never includes session root paths. Mutating session lifecycle commands append best-effort, redacted JSONL events to `~/.multi-account-tool/audit.jsonl`; persistent audit entries hash profile/session identifiers and redact secret-like strings.
 
+#### Prompt/statusline snippets
+
+Prompt renderers can consume `mat status --json`, but do not run it uncached on every redraw: the status report may inspect session liveness. The examples below cache for two seconds, fail empty if `mat` or JSON parsing fails, and are display-only. They call only `mat status --json`; they do not parse `~/.multi-account-tool`, credential files, keyrings, `mat freshness`, or `mat doctor`.
+
+Put the shared helper in a file such as `~/.config/mat/statusline.zsh`:
+
+```zsh
+: ${MAT_STATUS_CACHE_TTL:=2}
+: ${MAT_STATUS_CACHE:="${XDG_CACHE_HOME:-$HOME/.cache}/mat/status.json"}
+
+mat_status_cached() {
+  local now mtime cache_dir tmp
+  cache_dir="$(dirname "$MAT_STATUS_CACHE")" || return 0
+  mkdir -p "$cache_dir" 2>/dev/null || return 0
+
+  now=$(date +%s)
+  if [[ -r "$MAT_STATUS_CACHE" ]]; then
+    mtime=$(stat -f %m "$MAT_STATUS_CACHE" 2>/dev/null)
+    if [[ -z "$mtime" || "$mtime" == *[!0-9]* ]]; then
+      mtime=$(stat -c %Y "$MAT_STATUS_CACHE" 2>/dev/null || echo 0)
+    fi
+    if [[ -n "$mtime" && "$mtime" != *[!0-9]* ]] && (( now - mtime < MAT_STATUS_CACHE_TTL )); then
+      cat "$MAT_STATUS_CACHE"
+      return 0
+    fi
+  fi
+
+  tmp="${MAT_STATUS_CACHE}.$$.$RANDOM"
+  if command mat status --json > "$tmp" 2>/dev/null && mv "$tmp" "$MAT_STATUS_CACHE" 2>/dev/null; then
+    cat "$MAT_STATUS_CACHE"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+mat_statusline() {
+  mat_status_cached | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const r=JSON.parse(s||"{}");const profiles=(r.activeProfiles||[]).map(p=>`${p.cliId}:${p.profileName}`).join(" ");const sessions=r.sessions||{};const warn=(sessions.orphan||sessions.unknown)?`⚠${sessions.orphan||0}/${sessions.unknown||0}`:"";const out=[profiles,warn].filter(Boolean).join(" ");if(out)process.stdout.write(out);}catch{}});' 2>/dev/null
+}
+```
+
+Use it from zsh `RPROMPT`:
+
+```zsh
+source ~/.config/mat/statusline.zsh
+setopt prompt_subst
+RPROMPT='$(mat_statusline)'
+```
+
+Use it from tmux:
+
+```tmux
+set -g status-right '#(zsh -lc "source ~/.config/mat/statusline.zsh && mat_statusline")'
+```
+
+Use it from Starship:
+
+```toml
+[custom.mat]
+command = 'zsh -lc "source ~/.config/mat/statusline.zsh && mat_statusline"'
+when = 'command -v zsh >/dev/null 2>&1 && command -v mat >/dev/null 2>&1 && command -v node >/dev/null 2>&1'
+format = '[$output]($style) '
+style = 'cyan'
+```
+
+The default formatter prints short output such as `codex:work gemini:personal ⚠1/0`, where the warning counts are `orphan/unknown` sessions. Adjust the Node formatter if you want a different shape.
+
 **Supported CLIs** (those that relocate their *credential* directory via an env var):
 
 | CLI | env var |

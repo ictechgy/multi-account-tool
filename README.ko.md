@@ -239,6 +239,72 @@ mat session start codex personal    # 독립 격리 디렉토리 → "personal" 
 
 dashboard/statusline 용도로 `mat status --json` 은 active profile 과 session 요약을 담은 안정 schema-v1 을 출력한다. active profile 에는 capture 시점에 저장된 masked account/email fingerprint 나 allowlisted tier/provider-mode 같은 identity metadata 가 포함될 수 있지만, status 는 credential file 이나 keyring entry 를 즉석에서 파싱하지 않는다. `mat session list --json` 은 owner/child 상태와 root env 이름만 포함한 schema-v1 session lifecycle entry(`active` / `orphan` / `unknown`)를 출력하며, session root 절대 경로는 내보내지 않는다. 변이를 수행하는 session lifecycle 명령은 `~/.multi-account-tool/audit.jsonl` 에 best-effort redacted JSONL event 를 append 한다. persistent audit entry 는 profile/session identifier 를 hash 처리하고 secret-like string 을 redact 한다.
 
+#### Prompt/statusline snippets
+
+프롬프트 렌더러는 `mat status --json` 을 사용할 수 있지만, 매 redraw 때 uncached 로 실행하지 말아야 한다. status report 는 session liveness 를 검사할 수 있다. 아래 예시는 2초 동안 cache 하고, `mat` 실행이나 JSON parsing 이 실패하면 빈 출력으로 끝나며, 표시 전용이다. `mat status --json` 만 호출하고 `~/.multi-account-tool`, credential file, keyring, `mat freshness`, `mat doctor` 를 직접 읽거나 실행하지 않는다.
+
+공유 helper 를 `~/.config/mat/statusline.zsh` 같은 파일에 둔다:
+
+```zsh
+: ${MAT_STATUS_CACHE_TTL:=2}
+: ${MAT_STATUS_CACHE:="${XDG_CACHE_HOME:-$HOME/.cache}/mat/status.json"}
+
+mat_status_cached() {
+  local now mtime cache_dir tmp
+  cache_dir="$(dirname "$MAT_STATUS_CACHE")" || return 0
+  mkdir -p "$cache_dir" 2>/dev/null || return 0
+
+  now=$(date +%s)
+  if [[ -r "$MAT_STATUS_CACHE" ]]; then
+    mtime=$(stat -f %m "$MAT_STATUS_CACHE" 2>/dev/null)
+    if [[ -z "$mtime" || "$mtime" == *[!0-9]* ]]; then
+      mtime=$(stat -c %Y "$MAT_STATUS_CACHE" 2>/dev/null || echo 0)
+    fi
+    if [[ -n "$mtime" && "$mtime" != *[!0-9]* ]] && (( now - mtime < MAT_STATUS_CACHE_TTL )); then
+      cat "$MAT_STATUS_CACHE"
+      return 0
+    fi
+  fi
+
+  tmp="${MAT_STATUS_CACHE}.$$.$RANDOM"
+  if command mat status --json > "$tmp" 2>/dev/null && mv "$tmp" "$MAT_STATUS_CACHE" 2>/dev/null; then
+    cat "$MAT_STATUS_CACHE"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+mat_statusline() {
+  mat_status_cached | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const r=JSON.parse(s||"{}");const profiles=(r.activeProfiles||[]).map(p=>`${p.cliId}:${p.profileName}`).join(" ");const sessions=r.sessions||{};const warn=(sessions.orphan||sessions.unknown)?`⚠${sessions.orphan||0}/${sessions.unknown||0}`:"";const out=[profiles,warn].filter(Boolean).join(" ");if(out)process.stdout.write(out);}catch{}});' 2>/dev/null
+}
+```
+
+zsh `RPROMPT` 에서 사용:
+
+```zsh
+source ~/.config/mat/statusline.zsh
+setopt prompt_subst
+RPROMPT='$(mat_statusline)'
+```
+
+tmux 에서 사용:
+
+```tmux
+set -g status-right '#(zsh -lc "source ~/.config/mat/statusline.zsh && mat_statusline")'
+```
+
+Starship 에서 사용:
+
+```toml
+[custom.mat]
+command = 'zsh -lc "source ~/.config/mat/statusline.zsh && mat_statusline"'
+when = 'command -v zsh >/dev/null 2>&1 && command -v mat >/dev/null 2>&1 && command -v node >/dev/null 2>&1'
+format = '[$output]($style) '
+style = 'cyan'
+```
+
+기본 formatter 는 `codex:work gemini:personal ⚠1/0` 처럼 짧게 출력한다. 경고 숫자는 `orphan/unknown` session 수다. 다른 모양이 필요하면 Node formatter 부분만 바꾸면 된다.
+
 **지원 CLI** (자격증명 디렉토리를 env 로 재배치할 수 있는 것):
 
 | CLI | env var |
