@@ -60,6 +60,7 @@ export type Screen =
       fromProfile: string;
       toProfile: string;
       report: FreshnessReport;
+      ambientWarningBlock?: string;
       onRecapture: () => void;
       onDiscard: () => void;
       onCancel: () => void;

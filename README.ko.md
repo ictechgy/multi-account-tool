@@ -76,6 +76,8 @@
 
 CLI 별 지원 경계와 이유를 바로 보려면 `mat support <cli>` (또는 `mat explain <cli>`) 를 실행한다. 현재 swap/freshness/session 상태, caveat, ambient override 위험, 마지막으로 확인한 upstream 가정을 출력한다.
 
+foreground profile switch 나 `mat exec` 중 provider API-key env var, project-local config 파일 같은 high-confidence ambient 우회 채널이 감지되면 `mat` 은 경고만 출력하고 **아직 차단하거나 scrub 하지 않는다**. 의도한 설정이면 계속 진행해도 되고, 아니라면 선택한 프로필을 신뢰하기 전에 표시된 env/config 채널을 unset/scrub 하자.
+
 ### 전환 흐름 (데이터 손실 없음)
 
 0. **swap 전 freshness 점검** — 라이브 자격증명이 활성 프로필 저장본과 drift (OAuth refresh 토큰 회전 등) 가 감지되면, 아래 1~3 단계 전에 **재캡처 / 폐기 / 취소** dialog 가 먼저 표시된다. CLI 별 분류 신뢰도는 위의 "OAuth Rotation 안전성 매트릭스" 참고.

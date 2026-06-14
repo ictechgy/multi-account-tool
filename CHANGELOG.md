@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `mat doctor [--json]` read-only safety diagnostics command. It reports active-profile/profile-directory state, metadata-safe live source presence, session support flags, plugin warnings, and high-confidence ambient override channels without reading credential values or OS-keyring secret entries.
 - `mat support <cli> [--json]` and `mat explain <cli> [--json]` to explain per-CLI swap/freshness/session support boundaries, ambient override risks, and last-verified upstream assumptions.
+- Warning-only ambient credential/config bypass notices for foreground profile switching and `mat exec`, reusing the same detector as `mat doctor`.
 
 ## [0.5.2] - 2026-06-14
 

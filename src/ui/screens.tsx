@@ -194,6 +194,7 @@ interface FreshnessDialogProps {
   fromProfile: string;
   toProfile: string;
   report: FreshnessReport;
+  ambientWarningBlock?: string;
   /** 첫 표시 시 true — 한국어 onboarding 패널 함께 출력. */
   showOnboarding: boolean;
   onRecapture: () => void;
@@ -222,6 +223,7 @@ export function FreshnessDialog({
   fromProfile,
   toProfile,
   report,
+  ambientWarningBlock,
   showOnboarding,
   onRecapture,
   onDiscard,
@@ -234,6 +236,7 @@ export function FreshnessDialog({
       <FreshnessDialogHeader hasStale={hasStale} />
       <FreshnessDialogTarget mode={mode} fromProfile={fromProfile} toProfile={toProfile} />
       <FreshnessDialogSources sources={report.sources} />
+      {ambientWarningBlock ? <Box marginTop={1}><Text color="yellow">{ambientWarningBlock}</Text></Box> : null}
       {showOnboarding ? <OnboardingPanel /> : null}
       <FreshnessDialogOptions
         mode={mode}

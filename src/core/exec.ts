@@ -33,6 +33,7 @@
 
 import { ChildProcess, spawn } from 'node:child_process';
 
+import { detectAmbientWarnings, formatAmbientWarnings } from './ambient.js';
 import { findCliDef } from './cli-defs.js';
 import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile } from './config.js';
@@ -139,6 +140,7 @@ async function runUnderLock(
   if (!(await profileExists(opts.cliId, profileName))) {
     throw new UsageError(`프로필을 찾을 수 없습니다: ${opts.cliId}/${profileName}`);
   }
+  await warnAmbientForExec(opts.cliId);
   const swapped = previousActive !== profileName;
   if (swapped) {
     await switchProfile(opts.cliId, profileName);
@@ -159,6 +161,26 @@ async function runUnderLock(
 
   if (spawnError) throw spawnError;
   return { code: spawnResult!.code, signal: spawnResult!.signal, restoreError };
+}
+
+async function warnAmbientForExec(cliId: string): Promise<void> {
+  try {
+    const warnings = await detectAmbientWarnings(cliId);
+    const text = formatAmbientWarnings(warnings, {
+      header: `[mat] ambient credential/config warning for ${cliId}`
+    });
+    if (text) {
+      process.stderr.write(`${text}\nSee: mat support ${cliId}\n`);
+    }
+  } catch (err) {
+    try {
+      process.stderr.write(
+        `[mat] ambient credential/config warning skipped for ${cliId}: ${errorMessage(err)}\n`
+      );
+    } catch {
+      /* warning-only path: never block exec on diagnostic output failures */
+    }
+  }
 }
 
 /** 자식 spawn + 종료 대기. settled flag 로 error/exit 중복 처리 방지. */

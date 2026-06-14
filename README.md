@@ -76,6 +76,8 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 
 For a CLI-specific explanation of these support boundaries, run `mat support <cli>` (or `mat explain <cli>`). It prints the current swap/freshness/session status, caveats, ambient override risks, and last-verified upstream assumptions.
 
+When `mat` sees high-confidence ambient bypass channels during foreground profile switching or `mat exec` (for example provider API-key env vars or project-local config files), it prints a warning but **does not block or scrub anything yet**. If the warning is intentional, you can continue; otherwise unset/scrub the named env/config channel before relying on the selected profile.
+
 ### Switch flow (lossless)
 
 0. **Pre-swap freshness check** — if the live credentials drifted from the active profile (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before steps 1–3 below. See "OAuth Rotation Safety Matrix" above for per-CLI classification.

@@ -47,6 +47,57 @@ describe('TUI foreground mutation stale-active guards', () => {
     await tmp.cleanup();
   });
 
+  it('formats ambient warnings into switch confirmation helpers without env values', async () => {
+    const oldOpenAi = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-secret-value-must-not-appear';
+
+    try {
+      const body = await __testHooks.switchConfirmBodyWithAmbient('codex', 'default', 'work');
+      const block = await __testHooks.ambientWarningBlock('codex');
+
+      expect(body).toMatch(/OPENAI_API_KEY/);
+      expect(body).toMatch(/mat support codex/);
+      expect(block).toMatch(/OPENAI_API_KEY/);
+      expect(body.match(/mat support codex/g)?.length).toBe(1);
+      expect(`${body}\n${block}`).not.toContain('sk-secret-value-must-not-appear');
+    } finally {
+      if (oldOpenAi == null) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = oldOpenAi;
+    }
+  });
+
+  it('routes already-active switches through the ambient-aware confirmation body', async () => {
+    const cli = findCliDef('codex');
+    expect(cli).toBeDefined();
+    const oldOpenAi = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-secret-value-must-not-appear';
+
+    const { actions, dispatch } = dispatchRecorder();
+    const refresh = vi.fn();
+
+    try {
+      __testHooks.onSwitchAction(cli!, 'target', 'target', {} as any, dispatch as any, refresh);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const action = lastAction(actions);
+      expect(action).toMatchObject({
+        type: 'push',
+        screen: {
+          kind: 'confirm',
+          title: `${cli!.name} 프로필 전환`
+        }
+      });
+      expect(action.screen.body).toMatch(/target\s+→\s+target/);
+      expect(action.screen.body).toMatch(/OPENAI_API_KEY/);
+      expect(action.screen.body).toMatch(/mat support codex/);
+      expect(action.screen.body).not.toContain('sk-secret-value-must-not-appear');
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      if (oldOpenAi == null) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = oldOpenAi;
+    }
+  });
+
   it('cancels delete when active changes to the target after confirmation was shown', async () => {
     await createProfile('codex', 'safe');
     await createProfile('codex', 'target');

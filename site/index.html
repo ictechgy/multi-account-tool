@@ -257,6 +257,7 @@
 </tbody></table></div>
 <p>&quot;⚠️ untested&quot; = swap logic is platform-agnostic file I/O, but the project&#39;s CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI&#39;s documentation, not exercised. Patches and bug reports welcome.</p>
 <p>For a CLI-specific explanation of these support boundaries, run <code>mat support &lt;cli&gt;</code> (or <code>mat explain &lt;cli&gt;</code>). It prints the current swap/freshness/session status, caveats, ambient override risks, and last-verified upstream assumptions.</p>
+<p>When <code>mat</code> sees high-confidence ambient bypass channels during foreground profile switching or <code>mat exec</code> (for example provider API-key env vars or project-local config files), it prints a warning but <strong>does not block or scrub anything yet</strong>. If the warning is intentional, you can continue; otherwise unset/scrub the named env/config channel before relying on the selected profile.</p>
 <h3 id="switch-flow-lossless">Switch flow (lossless)</h3>
 <ol start="0">
 <li><strong>Pre-swap freshness check</strong> — if the live credentials drifted from the active profile (OAuth refresh-token rotation), <code>mat</code> shows a <strong>Recapture / Discard / Cancel</strong> dialog before steps 1–3 below. See &quot;OAuth Rotation Safety Matrix&quot; above for per-CLI classification.</li>

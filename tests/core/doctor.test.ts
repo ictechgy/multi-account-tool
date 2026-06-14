@@ -145,6 +145,24 @@ describe('doctor — read-only safety report', () => {
     expect(report.clis[0].issues.map((i) => i.code)).toContain('ambient.cwd');
   });
 
+  it('keeps doctor JSON generation alive when process.cwd cannot be resolved', async () => {
+    mocks.getAllCliDefs.mockReturnValue([
+      { id: 'aider', name: 'Aider', sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }] }
+    ]);
+    const cwdSpy = vi.spyOn(process, 'cwd').mockImplementation(() => {
+      throw new Error('cwd unavailable');
+    });
+
+    try {
+      const report = await runDoctor({ env: {}, now: new Date('2026-06-14T00:00:00Z') });
+
+      expect(report.summary.status).toBe('warning');
+      expect(report.clis[0].issues.map((i) => i.code)).toContain('ambient.cwd.unreadable');
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   it('captures keychain source failures as report data and redacts warning text', async () => {
     const secretLikeProfile = 'sk-abcdefghijklmnopqrstuvwxyz0123456789';
     mocks.getAllCliDefs.mockReturnValue([
