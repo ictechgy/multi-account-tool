@@ -29,6 +29,24 @@ describe('ambient warnings — shared detector', () => {
     expect(serialized).not.toContain('sk-secret-value-must-not-appear');
   });
 
+  it('detects env names by key presence without reading env values', async () => {
+    const env = {};
+    Object.defineProperty(env, 'OPENAI_API_KEY', {
+      enumerable: true,
+      get() {
+        throw new Error('env value was read');
+      }
+    });
+
+    const warnings = await detectAmbientWarnings('codex', {
+      cwd: tmp.home,
+      env: env as NodeJS.ProcessEnv
+    });
+
+    expect(warnings.map((w) => w.code)).toContain('ambient.env');
+    expect(JSON.stringify(warnings)).toContain('OPENAI_API_KEY');
+  });
+
   it('detects env prefixes and redacts long env names', async () => {
     const longKey = 'AIDER_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz';
     const warnings = await detectAmbientWarnings('aider', {

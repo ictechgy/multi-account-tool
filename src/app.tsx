@@ -510,20 +510,21 @@ function onSwitchAction(
 }
 
 async function switchConfirmBodyWithAmbient(cliId: string, currentActive: string | undefined, to: string): Promise<string> {
-  const warnings = await detectAmbientWarnings(cliId);
-  const block = formatAmbientWarnings(warnings, {
-    header: '⚠ Ambient credential/config warning'
-  });
   const body = formatSwitchConfirmBody(currentActive, to);
-  return block ? `${body}\n\n${block}\nSee: mat support ${cliId}` : body;
+  const block = await ambientWarningBlock(cliId);
+  return block ? `${body}\n\n${block}` : body;
 }
 
 async function ambientWarningBlock(cliId: string): Promise<string | undefined> {
-  const warnings = await detectAmbientWarnings(cliId);
-  const block = formatAmbientWarnings(warnings, {
-    header: '⚠ Ambient credential/config warning'
-  });
-  return block ? `${block}\nSee: mat support ${cliId}` : undefined;
+  try {
+    const warnings = await detectAmbientWarnings(cliId);
+    const block = formatAmbientWarnings(warnings, {
+      header: '⚠ Ambient credential/config warning'
+    });
+    return block ? `${block}\nSee: mat support ${cliId}` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function pushSwitchConfirmWithAmbient(

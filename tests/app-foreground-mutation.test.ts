@@ -58,6 +58,7 @@ describe('TUI foreground mutation stale-active guards', () => {
       expect(body).toMatch(/OPENAI_API_KEY/);
       expect(body).toMatch(/mat support codex/);
       expect(block).toMatch(/OPENAI_API_KEY/);
+      expect(body.match(/mat support codex/g)?.length).toBe(1);
       expect(`${body}\n${block}`).not.toContain('sk-secret-value-must-not-appear');
     } finally {
       if (oldOpenAi == null) delete process.env.OPENAI_API_KEY;

@@ -133,7 +133,7 @@ export async function detectAmbientWarnings(cliId: string, options: DetectAmbien
   const warnings: AmbientWarning[] = [];
   const envKeys = Object.keys(env);
   for (const name of rules.envNames ?? []) {
-    if (env[name] != null) {
+    if (Object.prototype.hasOwnProperty.call(env, name)) {
       warnings.push(warning(
         'ambient.env',
         cliId,

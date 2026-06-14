@@ -182,12 +182,17 @@ async function inspectSource(src: Source): Promise<DoctorSourceStatus> {
   }
 }
 
-async function ambientIssues(cliId: string, env: NodeJS.ProcessEnv, cwd: string): Promise<DoctorIssue[]> {
-  const warnings = await detectAmbientWarnings(cliId, { env, cwd });
+async function ambientIssues(cliId: string, env: NodeJS.ProcessEnv, cwd: string | undefined): Promise<DoctorIssue[]> {
+  const warnings = await detectAmbientWarnings(cliId, cwd == null ? { env } : { env, cwd });
   return warnings.map((item) => issue('warning', item.code, item.message));
 }
 
-async function inspectCli(cli: CliDef, activeProfile: string | undefined, env: NodeJS.ProcessEnv, cwd: string): Promise<DoctorCliReport> {
+async function inspectCli(
+  cli: CliDef,
+  activeProfile: string | undefined,
+  env: NodeJS.ProcessEnv,
+  cwd: string | undefined
+): Promise<DoctorCliReport> {
   const issues: DoctorIssue[] = [];
   let profilesCount = 0;
   try {
@@ -242,7 +247,7 @@ async function inspectCli(cli: CliDef, activeProfile: string | undefined, env: N
 }
 
 export async function runDoctor(options: RunDoctorOptions = {}): Promise<DoctorReport> {
-  const cwd = options.cwd ?? process.cwd();
+  const cwd = options.cwd;
   const env = options.env ?? process.env;
   const now = options.now ?? new Date();
   const checks: DoctorCheck[] = [];
