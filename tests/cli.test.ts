@@ -393,6 +393,7 @@ describe('mat status/session list observability JSON', () => {
     expect(report.sessions).toEqual([]);
     await expect(fs.stat(legacy)).resolves.toBeTruthy();
     await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(join(current, 'audit.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('status unknown option exits 2', () => {

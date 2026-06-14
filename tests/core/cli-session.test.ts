@@ -230,12 +230,13 @@ describe('handleSession — list', () => {
 
   it('세션 있으면 테이블 출력 + exitCode 0', async () => {
     mockList.mockResolvedValue([
-      { id: 'codex-work-aaaa', cli: 'codex', profile: 'work', pid: 1, startedAt: 'T', alive: true }
+      { id: 'codex-work-aaaa', cli: 'codex', profile: 'work', pid: 1, startedAt: 'T', alive: true, status: 'active' }
     ]);
     const writeSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const r = await handleSession(['list']);
     expect(r).toEqual({ exitCode: 0 });
     expect(writeSpy.mock.calls.some((c) => String(c[0]).includes('codex-work-aaaa'))).toBe(true);
+    expect(writeSpy.mock.calls.some((c) => String(c[0]).includes('\tactive\n'))).toBe(true);
     writeSpy.mockRestore();
   });
 

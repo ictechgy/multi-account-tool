@@ -1282,6 +1282,7 @@ export interface SessionInfo {
   pid: number;
   startedAt: string;
   alive: boolean;
+  status: SessionLifecycleStatus;
 }
 
 export type SessionLifecycleStatus = 'active' | 'orphan' | 'unknown';
@@ -2879,6 +2880,12 @@ function sessionLifecycleStatus(ownerStatus: OwnerStatus, childStatus: OwnerStat
   return 'orphan';
 }
 
+const STATUS_ROOT_ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function statusRootEnvName(raw: string): string {
+  return STATUS_ROOT_ENV_NAME_RE.test(raw) ? raw : '<invalid>';
+}
+
 function summarizeSessionList(sessions: SessionListEntry[]): SessionListReport['summary'] {
   const summary: SessionListReport['summary'] = { total: sessions.length, active: 0, orphan: 0, unknown: 0 };
   for (const session of sessions) summary[session.status] += 1;
@@ -2903,7 +2910,7 @@ export async function buildSessionListReport(): Promise<SessionListReport> {
       status: sessionLifecycleStatus(ownerStatus, childStatus),
       ownerStatus,
       childStatus,
-      rootEnvs: meta.roots.map((root) => root.env)
+      rootEnvs: meta.roots.map((root) => statusRootEnvName(root.env))
     });
   }
   return {
@@ -2923,7 +2930,8 @@ export async function listSessions(): Promise<SessionInfo[]> {
     profile: session.profile,
     pid: session.ownerPid,
     startedAt: session.startedAt,
-    alive: session.status === 'active'
+    alive: session.status === 'active',
+    status: session.status
   }));
 }
 

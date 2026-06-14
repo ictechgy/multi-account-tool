@@ -63,7 +63,10 @@ function redactAuditText(value: string): string {
 }
 
 function cleanIdentifier(value: string): string {
-  return maskIdentifier(redactAuditText(value));
+  // Persist only a fingerprint, never the raw identifier. Hash the raw value
+  // instead of a redacted placeholder so long/profile-like identifiers remain
+  // distinguishable in audit correlation while still avoiding raw disclosure.
+  return maskIdentifier(value);
 }
 
 function cleanShort(value: string): string {
@@ -103,6 +106,7 @@ async function rotateIfNeeded(path: string): Promise<void> {
     throw err;
   });
   if (!stat || stat.size <= AUDIT_LOG_MAX_BYTES) return;
+  await fs.rm(`${path}.1`, { force: true });
   await fs.rename(path, `${path}.1`).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== 'ENOENT') throw err;
   });

@@ -49,6 +49,25 @@ describe('audit JSONL', () => {
     expect(JSON.stringify(event)).not.toContain('prod-profile');
   });
 
+  it('hashes long identifier values directly instead of collapsing them to redaction markers', () => {
+    const first = normalizeAuditEvent({
+      event: 'session.start',
+      profile: 'very-long-profile-name-that-would-look-secret-one',
+      sessionId: 'codex-very-long-profile-name-that-would-look-secret-one-aaaaaaaa'
+    });
+    const second = normalizeAuditEvent({
+      event: 'session.start',
+      profile: 'very-long-profile-name-that-would-look-secret-two',
+      sessionId: 'codex-very-long-profile-name-that-would-look-secret-two-bbbbbbbb'
+    });
+
+    expect(first.profileHash).toMatch(/^<hash:[0-9a-f]{12}>$/);
+    expect(first.sessionIdHash).toMatch(/^<hash:[0-9a-f]{12}>$/);
+    expect(first.profileHash).not.toBe(second.profileHash);
+    expect(first.sessionIdHash).not.toBe(second.sessionIdHash);
+    expect(JSON.stringify(first)).not.toContain('very-long-profile-name');
+  });
+
   it('redacts secret-like error strings before appending', async () => {
     await appendAuditEventBestEffort({
       event: 'session.end',
@@ -77,6 +96,21 @@ describe('audit JSONL', () => {
     await expect(fs.stat(`${path}.1`)).resolves.toMatchObject({ size: AUDIT_LOG_MAX_BYTES + 1 });
     const fresh = await fs.readFile(path, 'utf8');
     expect(fresh).toContain('"event":"session.reap"');
+  });
+
+  it('replaces a previous rotated audit log on repeated rotation', async () => {
+    const path = auditLogPath();
+    await fs.mkdir(dirname(path), { recursive: true });
+    await fs.writeFile(`${path}.1`, 'old-rotation', { mode: 0o600 });
+    await fs.writeFile(path, 'y'.repeat(AUDIT_LOG_MAX_BYTES + 1), { mode: 0o600 });
+
+    await appendAuditEventBestEffort({ event: 'session.stop', sessionId: 'codex-work-bbbbbbbb' });
+
+    const rotated = await fs.readFile(`${path}.1`, 'utf8');
+    expect(rotated).not.toBe('old-rotation');
+    expect(rotated).toHaveLength(AUDIT_LOG_MAX_BYTES + 1);
+    const fresh = await fs.readFile(path, 'utf8');
+    expect(fresh).toContain('"event":"session.stop"');
   });
 
   it('swallows append failures', async () => {

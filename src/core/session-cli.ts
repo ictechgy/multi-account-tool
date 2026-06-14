@@ -112,9 +112,7 @@ export async function handleSession(rest: string[]): Promise<SessionDispatchResu
     }
     process.stdout.write('ID\tCLI\tPROFILE\tSTARTED\tSTATUS\n');
     for (const s of sessions) {
-      process.stdout.write(
-        `${s.id}\t${s.cli}\t${s.profile}\t${s.startedAt}\t${s.alive ? 'active' : 'orphan'}\n`
-      );
+      process.stdout.write(`${s.id}\t${s.cli}\t${s.profile}\t${s.startedAt}\t${s.status}\n`);
     }
     return { exitCode: 0 };
   }

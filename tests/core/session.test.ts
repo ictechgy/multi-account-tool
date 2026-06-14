@@ -2542,7 +2542,10 @@ describe('listSessions / stopSession / reapOrphans', () => {
     const dir = await makeSessionWithMeta('codex-work-report1', {
       pid: DEAD_PID,
       startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-      roots: [{ env: 'CODEX_HOME', dir: join(tmp.home, 'secret-session-dir') }]
+      roots: [
+        { env: 'CODEX_HOME', dir: join(tmp.home, 'secret-session-dir') },
+        { env: join(tmp.home, 'secret-env-name'), dir: join(tmp.home, 'another-secret-session-dir') }
+      ]
     });
 
     const report = await buildSessionListReport();
@@ -2557,10 +2560,26 @@ describe('listSessions / stopSession / reapOrphans', () => {
       ownerStatus: 'dead-or-reused',
       childStatus: 'dead-or-reused',
       ownerPid: DEAD_PID,
-      rootEnvs: ['CODEX_HOME']
+      rootEnvs: ['CODEX_HOME', '<invalid>']
     });
     expect(JSON.stringify(report)).not.toContain('secret-session-dir');
+    expect(JSON.stringify(report)).not.toContain('secret-env-name');
     await expect(fs.access(dir)).resolves.toBeUndefined();
+  });
+
+  it('stopSession: cleaned orphan audit event uses hashed session/profile identifiers', async () => {
+    const dir = await makeSessionWithMeta('codex-work-stoplog1', { pid: DEAD_PID });
+
+    await stopSession('codex-work-stoplog1');
+
+    await expect(fs.access(dir)).rejects.toMatchObject({ code: 'ENOENT' });
+    const raw = await fs.readFile(auditLogPath(), 'utf8');
+    const event = JSON.parse(raw.trim()) as { event?: string; outcome?: string; profileHash?: string; sessionIdHash?: string };
+    expect(event).toMatchObject({ event: 'session.stop', outcome: 'cleaned' });
+    expect(event.profileHash).toMatch(/^<hash:[0-9a-f]{12}>$/);
+    expect(event.sessionIdHash).toMatch(/^<hash:[0-9a-f]{12}>$/);
+    expect(raw).not.toContain('codex-work-stoplog1');
+    expect(raw).not.toContain('"profile":"work"');
   });
 
   it('reapOrphans: reaped session audit event uses hashed session/profile identifiers', async () => {
