@@ -55,8 +55,20 @@ describe('support registry — support/explain reports', () => {
     expect(report.sources).toEqual([]);
     expect(report.profileIdentity.status).toBe('unsupported');
     expect(report.capabilities.swap.status).toBe('blocked');
+    expect(report.capabilities.freshness.status).toBe('blocked');
     expect(report.capabilities.sessionStart.status).toBe('blocked');
-    expect(JSON.stringify(report)).toMatch(/stable documented credential source contract/);
+    expect(report.capabilities.sessionRun.status).toBe('blocked');
+    expect(report.driftContracts).toEqual([
+      expect.objectContaining({
+        id: 'agy-blocked-no-contract',
+        lastVerified: '2026-06-14',
+        evidence: expect.arrayContaining([
+          expect.stringMatching(/system keyring auth \+ Google Sign-In fallback/),
+          expect.stringMatching(/local agy --version: 1\.0\.8/)
+        ])
+      })
+    ]);
+    expect(JSON.stringify(report)).toMatch(/mat-safe auth-store or redirect contract/);
   });
 
   it('reports plugin CLIs as swap-only with fallback-only freshness', async () => {

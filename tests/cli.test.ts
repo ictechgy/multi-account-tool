@@ -208,9 +208,25 @@ describe('mat support/explain — support boundary diagnostics', () => {
     const result = runMat(['support', 'agy', '--json'], tmp.home);
 
     expect(result.code).toBe(0);
-    const report = JSON.parse(result.stdout) as { cli?: { kind?: string }; capabilities?: { swap?: { status?: string } } };
+    const report = JSON.parse(result.stdout) as {
+      cli?: { kind?: string };
+      capabilities?: { swap?: { status?: string }; sessionRun?: { status?: string } };
+      sources?: unknown[];
+      driftContracts?: Array<{ id?: string; evidence?: string[] }>;
+    };
     expect(report.cli?.kind).toBe('known-blocked');
+    expect(report.sources).toEqual([]);
     expect(report.capabilities?.swap?.status).toBe('blocked');
+    expect(report.capabilities?.sessionRun?.status).toBe('blocked');
+    expect(report.driftContracts).toEqual([
+      expect.objectContaining({
+        id: 'agy-blocked-no-contract',
+        evidence: expect.arrayContaining([
+          expect.stringMatching(/system keyring auth \+ Google Sign-In fallback/),
+          expect.stringMatching(/local agy --version: 1\.0\.8/)
+        ])
+      })
+    ]);
   });
 
   it('keeps known-blocked ids blocked even if a user plugin uses the same id', async () => {
@@ -228,8 +244,9 @@ describe('mat support/explain — support boundary diagnostics', () => {
     const result = runMat(['support', 'agy', '--json'], tmp.home);
 
     expect(result.code).toBe(0);
-    const report = JSON.parse(result.stdout) as { cli?: { kind?: string }; capabilities?: { swap?: { status?: string } } };
+    const report = JSON.parse(result.stdout) as { cli?: { kind?: string }; capabilities?: { swap?: { status?: string } }; sources?: unknown[] };
     expect(report.cli?.kind).toBe('known-blocked');
+    expect(report.sources).toEqual([]);
     expect(report.capabilities?.swap?.status).toBe('blocked');
   });
 

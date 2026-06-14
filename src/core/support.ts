@@ -286,20 +286,29 @@ const KNOWN_BLOCKED: Record<string, { name: string; metadata: SupportMetadata }>
         }
       },
       ambientRisks: [
-        'Antigravity stores auth in OS-native keyring/app data; observed files are not enough for a safe swap contract.'
+        'Antigravity documents system-keyring authentication, but not a stable service/account, token profile, or redirect contract for mat to swap.',
+        'Files under ~/.gemini/antigravity-cli/ are settings/cache evidence, not a credential boundary.'
       ],
       driftContracts: [
         {
           id: 'agy-blocked-no-contract',
-          summary: 'Antigravity is intentionally unsupported until upstream documents a stable auth-store and redirect contract.',
+          summary: 'Antigravity remains blocked: public docs describe system keyring + Google Sign-In fallback, not a stable mat-safe auth-store or redirect contract.',
           lastVerified: '2026-06-14',
-          evidence: ['README Platform support', 'quad research roadmap avoid-now list'],
-          risks: ['Treating Gemini CLI files as Antigravity credentials can cause wrong-account behavior.']
+          evidence: [
+            'google-antigravity/antigravity-cli README: system keyring auth + Google Sign-In fallback; /logout sign-out only',
+            'google-antigravity/antigravity-cli CHANGELOG: latest observed release 1.0.8 on 2026-06-12',
+            'local agy --version: 1.0.8; agy --help exposes no auth-store redirect flag/subcommand',
+            'docs/superpowers/specs/2026-06-14-antigravity-auth-store-research.md'
+          ],
+          risks: [
+            'Treating Gemini CLI files or Antigravity cache files as credentials can cause wrong-account behavior.',
+            'Local keyring discoveries are not a stable upstream compatibility contract.'
+          ]
         }
       ],
       nextSteps: [
         'Use the upstream Antigravity account switcher/auth flow directly.',
-        'Revisit mat support only after a stable CLI-specific credential store and redirect contract is documented.'
+        'Revisit mat support only after upstream documents a stable credential-store contract plus safe redirect and recapture behavior.'
       ]
     }
   }
