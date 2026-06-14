@@ -1,0 +1,21 @@
+{
+  "loggedInUsers": [
+    {
+      "login": "shared@fixture.example",
+      "id": "acct-fixture-shared-a",
+      "storeAccountKey": "store-fixture-shared-a",
+      "lastUsed": true,
+      "active": true
+    },
+    {
+      "login": "shared@fixture.example",
+      "id": "acct-fixture-shared-b",
+      "storeAccountKey": "store-fixture-shared-b",
+      "lastUsed": false,
+      "active": false
+    }
+  ],
+  "firstLaunchAt": "2026-06-14T00:00:00.000Z",
+  "installedPlugins": [],
+  "staff": false
+}

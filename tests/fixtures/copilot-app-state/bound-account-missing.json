@@ -1,0 +1,21 @@
+{
+  "loggedInUsers": [
+    {
+      "login": "work@fixture.example",
+      "id": "acct-fixture-work",
+      "storeAccountKey": "store-fixture-work",
+      "lastUsed": true,
+      "active": true
+    },
+    {
+      "login": "personal@fixture.example",
+      "id": "acct-fixture-personal",
+      "storeAccountKey": "store-fixture-personal",
+      "lastUsed": false,
+      "active": false
+    }
+  ],
+  "firstLaunchAt": "2026-06-14T00:00:00.000Z",
+  "installedPlugins": [],
+  "staff": false
+}

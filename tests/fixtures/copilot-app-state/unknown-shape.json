@@ -1,0 +1,8 @@
+{
+  "loggedInUsers": {
+    "current": "work@fixture.example"
+  },
+  "firstLaunchAt": "2026-06-14T00:00:00.000Z",
+  "installedPlugins": [],
+  "staff": false
+}

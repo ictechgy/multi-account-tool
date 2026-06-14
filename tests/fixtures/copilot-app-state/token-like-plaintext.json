@@ -1,0 +1,15 @@
+{
+  "loggedInUsers": [
+    {
+      "login": "work@fixture.example",
+      "id": "acct-fixture-work",
+      "storeAccountKey": "store-fixture-work",
+      "lastUsed": true,
+      "active": true,
+      "githubToken": "REDACTED-FIXTURE"
+    }
+  ],
+  "firstLaunchAt": "2026-06-14T00:00:00.000Z",
+  "installedPlugins": [],
+  "staff": false
+}
