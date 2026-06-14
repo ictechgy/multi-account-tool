@@ -4,7 +4,9 @@
 
 📖 **Documentation:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. No more `logout` / `login` shuffles — keep one profile per account and swap in a keystroke. Safe by default: macOS Keychain backups with automatic rollback, atomic file writes, plaintext-credential exclusion paths, OAuth refresh-token rotation awareness with TUI dialog (recapture / discard / cancel).
+Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from one TUI. Keep a profile per account, then switch with a keystroke instead of repeating `logout` / `login`.
+
+`mat` is conservative by default: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, documents plaintext-credential backup risks, and detects OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks you to recapture, discard, or cancel.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -42,7 +44,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, 
 
 ### OAuth Rotation Safety Matrix
 
-Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refresh token may only be used once, after which the provider invalidates it. If `mat` restores an older snapshot of such a token, the provider rejects it as "already used" and the user is forced to re-login. The table below summarises which `mat`-supported CLIs are affected.
+Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refresh token may be single-use, so the provider invalidates it after the next successful refresh. Restoring an older snapshot can then make the provider reject the token as "already used", forcing a re-login. The table below summarizes the risk for CLIs that `mat` supports.
 
 | CLI | Auth type | Rotation risk | `mat` safe modes |
 | --- | --- | --- | --- |
@@ -74,9 +76,9 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 
 "⚠️ untested" = swap logic is platform-agnostic file I/O, but the project's CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI's documentation, not exercised. Patches and bug reports welcome.
 
-For a CLI-specific explanation of these support boundaries, run `mat support <cli>` (or `mat explain <cli>`). It prints the current swap/freshness/session status, caveats, ambient override risks, and last-verified upstream assumptions.
+For the exact boundary of one CLI, run `mat support <cli>` (or `mat explain <cli>`). The report shows the current swap, freshness, and session support; caveats; ambient override risks; and the last upstream assumptions `mat` verified.
 
-When `mat` sees high-confidence ambient bypass channels during foreground profile switching or `mat exec` (for example provider API-key env vars or project-local config files), it prints a warning but **does not block or scrub anything yet**. If the warning is intentional, you can continue; otherwise unset/scrub the named env/config channel before relying on the selected profile.
+During foreground profile switching and `mat exec`, `mat` warns about high-confidence ambient bypass channels such as provider API-key env vars or project-local config files. The warning is informational: `mat` does **not** block or scrub those channels yet. If the override is intentional, continue; otherwise unset or remove the named env/config source before relying on the selected profile.
 
 ### Switch flow (lossless)
 
@@ -227,13 +229,15 @@ mat session start codex work        # CODEX_HOME points at an isolated dir → "
 mat session start codex personal    # independent isolated dir → "personal" account
 ```
 
-**Mechanism — env injection + copy-isolation.** `mat session start` launches your `$SHELL` with the CLI's config-directory env var (for example, `CODEX_HOME`) pointing at a fresh per-session directory under `~/.multi-account-tool/sessions/<id>/`. mat **copies** the selected profile's credentials there with `0600` permissions, so CLI processes inside the subshell read only the isolated account. It also copies a small allow-list of non-credential data as session-only snapshots: for Codex, `config.toml` and `skills/` are copied into the isolated `CODEX_HOME`, so custom skills work without sharing the live `~/.codex` tree. On exit, mat **re-captures** only changed credentials back into the profile (for example, after OAuth rotation) and removes the session directory. mat never touches OS-global credentials or `mat exec`'s lock, so sessions can run concurrently without interfering with each other.
+**Mechanism — env injection + copy-isolation.** `mat session start` launches your `$SHELL` with the CLI's config-directory env var (for example, `CODEX_HOME`) pointing at a fresh directory under `~/.multi-account-tool/sessions/<id>/`. `mat` copies the selected profile's credentials there with `0600` permissions, so CLI processes inside the subshell read only that isolated account.
 
-`mat session run` uses the same materialize → env injection → re-capture → cleanup lifecycle, but it does **not** open a shell. Instead, mat chooses the built-in CLI executable for `<cli>` (for example, `codex`) and passes `[cli-args...]` to that executable. The `--` tail is argv for the selected builtin CLI, not an arbitrary command. This framework is enabled only for built-ins with a safe command-scoped boundary today (Codex, Qwen, Kimi, Crush, Gemini CLI, Claude on Linux, OpenCode safer-run, and Aider partial-run).
+A small allow-list of non-credential data may also be copied as session-local snapshots. For Codex, `config.toml` and `skills/` are copied into the isolated `CODEX_HOME`, so custom skills are available without sharing the live `~/.codex` tree. On exit, `mat` re-captures only changed credentials back into the profile (for example, after OAuth rotation), then removes the session directory. It never touches OS-global credentials or the `mat exec` lock, so sessions can run concurrently without interfering with each other.
 
-Use `mat session run <cli> <profile> --check -- [cli-args...]` (or `--explain`) before a real run to exercise the **same** support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. It exits `0` when the real run would pass preflight, `1` when a validation blocker is reported, and `2` for usage/parser errors. Add `--json` with `--check`/`--explain` for an automation-friendly report containing blockers, phases, selected executable, profile existence, and the exact argv.
+`mat session run` uses the same materialize → env injection → re-capture → cleanup lifecycle without opening a shell. `mat` selects the built-in executable for `<cli>` (for example, `codex`) and passes `[cli-args...]` directly to it. The `--` tail is argv for that selected CLI, not an arbitrary shell command. Today this command-scoped boundary is enabled only for built-ins with a known safe run path: Codex, Qwen, Kimi, Crush, Gemini CLI, Claude on Linux, OpenCode safer-run, and Aider partial-run.
 
-For observability, `mat status --json` emits a stable schema-v1 active-profile/session summary, and `mat session list --json` emits schema-v1 session lifecycle entries (`active` / `orphan` / `unknown`) with owner/child status and root env names only — no session root paths. Mutating session lifecycle commands append best-effort redacted JSONL events to `~/.multi-account-tool/audit.jsonl`; persistent audit entries hash profile/session identifiers and redact secret-like strings.
+Before a real run, use `mat session run <cli> <profile> --check -- [cli-args...]` (or `--explain`) to exercise the **same** support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. Exit code `0` means the real run would pass preflight, `1` means a validation blocker was found, and `2` means usage/parser error. Add `--json` for an automation-friendly report with blockers, phases, selected executable, profile existence, and exact argv.
+
+For dashboards and statuslines, `mat status --json` emits a stable schema-v1 summary of active profiles and sessions. `mat session list --json` emits schema-v1 lifecycle entries (`active` / `orphan` / `unknown`) with owner/child status and root env names only; it never includes session root paths. Mutating session lifecycle commands append best-effort, redacted JSONL events to `~/.multi-account-tool/audit.jsonl`; persistent audit entries hash profile/session identifiers and redact secret-like strings.
 
 **Supported CLIs** (those that relocate their *credential* directory via an env var):
 
@@ -300,7 +304,7 @@ Exit codes:
 mat doctor [--json]
 ```
 
-Run a metadata-only safety audit for every known CLI. `doctor` reports active-profile state, profile directory presence, live source presence where it can be checked without reading secret values, session support flags, plugin warnings, and high-confidence ambient override channels such as provider API-key env vars or project-local config files.
+Run a metadata-only safety audit across every known CLI. `doctor` reports active-profile state, profile directory presence, live source presence when it can be checked without reading secret values, session support flags, plugin warnings, and high-confidence ambient override channels such as provider API-key env vars or project-local config files.
 
 `mat doctor` intentionally does **not** compare stored/live credential contents and does not query OS keyring entries that would print secret values. Use `mat freshness <cli>` when you explicitly want the deeper OAuth rotation comparison.
 
@@ -321,7 +325,7 @@ mat support <cli> [--json]
 mat explain <cli> [--json]
 ```
 
-Show what `mat` supports for one CLI and why. The report covers profile swap, freshness/drift checks, `mat session start`, `mat session run`, source types (without live paths or credential values), ambient/project override risks, and the last-verified upstream assumptions behind the support claim.
+Show exactly what `mat` supports for one CLI and why. The report covers profile swap, freshness/drift checks, `mat session start`, `mat session run`, source types (without live paths or credential values), ambient/project override risks, and the last upstream assumptions behind the support claim.
 
 `explain` is an alias for `support`. Known blocked CLIs such as `agy` are explainable even when they are not valid profile-swap targets; user plugin CLIs are reported as profile-swap only with fallback freshness and no trusted session boundary.
 
@@ -339,6 +343,7 @@ mat explain agy
 ~/.multi-account-tool/
 ├── config.json                   # active profile pointer + flags
 ├── app.log                       # best-effort TUI warnings / diagnostic trail
+├── audit.jsonl                   # best-effort redacted session lifecycle audit log
 ├── cli-defs/                     # optional user plugins — see "Adding a new CLI"
 │   └── <id>.json
 ├── locks/

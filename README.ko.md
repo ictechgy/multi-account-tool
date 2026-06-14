@@ -4,7 +4,9 @@
 
 📖 **문서 사이트:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 **하나의 TUI 에서 빠르게 전환**해 사용하는 도구. 매번 `logout` → `login` 반복할 필요 없이 계정마다 프로필 하나씩 두고 단축키로 바꿔 끼울 수 있다. macOS Keychain 백업 자동 롤백, atomic 파일 쓰기, 평문 백업 위치 명시, OAuth refresh 토큰 회전 인지 + TUI 재캡처/폐기/취소 dialog 등 안전장치를 기본 적용.
+여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 하나의 TUI 에서 전환한다. 계정마다 프로필을 하나씩 저장해 두고, 매번 `logout` → `login` 을 반복하는 대신 키 한 번으로 바꾼다.
+
+`mat` 은 보수적으로 동작한다. macOS Keychain 항목을 백업하고, 부분 실패는 rollback 하며, 파일은 atomic 하게 쓴다. 평문 자격증명 백업 위험을 문서화하고, swap 전 OAuth refresh-token rotation 도 감지한다. 라이브 자격증명이 drift 된 경우 TUI 에서 재캡처 / 폐기 / 취소 중 하나를 선택하게 한다.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -42,7 +44,7 @@
 
 ### OAuth Rotation 안전성 매트릭스
 
-일부 CLI 는 **OAuth refresh token rotation** (RFC 6749 권장 보안 정책) 을 사용한다 — refresh token 은 한 번 사용되면 invalidate 되어 같은 token 을 다시 쓸 수 없다. `mat` 이 옛 token 스냅샷을 복원하면 provider 가 "이미 사용된 token" 으로 거부 (`refresh_token_reused` 401) → 사용자가 강제 재로그인해야 한다. 본 매트릭스는 mat 지원 CLI 중 영향 받는 도구와 mat 의 안전 모드를 정리한다.
+일부 CLI 는 **OAuth refresh-token rotation**(RFC 6749 권장 방식)을 사용한다. refresh token 이 사실상 1회용이라, 다음 refresh 성공 후 provider 가 이전 token 을 무효화할 수 있다. 이때 `mat` 이 오래된 snapshot 을 복원하면 provider 가 token 을 "already used" 로 거부하고 사용자는 다시 로그인해야 한다. 아래 표는 `mat` 이 지원하는 CLI 별 위험도와 안전 모드를 정리한 것이다.
 
 | CLI | 인증 방식 | rotation 위험 | mat 안전 모드 |
 | --- | --- | --- | --- |
@@ -74,9 +76,9 @@
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O 라 동작 가능성 있지만 본 프로젝트 CI 는 macOS + Ubuntu 만 검증. Windows 경로는 각 CLI 의 공식 문서 기반 추정 — 실제 실행은 안 됨. patch / 버그 리포트 환영.
 
-CLI 별 지원 경계와 이유를 바로 보려면 `mat support <cli>` (또는 `mat explain <cli>`) 를 실행한다. 현재 swap/freshness/session 상태, caveat, ambient override 위험, 마지막으로 확인한 upstream 가정을 출력한다.
+CLI 하나의 정확한 지원 경계를 보려면 `mat support <cli>` (또는 `mat explain <cli>`) 를 실행한다. 현재 swap, freshness, session 지원 상태와 caveat, ambient override 위험, 마지막으로 확인한 upstream 가정을 함께 출력한다.
 
-foreground profile switch 나 `mat exec` 중 provider API-key env var, project-local config 파일 같은 high-confidence ambient 우회 채널이 감지되면 `mat` 은 경고만 출력하고 **아직 차단하거나 scrub 하지 않는다**. 의도한 설정이면 계속 진행해도 되고, 아니라면 선택한 프로필을 신뢰하기 전에 표시된 env/config 채널을 unset/scrub 하자.
+foreground 프로필 전환이나 `mat exec` 중 provider API-key env var, project-local config 파일 같은 high-confidence ambient 우회 채널이 보이면 `mat` 은 경고를 출력한다. 이 경고는 정보성이다. 아직 **차단하거나 scrub 하지는 않는다**. 의도한 override 라면 계속 진행하면 되고, 아니라면 선택한 프로필을 신뢰하기 전에 표시된 env/config source 를 unset 하거나 제거하라.
 
 ### 전환 흐름 (데이터 손실 없음)
 
@@ -227,13 +229,15 @@ mat session start codex work        # CODEX_HOME 이 격리 디렉토리 → "wo
 mat session start codex personal    # 독립 격리 디렉토리 → "personal" 계정
 ```
 
-**메커니즘 — env 주입 + copy-isolation.** `mat session start` 는 `$SHELL` 을 실행하면서 CLI 의 config-directory env(예: `CODEX_HOME`)가 `~/.multi-account-tool/sessions/<id>/` 아래 새 세션 전용 디렉토리를 가리키게 한다. mat 은 선택한 프로필의 자격증명을 그곳에 **복사**(`0600`)하므로, subshell 안의 CLI 는 격리된 계정만 읽는다. 또한 작은 non-credential allow-list 를 세션 전용 스냅샷으로 복사한다. Codex 의 경우 `config.toml` 과 `skills/` 가 격리된 `CODEX_HOME` 으로 복사되어, live `~/.codex` tree 를 공유하지 않고도 사용자 skill 을 사용할 수 있다. 종료 시 mat 은 (OAuth rotation 등으로) 바뀐 자격증명만 프로필로 **재캡처**하고 세션 디렉토리를 삭제한다. OS 전역 자격증명과 `mat exec` lock 은 건드리지 않으므로 세션은 서로 간섭하지 않고 동시에 실행된다.
+**메커니즘 — env 주입 + copy-isolation.** `mat session start` 는 `$SHELL` 을 실행하면서 CLI 의 config-directory env(예: `CODEX_HOME`)가 `~/.multi-account-tool/sessions/<id>/` 아래 새 세션 전용 디렉토리를 가리키게 한다. `mat` 은 선택한 프로필의 자격증명을 그곳에 `0600` 권한으로 복사하므로, subshell 안의 CLI 는 격리된 계정만 읽는다.
 
-`mat session run` 은 같은 materialize → env 주입 → 재캡처 → cleanup lifecycle 을 쓰지만 shell 을 열지 않는다. 대신 mat 이 `<cli>` 에 대응하는 builtin CLI executable(예: `codex`)을 선택하고 `[cli-args...]` 를 그 executable 의 argv 로 넘긴다. `--` 뒤는 임의 명령이 아니라 선택된 builtin CLI 의 인자다. 현재는 안전한 command-scoped 경계가 있는 builtin(Codex, Qwen, Kimi, Crush, Gemini CLI, Linux Claude, OpenCode safer-run, Aider partial-run)에만 열려 있다.
+작은 non-credential allow-list 는 세션 로컬 스냅샷으로 함께 복사될 수 있다. Codex 의 경우 `config.toml` 과 `skills/` 가 격리된 `CODEX_HOME` 으로 복사되어, live `~/.codex` tree 를 공유하지 않고도 사용자 skill 을 사용할 수 있다. 종료 시 `mat` 은 (OAuth rotation 등으로) 바뀐 자격증명만 프로필로 재캡처한 뒤 세션 디렉토리를 삭제한다. OS 전역 자격증명과 `mat exec` lock 은 건드리지 않으므로 세션은 서로 간섭하지 않고 동시에 실행된다.
 
-실행 전에 `mat session run <cli> <profile> --check -- [cli-args...]` (또는 `--explain`) 으로 **동일한** 지원 여부, profile, executable, Aider, OpenCode hard-stop validator 를 spawn/session directory 생성 없이 점검할 수 있다. 실제 실행 preflight 를 통과하면 exit `0`, validation blocker 가 있으면 exit `1`, 사용법/parser 오류는 exit `2` 다. 자동화가 필요하면 `--check`/`--explain` 과 함께 `--json` 을 붙여 blocker, phase, 선택 executable, profile 존재 여부, 정확한 argv 를 포함한 report 를 받는다.
+`mat session run` 은 같은 materialize → env 주입 → 재캡처 → cleanup lifecycle 을 쓰지만 shell 을 열지 않는다. `mat` 이 `<cli>` 에 대응하는 builtin executable(예: `codex`)을 선택하고 `[cli-args...]` 를 직접 넘긴다. `--` 뒤는 임의 shell 명령이 아니라 선택된 CLI 의 argv 다. 현재 이 command-scoped 경계는 안전한 run path 가 확인된 builtin(Codex, Qwen, Kimi, Crush, Gemini CLI, Linux Claude, OpenCode safer-run, Aider partial-run)에만 열려 있다.
 
-관측성 용도로 `mat status --json` 은 schema-v1 active profile/session 요약을 출력하고, `mat session list --json` 은 owner/child 상태와 root env 이름만 포함한 schema-v1 session lifecycle entry(`active` / `orphan` / `unknown`)를 출력한다. session root 절대 경로는 내보내지 않는다. 변이를 수행하는 session lifecycle 명령은 `~/.multi-account-tool/audit.jsonl` 에 best-effort redacted JSONL event 를 append 하며, persistent audit entry 는 profile/session identifier 를 hash 처리하고 secret-like string 을 redact 한다.
+실행 전에는 `mat session run <cli> <profile> --check -- [cli-args...]` (또는 `--explain`) 으로 **동일한** 지원 여부, profile, executable, Aider, OpenCode hard-stop validator 를 점검할 수 있다. 이 경로는 CLI 를 spawn 하지 않고 session directory 도 만들지 않는다. 실제 실행 preflight 를 통과하면 exit `0`, validation blocker 가 있으면 `1`, 사용법/parser 오류는 `2` 다. 자동화가 필요하면 `--json` 을 붙여 blocker, phase, 선택 executable, profile 존재 여부, 정확한 argv 를 포함한 report 를 받는다.
+
+dashboard/statusline 용도로 `mat status --json` 은 active profile 과 session 요약을 담은 안정 schema-v1 을 출력한다. `mat session list --json` 은 owner/child 상태와 root env 이름만 포함한 schema-v1 session lifecycle entry(`active` / `orphan` / `unknown`)를 출력하며, session root 절대 경로는 내보내지 않는다. 변이를 수행하는 session lifecycle 명령은 `~/.multi-account-tool/audit.jsonl` 에 best-effort redacted JSONL event 를 append 한다. persistent audit entry 는 profile/session identifier 를 hash 처리하고 secret-like string 을 redact 한다.
 
 **지원 CLI** (자격증명 디렉토리를 env 로 재배치할 수 있는 것):
 
@@ -321,7 +325,7 @@ mat support <cli> [--json]
 mat explain <cli> [--json]
 ```
 
-하나의 CLI 에 대해 `mat` 이 무엇을 지원하고 왜 그런지 보여준다. 보고서에는 profile swap, freshness/drift 점검, `mat session start`, `mat session run`, source type(라이브 경로나 자격증명 값 제외), ambient/project override 위험, 지원 판단의 마지막 upstream 확인 가정이 포함된다.
+하나의 CLI 에 대해 `mat` 이 정확히 무엇을 지원하고 왜 그런지 보여준다. 보고서에는 profile swap, freshness/drift 점검, `mat session start`, `mat session run`, source type(라이브 경로나 자격증명 값 제외), ambient/project override 위험, 지원 판단의 마지막 upstream 확인 가정이 포함된다.
 
 `explain` 은 `support` 의 alias 다. `agy` 처럼 의도적으로 blocked 된 CLI 도 profile-swap 대상이 아니더라도 설명 가능하다. 사용자 plugin CLI 는 profile-swap only + fallback freshness 로 표시되며, 신뢰된 session boundary 는 없다고 보고한다.
 
@@ -339,6 +343,7 @@ mat explain agy
 ~/.multi-account-tool/
 ├── config.json                   # 활성 프로필 포인터 + 플래그
 ├── app.log                       # best-effort TUI 경고 / 진단 로그
+├── audit.jsonl                   # best-effort redacted session lifecycle audit 로그
 ├── cli-defs/                     # 사용자 플러그인 (선택) — "새 CLI 추가하기" 참고
 │   └── <id>.json
 ├── locks/
