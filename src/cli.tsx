@@ -14,10 +14,17 @@ import React from 'react';
 import { render } from 'ink';
 
 import App from './app.js';
-import { getAllCliDefs } from './core/cli-defs.js';
+import { BUILTIN_CLI_DEFS, getAllCliDefs } from './core/cli-defs.js';
 import { getActiveProfile } from './core/config.js';
 import { describeError, UnknownCliError } from './core/errors.js';
 import { runExec } from './core/exec.js';
+import {
+  cliDefsDir,
+  createPluginScaffold,
+  validatePluginDirectory,
+  validatePluginFilePath,
+  type PluginValidationReport
+} from './core/cli-defs-plugin.js';
 import { handleSession } from './core/session-cli.js';
 import { formatDoctorReport, runDoctor } from './core/doctor.js';
 import { buildCliSupportReport, formatSupportReport } from './core/support.js';
@@ -41,6 +48,8 @@ const USAGE =
   `  mat session list [--json]                     실행 중/orphan 세션 목록\n` +
   `  mat session stop <id>                         세션 종료 또는 orphan 정리\n` +
   `  mat status [--json]                           active profile/session 상태 요약\n` +
+  `  mat plugin validate [path] [--json]           plugin JSON 정적 검증/린트\n` +
+  `  mat plugin scaffold <id> [--json]             starter plugin JSON 출력 (파일 미작성)\n` +
   `  mat freshness [<cli>] [--profile <name>] [--json] [--check-only]\n` +
   `                                                 라이브 vs 활성 프로필 자격증명 비교 (OAuth\n` +
   `                                                 refresh rotation 안전성 점검). cli 미지정 시\n` +
@@ -91,6 +100,10 @@ async function main(): Promise<void> {
   }
   if (first === 'status') {
     await handleStatus(rest);
+    return;
+  }
+  if (first === 'plugin') {
+    await handlePlugin(rest);
     return;
   }
   if (first === 'session' && isReadOnlySessionRequest(rest)) {
@@ -193,6 +206,167 @@ function parseStatusArgs(rest: string[]): StatusArgs {
     process.exit(2);
   }
   return out;
+}
+
+async function handlePlugin(rest: string[]): Promise<void> {
+  const [subcommand, ...args] = rest;
+  if (subcommand == null || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
+    process.stdout.write(
+      `사용법:\n` +
+      `  mat plugin validate [path] [--json]\n` +
+      `  mat plugin scaffold <id> [--json]\n` +
+      `\n` +
+      `사용자 plugin JSON 을 정적으로 검증합니다. validate 는 credential 파일이나\n` +
+      `keyring secret 값을 읽지 않습니다. path 를 생략하면 설치된\n` +
+      `~/.multi-account-tool/cli-defs/*.json 을 검사합니다.\n` +
+      `scaffold 는 starter JSON 을 stdout 으로만 출력하며 파일을 쓰지 않습니다.\n`
+    );
+    return;
+  }
+  if (subcommand === 'validate') {
+    handlePluginValidate(args);
+    return;
+  }
+  if (subcommand === 'scaffold') {
+    handlePluginScaffold(args);
+    return;
+  }
+  process.stderr.write(`mat plugin: 알 수 없는 하위 명령: ${subcommand}\n`);
+  process.exit(2);
+}
+
+interface PluginValidateArgs {
+  path?: string;
+  asJson: boolean;
+}
+
+function handlePluginValidate(rest: string[]): void {
+  const parsed = parsePluginValidateArgs(rest);
+  const builtinIds = BUILTIN_CLI_DEFS.map((def) => def.id);
+  const report = parsed.path == null
+    ? validatePluginDirectory(cliDefsDir(), { builtinIds })
+    : validatePluginFilePath(parsed.path, { builtinIds });
+  if (parsed.asJson) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    process.stdout.write(formatPluginValidationReport(report));
+  }
+  process.exit(report.valid ? 0 : 1);
+}
+
+function parsePluginValidateArgs(rest: string[]): PluginValidateArgs {
+  const out: PluginValidateArgs = { asJson: false };
+  for (const arg of rest) {
+    if (arg === '--json') {
+      out.asJson = true;
+      continue;
+    }
+    if (arg === '--help' || arg === '-h') {
+      process.stdout.write(
+        `사용법:\n` +
+        `  mat plugin validate [path] [--json]\n` +
+        `\n` +
+        `path 를 지정하면 해당 JSON 파일만 검사하고, 생략하면 설치된\n` +
+        `~/.multi-account-tool/cli-defs/*.json 전체를 검사합니다.\n` +
+        `exit 0: error 없음, exit 1: validation/read/parse error, exit 2: 사용법 오류.\n`
+      );
+      process.exit(0);
+    }
+    if (arg.startsWith('-')) {
+      process.stderr.write(`mat plugin validate: 알 수 없는 옵션: ${arg}\n`);
+      process.exit(2);
+    }
+    if (out.path != null) {
+      process.stderr.write(`mat plugin validate: path 는 하나만 지정할 수 있습니다.\n`);
+      process.exit(2);
+    }
+    out.path = arg;
+  }
+  return out;
+}
+
+function handlePluginScaffold(rest: string[]): void {
+  const parsed = parsePluginScaffoldArgs(rest);
+  if (BUILTIN_CLI_DEFS.some((def) => def.id === parsed.id)) {
+    process.stderr.write(`mat plugin scaffold: '${parsed.id}' 는 builtin CLI id 라서 plugin 으로 사용할 수 없습니다.\n`);
+    process.exit(2);
+  }
+  let scaffold: ReturnType<typeof createPluginScaffold>;
+  try {
+    scaffold = createPluginScaffold(parsed.id);
+  } catch (err) {
+    process.stderr.write(`mat plugin scaffold: ${describeError(err)}\n`);
+    process.exit(2);
+  }
+  // 기본 출력도 pipe 친화적인 strict JSON 이다. --json 은 명시성/대칭성만 제공한다.
+  process.stdout.write(`${JSON.stringify(scaffold, null, 2)}\n`);
+}
+
+interface PluginScaffoldArgs {
+  id: string;
+  asJson: boolean;
+}
+
+function parsePluginScaffoldArgs(rest: string[]): PluginScaffoldArgs {
+  let id: string | undefined;
+  let asJson = false;
+  for (const arg of rest) {
+    if (arg === '--json') {
+      asJson = true;
+      continue;
+    }
+    if (arg === '--help' || arg === '-h') {
+      process.stdout.write(
+        `사용법:\n` +
+        `  mat plugin scaffold <id> [--json]\n` +
+        `\n` +
+        `starter plugin JSON 을 stdout 으로 출력합니다. 파일은 쓰지 않습니다.\n`
+      );
+      process.exit(0);
+    }
+    if (arg.startsWith('-')) {
+      process.stderr.write(`mat plugin scaffold: 알 수 없는 옵션: ${arg}\n`);
+      process.exit(2);
+    }
+    if (id != null) {
+      process.stderr.write(`mat plugin scaffold: <id> 는 하나만 지정할 수 있습니다.\n`);
+      process.exit(2);
+    }
+    id = arg;
+  }
+  if (id == null) {
+    process.stderr.write(`mat plugin scaffold: <id> 인자가 필요합니다.\n`);
+    process.exit(2);
+  }
+  return { id, asJson };
+}
+
+function formatPluginValidationReport(report: PluginValidationReport): string {
+  const state = report.valid ? 'static validation passed' : 'static validation failed';
+  const lines = [
+    `mat plugin validate — ${state}`,
+    `target: ${report.target.kind} ${report.target.path}`,
+    `files: ${report.summary.files}, plugins: ${report.summary.plugins}, errors: ${report.summary.errors}, warnings: ${report.summary.warnings}`
+  ];
+  if (report.summary.files === 0) {
+    lines.push('(검사할 plugin JSON 없음)');
+  }
+  for (const file of report.files) {
+    const plugin = file.plugin != null ? ` (${file.plugin.id})` : '';
+    lines.push(`- ${file.valid ? 'OK' : 'ERROR'} ${file.file}${plugin}`);
+    for (const diag of file.diagnostics) {
+      const loc = diag.sourceIndex != null ? ` sources[${diag.sourceIndex}]` : '';
+      lines.push(`  ${diag.severity.toUpperCase()} ${diag.code}${loc}: ${diag.message}`);
+    }
+  }
+  const topLevel = report.diagnostics.filter((diag) =>
+    !report.files.some((file) => file.diagnostics.includes(diag))
+  );
+  for (const diag of topLevel) {
+    lines.push(`${diag.severity.toUpperCase()} ${diag.code}: ${diag.message}`);
+  }
+  lines.push('참고: 이 검사는 정적 검증이며 credential 파일/keyring secret 값은 읽지 않습니다.');
+  return `${lines.join('\n')}\n`;
 }
 
 async function handleDoctor(rest: string[]): Promise<void> {

@@ -120,7 +120,7 @@ npm link
 
 ```bash
 mat --version                  # 설치된 semver 출력
-mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat session` / `mat freshness` / `mat doctor`)
+mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat session` / `mat plugin` / `mat freshness` / `mat doctor`)
 node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke test (CLI 정의 로드 + path resolve 확인, 자격증명 미수정)
 ```
 
@@ -133,7 +133,7 @@ smoke test 는 read-only 라 활성 mat 프로필이 있는 환경에서도 안�
 ```bash
 mat              # TUI 실행
 mat --version    # 설치된 버전 출력
-mat --help       # 짧은 사용법 (subcommand: exec / session / freshness / doctor)
+mat --help       # 짧은 사용법 (subcommand: exec / session / plugin / freshness / doctor)
 ```
 
 TUI 가 열리면 **CLI 선택 → 프로필 선택 → 전환**.
@@ -491,16 +491,30 @@ mat explain agy
 }
 ```
 
+파일을 직접 쓰지 않고 starter JSON 을 만들 수도 있다:
+
+```bash
+mkdir -p ~/.multi-account-tool/cli-defs
+mat plugin scaffold my-cli > ~/.multi-account-tool/cli-defs/my-cli.json
+mat plugin validate ~/.multi-account-tool/cli-defs/my-cli.json
+mat plugin validate --json   # 설치된 ~/.multi-account-tool/cli-defs/*.json 전체 검증
+```
+
+`mat plugin validate` 는 **정적** JSON/schema/lint 검사다. credential 파일을 읽거나 Keychain/Secret Service secret 값을 조회하지 않고, upstream CLI 가 의도한 credential source 를 우선 사용할지 증명하지도 않는다. 통과했다는 뜻은 **정적 검증 통과**이지 security-certified 라는 의미가 아니다. JSON report 는 `schemaVersion: 1` 이며 exit code 는 error 없음 `0`, validation/read/parse error `1`, 사용법 오류 `2` 다. 너무 넓은 file path 나 `account` 없는 generic keychain service 같은 위험하지만 호환되는 패턴은 warning 으로 보고한다.
+
 mat 은 시작 시 해당 디렉토리의 모든 `*.json` 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) id 와 충돌하면 plugin 이 무시된다 (보안).
 
 필드 규칙:
 - `id`: 영문 시작 + 영숫자/`_`/`-`, 1~32자 (빌트인 id 와 중복 불가).
 - `name`: 비어있지 않은 임의 문자열 (표시용).
-- `sources[].type`: `'file'` 또는 `'keychain'` (keychain 은 macOS 전용).
+- `sources[].type`: `'file'`, `'keychain'` (macOS Keychain), `'os-keyring'` (Linux Secret Service).
 - `sources[].saveAs`: ASCII 파일명, 1~64자 (`[a-zA-Z0-9._-]`).
 - `sources[].path` (file): 비어있지 않은 문자열 (`~/` 자동 확장).
-- `sources[].service` (keychain): 비어있지 않은 Keychain service 이름.
-- `sources[].account` (keychain, **선택**): `-s <service> -a <account>` 항목 하나로 `mat` 의 keychain 조작 scope 를 제한. **generic / multi-account service** 에 필수 (예: Goose 의 `goose`/`secrets`, 동일 service 의 여러 entry 가진 CLI) — 미지정 시 `mat` 이 잘못된 account 잡을 위험. 검증: 비어있지 않은 문자열, NUL 차단. 단일-account service 는 생략 가능 (기존 동작 유지).
+- `sources[].service` (keychain/os-keyring): 비어있지 않은 credential service 이름.
+- `sources[].account` (keychain/os-keyring, **선택**): service+account 항목 하나로 `mat` 의 조작 scope 를 제한. **generic / multi-account service** 에 필수 (예: Goose 의 `goose`/`secrets`, 동일 service 의 여러 entry 가진 CLI) — 미지정 시 `mat` 이 잘못된 account 를 잡을 위험. 검증: 비어있지 않은 문자열, 제어문자 차단. 단일-account service 는 생략 가능 (기존 동작 유지).
+- `sources[].backend` (os-keyring, 선택): `'auto'` 또는 `'secret-service'`.
+
+Plugin 은 **profile-swap 정의 전용**이다. `session`, `sessionRun`, env policy, ambient credential scrub 규칙, project override hard-stop 을 정의할 수 없고, 사용자 plugin CLI 는 신뢰된 `mat session start/run` 경계가 아니다.
 
 ### 2. 빌트인 추가 — mat repo PR 필요
 

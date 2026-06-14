@@ -26,7 +26,9 @@ import {
 } from '../../src/core/cli-defs.js';
 import {
   loadUserCliDefs,
-  validateCliDefRaw
+  validateCliDefRaw,
+  validatePluginDefinition,
+  validatePluginDirectory
 } from '../../src/core/cli-defs-plugin.js';
 import { dataDir } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
@@ -278,6 +280,92 @@ describe('validateCliDefRaw (순수 validator)', () => {
       expect(r.error).toContain('account');
       expect(r.error).toContain(expectedKeyword as string);
     });
+  });
+});
+
+describe('validatePluginDefinition / validatePluginDirectory (static plugin linter)', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+    resetCliDefCache();
+  });
+
+  afterEach(async () => {
+    resetCliDefCache();
+    await tmp.cleanup();
+  });
+
+  it('schema-valid risky plugin fields are warnings, not schema errors', () => {
+    const r = validatePluginDefinition({
+      id: 'risky',
+      name: 'Risky',
+      sources: [
+        { type: 'file', path: '~', saveAs: 'credentials.json' },
+        { type: 'keychain', service: 'goose', saveAs: 'goose.json' }
+      ],
+      session: { roots: [] },
+      sessionRun: { executable: 'risky' },
+      env: { RISKY_HOME: '/tmp/risky' },
+      ambient: { allow: true }
+    });
+
+    expect(r.def?.id).toBe('risky');
+    expect(r.diagnostics.every((d) => d.severity === 'warning')).toBe(true);
+    expect(r.diagnostics.map((d) => d.code)).toEqual([
+      'ignored_trust_boundary_field',
+      'ignored_trust_boundary_field',
+      'ignored_trust_boundary_field',
+      'ignored_trust_boundary_field',
+      'broad_file_path',
+      'generic_service_without_account'
+    ]);
+    expect(r.diagnostics.map((d) => d.message).join('\n')).toContain('plugins cannot define session isolation');
+  });
+
+  it('builtin id collision is reported as an error before use', () => {
+    const r = validatePluginDefinition(
+      {
+        id: 'codex',
+        name: 'Codex Override',
+        sources: [{ type: 'file', path: '~/.config/codex/credentials.json', saveAs: 'credentials.json' }]
+      },
+      { builtinIds: BUILTIN_CLI_DEFS.map((d) => d.id) }
+    );
+
+    expect(r.def?.id).toBe('codex');
+    expect(r.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        code: 'builtin_id_collision',
+        pluginId: 'codex'
+      })
+    ]);
+  });
+
+  it('directory validation reports parse errors and duplicate plugin ids with schemaVersion 1', async () => {
+    await writePlugin('a-one.json', {
+      id: 'dup',
+      name: 'One',
+      sources: [{ type: 'file', path: '~/.config/one/credentials.json', saveAs: 'credentials.json' }]
+    });
+    await writePlugin('b-two.json', {
+      id: 'dup',
+      name: 'Two',
+      sources: [{ type: 'file', path: '~/.config/two/credentials.json', saveAs: 'credentials.json' }]
+    });
+    await writePluginRaw('c-broken.json', '{not json');
+
+    const report = validatePluginDirectory(cliDefsDir(), { builtinIds: BUILTIN_CLI_DEFS.map((d) => d.id) });
+
+    expect(report.schemaVersion).toBe(1);
+    expect(report.valid).toBe(false);
+    expect(report.summary).toMatchObject({ files: 3, plugins: 2, errors: 2 });
+    expect(report.diagnostics.map((d) => d.code)).toContain('duplicate_plugin_id');
+    expect(report.diagnostics.map((d) => d.code)).toContain('json_parse_error');
+    expect(report.files.some((file) =>
+      file.valid === false && file.diagnostics.some((d) => d.code === 'duplicate_plugin_id')
+    )).toBe(true);
   });
 });
 

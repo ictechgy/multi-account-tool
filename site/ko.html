@@ -285,7 +285,7 @@ npm link
 </code></pre>
 <h3 id="설치-확인">설치 확인</h3>
 <pre><code class="language-bash">mat --version                  # 설치된 semver 출력
-mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat session` / `mat freshness` / `mat doctor`)
+mat --help                     # subcommand 목록 (TUI 옵션 + `mat exec` / `mat session` / `mat plugin` / `mat freshness` / `mat doctor`)
 node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke test (CLI 정의 로드 + path resolve 확인, 자격증명 미수정)
 </code></pre>
 <p>smoke test 는 read-only 라 활성 mat 프로필이 있는 환경에서도 안전하다.</p>
@@ -293,7 +293,7 @@ node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke 
 <h2 id="사용">사용</h2>
 <pre><code class="language-bash">mat              # TUI 실행
 mat --version    # 설치된 버전 출력
-mat --help       # 짧은 사용법 (subcommand: exec / session / freshness / doctor)
+mat --help       # 짧은 사용법 (subcommand: exec / session / plugin / freshness / doctor)
 </code></pre>
 <p>TUI 가 열리면 <strong>CLI 선택 → 프로필 선택 → 전환</strong>.</p>
 <h3 id="첫-실행">첫 실행</h3>
@@ -688,17 +688,26 @@ mat explain agy
   ]
 }
 </code></pre>
+<p>파일을 직접 쓰지 않고 starter JSON 을 만들 수도 있다:</p>
+<pre><code class="language-bash">mkdir -p ~/.multi-account-tool/cli-defs
+mat plugin scaffold my-cli &gt; ~/.multi-account-tool/cli-defs/my-cli.json
+mat plugin validate ~/.multi-account-tool/cli-defs/my-cli.json
+mat plugin validate --json   # 설치된 ~/.multi-account-tool/cli-defs/*.json 전체 검증
+</code></pre>
+<p><code>mat plugin validate</code> 는 <strong>정적</strong> JSON/schema/lint 검사다. credential 파일을 읽거나 Keychain/Secret Service secret 값을 조회하지 않고, upstream CLI 가 의도한 credential source 를 우선 사용할지 증명하지도 않는다. 통과했다는 뜻은 <strong>정적 검증 통과</strong>이지 security-certified 라는 의미가 아니다. JSON report 는 <code>schemaVersion: 1</code> 이며 exit code 는 error 없음 <code>0</code>, validation/read/parse error <code>1</code>, 사용법 오류 <code>2</code> 다. 너무 넓은 file path 나 <code>account</code> 없는 generic keychain service 같은 위험하지만 호환되는 패턴은 warning 으로 보고한다.</p>
 <p>mat 은 시작 시 해당 디렉토리의 모든 <code>*.json</code> 을 로드한다. 잘못된 plugin 은 경고 후 skip — mat 본체는 정상 동작. 빌트인 CLI (<code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>aider</code>, <code>kimi</code>, <code>qwen</code>, <code>crush</code>, <code>opencode</code>, <code>goose</code>) id 와 충돌하면 plugin 이 무시된다 (보안).</p>
 <p>필드 규칙:</p>
 <ul>
 <li><code>id</code>: 영문 시작 + 영숫자/<code>_</code>/<code>-</code>, 1~32자 (빌트인 id 와 중복 불가).</li>
 <li><code>name</code>: 비어있지 않은 임의 문자열 (표시용).</li>
-<li><code>sources[].type</code>: <code>&#39;file&#39;</code> 또는 <code>&#39;keychain&#39;</code> (keychain 은 macOS 전용).</li>
+<li><code>sources[].type</code>: <code>&#39;file&#39;</code>, <code>&#39;keychain&#39;</code> (macOS Keychain), <code>&#39;os-keyring&#39;</code> (Linux Secret Service).</li>
 <li><code>sources[].saveAs</code>: ASCII 파일명, 1~64자 (<code>[a-zA-Z0-9._-]</code>).</li>
 <li><code>sources[].path</code> (file): 비어있지 않은 문자열 (<code>~/</code> 자동 확장).</li>
-<li><code>sources[].service</code> (keychain): 비어있지 않은 Keychain service 이름.</li>
-<li><code>sources[].account</code> (keychain, <strong>선택</strong>): <code>-s &lt;service&gt; -a &lt;account&gt;</code> 항목 하나로 <code>mat</code> 의 keychain 조작 scope 를 제한. <strong>generic / multi-account service</strong> 에 필수 (예: Goose 의 <code>goose</code>/<code>secrets</code>, 동일 service 의 여러 entry 가진 CLI) — 미지정 시 <code>mat</code> 이 잘못된 account 잡을 위험. 검증: 비어있지 않은 문자열, NUL 차단. 단일-account service 는 생략 가능 (기존 동작 유지).</li>
+<li><code>sources[].service</code> (keychain/os-keyring): 비어있지 않은 credential service 이름.</li>
+<li><code>sources[].account</code> (keychain/os-keyring, <strong>선택</strong>): service+account 항목 하나로 <code>mat</code> 의 조작 scope 를 제한. <strong>generic / multi-account service</strong> 에 필수 (예: Goose 의 <code>goose</code>/<code>secrets</code>, 동일 service 의 여러 entry 가진 CLI) — 미지정 시 <code>mat</code> 이 잘못된 account 를 잡을 위험. 검증: 비어있지 않은 문자열, 제어문자 차단. 단일-account service 는 생략 가능 (기존 동작 유지).</li>
+<li><code>sources[].backend</code> (os-keyring, 선택): <code>&#39;auto&#39;</code> 또는 <code>&#39;secret-service&#39;</code>.</li>
 </ul>
+<p>Plugin 은 <strong>profile-swap 정의 전용</strong>이다. <code>session</code>, <code>sessionRun</code>, env policy, ambient credential scrub 규칙, project override hard-stop 을 정의할 수 없고, 사용자 plugin CLI 는 신뢰된 <code>mat session start/run</code> 경계가 아니다.</p>
 <h3 id="2-빌트인-추가-mat-repo-pr-필요">2. 빌트인 추가 — mat repo PR 필요</h3>
 <p><code>src/core/cli-defs.ts</code> 에 항목 추가:</p>
 <pre><code class="language-ts">{
