@@ -115,6 +115,8 @@ Required cases:
 5. Token-like plaintext fallback detected in `config.json`.
 6. Duplicate display labels requiring disambiguation.
 
+Implementation status: fixture parser safety gate complete in `src/core/copilot-app-state.ts` with redacted fixtures under `tests/fixtures/copilot-app-state/` and unit tests in `tests/core/copilot-app-state.test.ts`. This remains non-product validation only: no `copilot` builtin, no credential-store mutation, no freshness adapter, and no session/command-run support were added.
+
 ## Product unblock checklist
 
 A future product PR may add Copilot only if all of these are true:
@@ -131,7 +133,7 @@ A future product PR may add Copilot only if all of these are true:
 
 ## Follow-up PR order
 
-1. **Redacted Copilot app-state fixture/parser PR** — parse account-selection state without secrets.
+1. ✅ **Redacted Copilot app-state fixture/parser PR** — parse account-selection state without secrets; fixture parser safety gate only, not product support.
 2. **macOS/Linux credential-store account proof PR** — prove service/account or Secret Service attributes with non-secret probes.
 3. **Windows Credential Manager source R&D PR** — source backend and CI/test strategy before Windows support claims.
 4. **Ambient token policy PR** — decide normal swap vs `mat exec` vs future session behavior.
