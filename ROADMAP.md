@@ -117,7 +117,7 @@
 ## 3. lterm 과의 조화
 
 ### lterm 컨텍스트
-- `@ictechgy/lterm` v1.0.3 (사용자 본인 작품, npm: `@ictechgy/lterm`)
+- `@ictechgy/lterm` v1.0.25+ (사용자 본인 작품, npm: `@ictechgy/lterm`; mat profile shim PR #144 merged)
 - tmux 호환 PTY 세션 데몬 (`lterm start`, `lterm resume`, `lterm send-keys`)
 - 빌트인 agent shim: `lterm claude` / `lterm codex` / `lterm agy` / `lterm gemini` 등 (`mat` 기준 Google Antigravity/`agy` 자격증명 swap·session 격리는 native keyring + 안정 redirect 부재로 별도 미지원)
 
@@ -142,18 +142,20 @@ lterm send-keys "mat exec claude work-acc -- claude" Enter
 - cli 별 lockfile (`~/.multi-account-tool/locks/<cli>.lock`) 로 동시 실행 직렬화.
 - 활성 프로필이 설정되지 않은 cli 에서는 사용 불가 (라이브 자격증명 보존 보장 못함).
 
-#### B. lterm session hook (있다면)
+#### B. lterm session hook (있다면) — 보류
 - 세션 시작/종료 hook API 가 있는지 확인
 - 있으면: 세션 이름 → mat profile 자동 매핑
-- 없으면: shim wrapper 만으로 진행 (lterm 코드 변경 불필요)
+- 현재 결정: hook API 의존 없이 shim wrapper 만으로 진행. 세션 격리형 hook 은 native keyring/redirect unknown 해결 전까지 재방문.
 
-#### C. lterm `claude` shim 확장
-- `lterm claude --profile <name>` 옵션
-- 내부에서 mat exec 호출 후 claude 실행
-- lterm 측 변경 필요 (`@ictechgy/lterm` repo 와 협력)
+#### C. lterm agent shim 확장 ✅
+- `lterm claude --profile <name>` / `--mat-profile <name>` 옵션
+- 내부에서 `mat exec <cli> <profile> -- <agent-binary> ...` 호출 후 agent 실행
+- lterm 측 변경 완료: `ictechgy/light_terminal` PR #144
+- allowlist: `claude`, `codex`, `opencode`, `aider`, `goose`, `crush`, `gemini`, `kimi`, `qwen`
+- `agy` 등 blocked/unsupported agent 는 command resolution 전에 거부
 
 ### 결정 포인트
-- lterm hook API 의존 vs shim wrapper 만으로 → 후자가 의존성 작음
+- lterm hook API 의존 vs shim wrapper 만으로 → shim wrapper 로 완료 (후자가 의존성 작음)
 - 시간 격리 (A) 만 vs 세션 격리 (B+#2 결합) → 후자는 #2 의 unknown 해결 선행 필요
 
 ---
@@ -163,7 +165,7 @@ lterm send-keys "mat exec claude work-acc -- claude" Enter
 - [ ] 각 추가 CLI 의 credential 위치/포맷 (조사 필요)
 - [ ] credential override env var 지원 여부 (CLI 별)
 - [ ] plugin/extension 메커니즘: JSON config vs JS module
-- [ ] lterm hook API 의존 vs shim wrapper 만으로 진행
+- [x] lterm hook API 의존 vs shim wrapper 만으로 진행 → shim wrapper 채택/구현 (`ictechgy/light_terminal` PR #144)
 - [ ] `mat exec <profile> -- <cmd>` 인터페이스 (subprocess env 격리 한계)
 - [ ] session 디렉토리 누수 정리 정책 (orphan TTL?)
 
@@ -181,7 +183,7 @@ lterm send-keys "mat exec claude work-acc -- claude" Enter
 | 6 | ~~OpenCode safer-run~~ ✅ | broad `XDG_DATA_HOME` EXPERIMENTAL 을 좁히고 config/env/project 우회 hard-stop |
 | 7 | ~~Aider partial-run~~ ✅ | forced config/env-file + env/argv/dotenv/OAuth-key/provider-chain/model-sidecar hard-stop 로 제한 지원 |
 | 8 | ~~Antigravity auth-store research artifact~~ ✅ | 제품 지원은 upstream auth-store/redirect/recapture 계약 확인 전까지 계속 blocked |
-| 9 | lterm shim wrapper (`lterm claude --profile X`) | lterm repo 협력 |
+| 9 | ~~lterm shim wrapper (`lterm claude --profile X`)~~ ✅ | lterm repo 협력 완료 (`ictechgy/light_terminal` PR #144) |
 
 ---
 
