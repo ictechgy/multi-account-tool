@@ -256,6 +256,107 @@ describe('mat support/explain — support boundary diagnostics', () => {
   });
 });
 
+describe('mat plugin — validate/scaffold', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  it('scaffold prints strict JSON and writes no plugin files', async () => {
+    const result = runMat(['plugin', 'scaffold', 'my-cli', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    const scaffold = JSON.parse(result.stdout) as {
+      id?: string;
+      name?: string;
+      sources?: Array<{ type?: string; path?: string; saveAs?: string }>;
+    };
+    expect(scaffold).toMatchObject({
+      id: 'my-cli',
+      name: 'My CLI',
+      sources: [{ type: 'file', path: '~/.config/my-cli/credentials.json', saveAs: 'credentials.json' }]
+    });
+    await expect(fs.stat(join(tmp.home, '.multi-account-tool'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('validate external path is static and does not run legacy data-dir migration', async () => {
+    const legacy = join(tmp.home, '.multi-sub-terminal');
+    const current = join(tmp.home, '.multi-account-tool');
+    const pluginPath = join(tmp.home, 'external-plugin.json');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(join(legacy, 'sentinel.txt'), 'legacy');
+    await fs.writeFile(pluginPath, JSON.stringify({
+      id: 'external',
+      name: 'External',
+      sources: [{ type: 'file', path: '~/.config/external/credentials.json', saveAs: 'credentials.json' }]
+    }));
+
+    const result = runMat(['plugin', 'validate', pluginPath, '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      schemaVersion?: number;
+      valid?: boolean;
+      summary?: { files?: number; errors?: number };
+    };
+    expect(report.schemaVersion).toBe(1);
+    expect(report.valid).toBe(true);
+    expect(report.summary).toMatchObject({ files: 1, errors: 0 });
+    await expect(fs.stat(legacy)).resolves.toBeTruthy();
+    await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('validate installed plugins reports parse errors as exit 1 JSON diagnostics', async () => {
+    const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, 'broken.json'), '{not json');
+
+    const result = runMat(['plugin', 'validate', '--json'], tmp.home);
+
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      valid?: boolean;
+      diagnostics?: Array<{ severity?: string; code?: string }>;
+      summary?: { errors?: number };
+    };
+    expect(report.valid).toBe(false);
+    expect(report.summary?.errors).toBe(1);
+    expect(report.diagnostics).toEqual([
+      expect.objectContaining({ severity: 'error', code: 'json_parse_error' })
+    ]);
+  });
+
+  it('validate human output keeps risky compatible patterns as warnings', async () => {
+    const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, 'risky.json'), JSON.stringify({
+      id: 'risky',
+      name: 'Risky',
+      sources: [{ type: 'file', path: '~', saveAs: 'credentials.json' }]
+    }));
+
+    const result = runMat(['plugin', 'validate'], tmp.home);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/static validation passed/);
+    expect(result.stdout).toMatch(/WARNING broad_file_path/);
+    expect(result.stdout).toMatch(/정적 검증/);
+  });
+
+  it('invalid plugin usage exits 2', () => {
+    expect(runMat(['plugin', 'validate', 'a.json', 'b.json'], tmp.home).code).toBe(2);
+    expect(runMat(['plugin', 'scaffold'], tmp.home).code).toBe(2);
+    expect(runMat(['plugin', 'scaffold', 'codex'], tmp.home).code).toBe(2);
+    expect(runMat(['plugin', 'unknown'], tmp.home).code).toBe(2);
+  });
+});
+
 describe('mat session run --check — dry-run preflight', () => {
   let tmp: TmpHome;
 

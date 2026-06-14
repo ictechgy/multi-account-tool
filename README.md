@@ -120,7 +120,7 @@ npm link
 
 ```bash
 mat --version                  # prints the installed semver
-mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat freshness` / `mat doctor`)
+mat --help                     # subcommand list (TUI flags + `mat exec` / `mat session` / `mat plugin` / `mat freshness` / `mat doctor`)
 node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (CLI defs load + paths resolve, never touches credentials)
 ```
 
@@ -133,7 +133,7 @@ The smoke test is read-only and safe to run on a machine with active mat profile
 ```bash
 mat              # launch the TUI
 mat --version    # print installed version
-mat --help       # short usage summary (subcommands: exec, session, freshness, doctor)
+mat --help       # short usage summary (subcommands: exec, session, plugin, freshness, doctor)
 ```
 
 The TUI opens with **CLI → profile → switch**.
@@ -491,16 +491,30 @@ Drop a JSON file at `~/.multi-account-tool/cli-defs/<id>.json`. Example template
 }
 ```
 
+You can generate that starter JSON without writing files:
+
+```bash
+mkdir -p ~/.multi-account-tool/cli-defs
+mat plugin scaffold my-cli > ~/.multi-account-tool/cli-defs/my-cli.json
+mat plugin validate ~/.multi-account-tool/cli-defs/my-cli.json
+mat plugin validate --json   # validate every installed ~/.multi-account-tool/cli-defs/*.json
+```
+
+`mat plugin validate` is a **static** JSON/schema/lint check. It does not read credential files, query Keychain/Secret Service secrets, or prove that an upstream CLI will prefer the intended credential source. A passing report means **static validation passed**, not that the plugin is security-certified. The JSON report is `schemaVersion: 1`; exit codes are `0` when there are no errors, `1` for validation/read/parse errors, and `2` for usage errors. Risky-but-compatible patterns (for example broad file paths or generic keychain services without `account`) are warnings.
+
 mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) cannot be overridden — id collision is rejected.
 
 Field rules:
 - `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).
 - `name`: any non-empty string (display label).
-- `sources[].type`: `'file'` or `'keychain'` (keychain is macOS-only).
+- `sources[].type`: `'file'`, `'keychain'` (macOS Keychain), or `'os-keyring'` (Linux Secret Service).
 - `sources[].saveAs`: ASCII filename, 1~64 chars (`[a-zA-Z0-9._-]`).
 - `sources[].path` (file): any non-empty string (your filesystem path, `~/` expanded).
-- `sources[].service` (keychain): any non-empty string (Keychain service name).
-- `sources[].account` (keychain, **optional**): scope `mat` to a specific `-s <service> -a <account>` entry. Required for **generic / multi-account services** (e.g., Goose's `goose`/`secrets` or any CLI with multiple Keychain entries under the same service) — without it, `mat` may match the wrong account. Validation: non-empty string, no NUL chars. Omit for single-account services (default behaviour preserved).
+- `sources[].service` (keychain/os-keyring): any non-empty credential service name.
+- `sources[].account` (keychain/os-keyring, **optional**): scope `mat` to a specific service+account entry. Required for **generic / multi-account services** (e.g., Goose's `goose`/`secrets` or any CLI with multiple entries under the same service) — without it, `mat` may match the wrong account. Validation: non-empty string, no control chars. Omit for single-account services (default behaviour preserved).
+- `sources[].backend` (os-keyring, optional): `'auto'` or `'secret-service'`.
+
+Plugins are **profile-swap definitions only**. They cannot define `session`, `sessionRun`, env policy, ambient credential scrub rules, or project override hard-stops, and user plugin CLIs are not trusted `mat session start/run` boundaries.
 
 ### 2. Built-in addition — requires mat repo PR
 
