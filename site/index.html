@@ -450,6 +450,57 @@ mat session start codex personal    # independent isolated dir → &quot;persona
 <p><code>mat session run</code> uses the same materialize → env injection → re-capture → cleanup lifecycle without opening a shell. <code>mat</code> selects the built-in executable for <code>&lt;cli&gt;</code> (for example, <code>codex</code>) and passes <code>[cli-args...]</code> directly to it. The <code>--</code> tail is argv for that selected CLI, not an arbitrary shell command. Today this command-scoped boundary is enabled only for built-ins with a known safe run path: Codex, Qwen, Kimi, Crush, Gemini CLI, Claude on Linux, OpenCode safer-run, and Aider partial-run.</p>
 <p>Before a real run, use <code>mat session run &lt;cli&gt; &lt;profile&gt; --check -- [cli-args...]</code> (or <code>--explain</code>) to exercise the <strong>same</strong> support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. Exit code <code>0</code> means the real run would pass preflight, <code>1</code> means a validation blocker was found, and <code>2</code> means usage/parser error. Add <code>--json</code> to that <code>--check</code>/<code>--explain</code> command for an automation-friendly report with blockers, phases, selected executable, profile existence, and exact argv.</p>
 <p>For dashboards and statuslines, <code>mat status --json</code> emits a stable schema-v1 summary of active profiles and sessions. Active profiles may include capture-time identity metadata such as masked account/email fingerprints or allowlisted tier/provider-mode signals; status never parses credential files or keyring entries on demand. <code>mat session list --json</code> emits schema-v1 lifecycle entries (<code>active</code> / <code>orphan</code> / <code>unknown</code>) with owner/child status and root env names only; it never includes session root paths. Mutating session lifecycle commands append best-effort, redacted JSONL events to <code>~/.multi-account-tool/audit.jsonl</code>; persistent audit entries hash profile/session identifiers and redact secret-like strings.</p>
+<h4 id="promptstatusline-snippets">Prompt/statusline snippets</h4>
+<p>Prompt renderers can consume <code>mat status --json</code>, but do not run it uncached on every redraw: the status report may inspect session liveness. The examples below cache for two seconds, fail empty if <code>mat</code> or JSON parsing fails, and are display-only. They call only <code>mat status --json</code>; they do not parse <code>~/.multi-account-tool</code>, credential files, keyrings, <code>mat freshness</code>, or <code>mat doctor</code>.</p>
+<p>Put the shared helper in a file such as <code>~/.config/mat/statusline.zsh</code>:</p>
+<pre><code class="language-zsh">: ${MAT_STATUS_CACHE_TTL:=2}
+: ${MAT_STATUS_CACHE:=&quot;${XDG_CACHE_HOME:-$HOME/.cache}/mat/status.json&quot;}
+
+mat_status_cached() {
+  local now mtime cache_dir tmp
+  cache_dir=&quot;$(dirname &quot;$MAT_STATUS_CACHE&quot;)&quot; || return 0
+  mkdir -p &quot;$cache_dir&quot; 2&gt;/dev/null || return 0
+
+  now=$(date +%s)
+  if [[ -r &quot;$MAT_STATUS_CACHE&quot; ]]; then
+    mtime=$(stat -f %m &quot;$MAT_STATUS_CACHE&quot; 2&gt;/dev/null)
+    if [[ -z &quot;$mtime&quot; || &quot;$mtime&quot; == *[!0-9]* ]]; then
+      mtime=$(stat -c %Y &quot;$MAT_STATUS_CACHE&quot; 2&gt;/dev/null || echo 0)
+    fi
+    if [[ -n &quot;$mtime&quot; &amp;&amp; &quot;$mtime&quot; != *[!0-9]* ]] &amp;&amp; (( now - mtime &lt; MAT_STATUS_CACHE_TTL )); then
+      cat &quot;$MAT_STATUS_CACHE&quot;
+      return 0
+    fi
+  fi
+
+  tmp=&quot;${MAT_STATUS_CACHE}.$$.$RANDOM&quot;
+  if command mat status --json &gt; &quot;$tmp&quot; 2&gt;/dev/null &amp;&amp; mv &quot;$tmp&quot; &quot;$MAT_STATUS_CACHE&quot; 2&gt;/dev/null; then
+    cat &quot;$MAT_STATUS_CACHE&quot;
+  else
+    rm -f &quot;$tmp&quot;
+  fi
+}
+
+mat_statusline() {
+  mat_status_cached | node -e &#39;let s=&quot;&quot;;process.stdin.on(&quot;data&quot;,d=&gt;s+=d);process.stdin.on(&quot;end&quot;,()=&gt;{try{const r=JSON.parse(s||&quot;{}&quot;);const profiles=(r.activeProfiles||[]).map(p=&gt;`${p.cliId}:${p.profileName}`).join(&quot; &quot;);const sessions=r.sessions||{};const warn=(sessions.orphan||sessions.unknown)?`⚠${sessions.orphan||0}/${sessions.unknown||0}`:&quot;&quot;;const out=[profiles,warn].filter(Boolean).join(&quot; &quot;);if(out)process.stdout.write(out);}catch{}});&#39; 2&gt;/dev/null
+}
+</code></pre>
+<p>Use it from zsh <code>RPROMPT</code>:</p>
+<pre><code class="language-zsh">source ~/.config/mat/statusline.zsh
+setopt prompt_subst
+RPROMPT=&#39;$(mat_statusline)&#39;
+</code></pre>
+<p>Use it from tmux:</p>
+<pre><code class="language-tmux">set -g status-right &#39;#(zsh -lc &quot;source ~/.config/mat/statusline.zsh &amp;&amp; mat_statusline&quot;)&#39;
+</code></pre>
+<p>Use it from Starship:</p>
+<pre><code class="language-toml">[custom.mat]
+command = &#39;zsh -lc &quot;source ~/.config/mat/statusline.zsh &amp;&amp; mat_statusline&quot;&#39;
+when = &#39;command -v zsh &gt;/dev/null 2&gt;&amp;1 &amp;&amp; command -v mat &gt;/dev/null 2&gt;&amp;1 &amp;&amp; command -v node &gt;/dev/null 2&gt;&amp;1&#39;
+format = &#39;[$output]($style) &#39;
+style = &#39;cyan&#39;
+</code></pre>
+<p>The default formatter prints short output such as <code>codex:work gemini:personal ⚠1/0</code>, where the warning counts are <code>orphan/unknown</code> sessions. Adjust the Node formatter if you want a different shape.</p>
 <p><strong>Supported CLIs</strong> (those that relocate their <em>credential</em> directory via an env var):</p>
 <div class="table-wrap"><table>
 <thead>
