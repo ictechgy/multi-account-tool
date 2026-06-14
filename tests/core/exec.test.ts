@@ -121,6 +121,11 @@ function asChildProcess(fake: FakeChildProcess): ChildProcess {
   return fake as unknown as ChildProcess;
 }
 
+function restoreEnvVar(name: string, value: string | undefined): void {
+  if (value == null) delete process.env[name];
+  else process.env[name] = value;
+}
+
 /**
  * child_process.spawn 결과 흉내. exit/error 를 비동기로 emit. opts 비면 emit 없음 (수동 제어용).
  * 실제 Node ChildProcess 는 exit 직후 close 도 emit 하므로 fake 도 동일하게 emit —
@@ -159,8 +164,15 @@ function latestSignalListener(sig: NodeJS.Signals): (received: NodeJS.Signals) =
 
 describe('runExec', () => {
   let release: ReturnType<typeof vi.fn>;
+  let savedAmbientEnv: { OPENAI_API_KEY?: string; CODEX_HOME?: string };
 
   beforeEach(() => {
+    savedAmbientEnv = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      CODEX_HOME: process.env.CODEX_HOME
+    };
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.CODEX_HOME;
     vi.clearAllMocks();
     release = vi.fn().mockResolvedValue(undefined);
     mockAcquire.mockResolvedValue(release as () => Promise<void>);
@@ -203,6 +215,8 @@ describe('runExec', () => {
   });
 
   afterEach(() => {
+    restoreEnvVar('OPENAI_API_KEY', savedAmbientEnv.OPENAI_API_KEY);
+    restoreEnvVar('CODEX_HOME', savedAmbientEnv.CODEX_HOME);
     vi.clearAllMocks();
   });
 
@@ -219,6 +233,31 @@ describe('runExec', () => {
     expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
     expect(release).toHaveBeenCalledOnce();
     expect(mockSpawn).toHaveBeenCalledWith('echo', ['hi'], { stdio: 'inherit' });
+  });
+
+  it('ambient env warning 을 stderr 에 출력하되 실행은 계속하고 값은 노출하지 않음', async () => {
+    const oldOpenAi = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-secret-value-must-not-appear';
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    try {
+      const result = await runExec({
+        cliId: 'codex', profileName: 'work', command: 'echo', args: []
+      });
+      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+
+      expect(result.code).toBe(0);
+      expect(stderr).toMatch(/ambient credential\/config warning for codex/);
+      expect(stderr).toMatch(/OPENAI_API_KEY/);
+      expect(stderr).toMatch(/mat support codex/);
+      expect(stderr).not.toContain('sk-secret-value-must-not-appear');
+      expect(mockSpawn).toHaveBeenCalledOnce();
+    } finally {
+      if (oldOpenAi == null) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = oldOpenAi;
+      stderrSpy.mockRestore();
+    }
   });
 
   it('already-active: swap/restore 모두 skip, spawn 만 실행', async () => {

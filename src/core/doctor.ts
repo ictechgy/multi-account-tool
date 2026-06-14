@@ -8,8 +8,8 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
+import { detectAmbientWarnings } from './ambient.js';
 import { getAllCliDefs, getCliDefsWarnings } from './cli-defs.js';
 import { loadConfig } from './config.js';
 import { errorMessage, redactMessage } from './errors.js';
@@ -85,48 +85,8 @@ export interface RunDoctorOptions {
   now?: Date;
 }
 
-interface AmbientRule {
-  envNames?: string[];
-  envPrefixes?: string[];
-  cwdEntries?: string[];
-}
-
 const DOCTOR_SCHEMA_VERSION = 1 as const;
 const SECRET_TOOL_BIN = '/usr/bin/secret-tool';
-
-const AMBIENT_RULES: Record<string, AmbientRule> = {
-  claude: {
-    envNames: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']
-  },
-  codex: {
-    envNames: ['OPENAI_API_KEY', 'CODEX_HOME']
-  },
-  gemini: {
-    envNames: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']
-  },
-  aider: {
-    envPrefixes: ['AIDER_'],
-    cwdEntries: ['.env', '.aider.conf.yml']
-  },
-  kimi: {
-    envNames: ['MOONSHOT_API_KEY', 'KIMI_API_KEY']
-  },
-  qwen: {
-    envNames: ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY'],
-    cwdEntries: ['.qwen', '.env']
-  },
-  crush: {
-    envPrefixes: ['CRUSH_GLOBAL_'],
-    cwdEntries: ['.crush.json', 'crush.json']
-  },
-  opencode: {
-    envNames: ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_DIR', 'OPENCODE_AUTH_CONTENT'],
-    cwdEntries: ['.opencode', 'opencode.json', 'opencode.jsonc']
-  },
-  goose: {
-    envNames: ['GOOSE_DISABLE_KEYRING', 'GOOSE_PROVIDER', 'GOOSE_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']
-  }
-};
 
 function issue(severity: DoctorStatus, code: string, message: string): DoctorIssue {
   return { severity, code, message: redactMessage(message) };
@@ -222,42 +182,9 @@ async function inspectSource(src: Source): Promise<DoctorSourceStatus> {
   }
 }
 
-async function cwdEntryIssue(cliId: string, entry: string, cwd: string): Promise<DoctorIssue | null> {
-  try {
-    const found = await existsNoFollow(join(cwd, entry));
-    if (!found.exists) return null;
-    return issue(
-      'warning',
-      'ambient.cwd',
-      `${cliId}: cwd contains ${entry} (${found.kind ?? 'unknown'}), which may override mat-selected credentials/config`
-    );
-  } catch (err) {
-    return issue('warning', 'ambient.cwd.unreadable', `${cliId}: could not inspect cwd entry ${entry}: ${errorMessage(err)}`);
-  }
-}
-
 async function ambientIssues(cliId: string, env: NodeJS.ProcessEnv, cwd: string): Promise<DoctorIssue[]> {
-  const rules = AMBIENT_RULES[cliId];
-  if (!rules) return [];
-  const issues: DoctorIssue[] = [];
-  const envKeys = Object.keys(env);
-  for (const name of rules.envNames ?? []) {
-    if (env[name] != null) {
-      issues.push(issue('warning', 'ambient.env', `${cliId}: env ${name} is set and may override mat-selected credentials/config`));
-    }
-  }
-  for (const prefix of rules.envPrefixes ?? []) {
-    for (const key of envKeys) {
-      if (key.startsWith(prefix)) {
-        issues.push(issue('warning', 'ambient.env', `${cliId}: env ${key} is set and may override mat-selected credentials/config`));
-      }
-    }
-  }
-  for (const entry of rules.cwdEntries ?? []) {
-    const found = await cwdEntryIssue(cliId, entry, cwd);
-    if (found) issues.push(found);
-  }
-  return issues;
+  const warnings = await detectAmbientWarnings(cliId, { env, cwd });
+  return warnings.map((item) => issue('warning', item.code, item.message));
 }
 
 async function inspectCli(cli: CliDef, activeProfile: string | undefined, env: NodeJS.ProcessEnv, cwd: string): Promise<DoctorCliReport> {

@@ -47,6 +47,24 @@ describe('TUI foreground mutation stale-active guards', () => {
     await tmp.cleanup();
   });
 
+  it('formats ambient warnings into switch confirmation helpers without env values', async () => {
+    const oldOpenAi = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-secret-value-must-not-appear';
+
+    try {
+      const body = await __testHooks.switchConfirmBodyWithAmbient('codex', 'default', 'work');
+      const block = await __testHooks.ambientWarningBlock('codex');
+
+      expect(body).toMatch(/OPENAI_API_KEY/);
+      expect(body).toMatch(/mat support codex/);
+      expect(block).toMatch(/OPENAI_API_KEY/);
+      expect(`${body}\n${block}`).not.toContain('sk-secret-value-must-not-appear');
+    } finally {
+      if (oldOpenAi == null) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = oldOpenAi;
+    }
+  });
+
   it('cancels delete when active changes to the target after confirmation was shown', async () => {
     await createProfile('codex', 'safe');
     await createProfile('codex', 'target');

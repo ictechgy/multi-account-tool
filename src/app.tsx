@@ -20,6 +20,7 @@
 import React, { useEffect, useReducer, useRef } from 'react';
 import { Box, useApp, useInput } from 'ink';
 
+import { detectAmbientWarnings, formatAmbientWarnings } from './core/ambient.js';
 import { findCliDef, getAllCliDefs } from './core/cli-defs.js';
 import { withCliMutationLock } from './core/cli-mutation-lock.js';
 import {
@@ -240,6 +241,7 @@ function renderScreen(
           fromProfile={screen.fromProfile}
           toProfile={screen.toProfile}
           report={screen.report}
+          ambientWarningBlock={screen.ambientWarningBlock}
           showOnboarding={screen.showOnboarding}
           onRecapture={screen.onRecapture}
           onDiscard={screen.onDiscard}
@@ -498,13 +500,40 @@ function onSwitchAction(
     return;
   }
   // 활성 미설정: 단순 confirm 후 swap (백업 불필요).
+  void pushSwitchConfirmWithAmbient(cli, currentActive, to, dispatch, () => void doSwitch(cli, to, dispatch, refresh, currentActive));
+}
+
+async function switchConfirmBodyWithAmbient(cliId: string, currentActive: string | undefined, to: string): Promise<string> {
+  const warnings = await detectAmbientWarnings(cliId);
+  const block = formatAmbientWarnings(warnings, {
+    header: '⚠ Ambient credential/config warning'
+  });
+  const body = formatSwitchConfirmBody(currentActive, to);
+  return block ? `${body}\n\n${block}\nSee: mat support ${cliId}` : body;
+}
+
+async function ambientWarningBlock(cliId: string): Promise<string | undefined> {
+  const warnings = await detectAmbientWarnings(cliId);
+  const block = formatAmbientWarnings(warnings, {
+    header: '⚠ Ambient credential/config warning'
+  });
+  return block ? `${block}\nSee: mat support ${cliId}` : undefined;
+}
+
+async function pushSwitchConfirmWithAmbient(
+  cli: CliDef,
+  currentActive: string | undefined,
+  to: string,
+  dispatch: React.Dispatch<Action>,
+  onYes: () => void
+): Promise<void> {
   dispatch({
     type: 'push',
     screen: {
       kind: 'confirm',
       title: `${cli.name} 프로필 전환`,
-      body: formatSwitchConfirmBody(currentActive, to),
-      onYes: () => void doSwitch(cli, to, dispatch, refresh, currentActive)
+      body: await switchConfirmBodyWithAmbient(cli.id, currentActive, to),
+      onYes
     }
   });
 }
@@ -529,22 +558,23 @@ function checkFreshnessThenSwitch(
     data,
     dispatch,
     initialBusyAction: 'push',
-    onFresh: () => dispatch({
+    onFresh: async () => dispatch({
       type: 'replace',
       screen: {
         kind: 'confirm',
         title: `${cli.name} 프로필 전환`,
-        body: formatSwitchConfirmBody(currentActive, to),
+        body: await switchConfirmBodyWithAmbient(cli.id, currentActive, to),
         onYes: () => void doSwitch(cli, to, dispatch, refresh, currentActive)
       }
     }),
-    buildDialog: (report) => ({
+    buildDialog: async (report) => ({
       kind: 'freshness',
       mode: 'switch',
       cliId: cli.id,
       fromProfile: currentActive,
       toProfile: to,
       report,
+      ambientWarningBlock: await ambientWarningBlock(cli.id),
       showOnboarding: !data.firstFreshnessPromptShown,
       onRecapture: () =>
         void doSwitchWithRecapture(cli, currentActive, to, dispatch, refresh),
@@ -567,9 +597,9 @@ interface FreshnessRoutingOptions {
    */
   initialBusyAction: 'push' | 'replace';
   /** 모든 source fresh — 사용자 액션 불필요. 호출자가 다음 화면 dispatch. */
-  onFresh: () => void;
+  onFresh: () => void | Promise<void>;
   /** rotated/stale 감지 — 호출자가 freshness Screen 객체 빌드. */
-  buildDialog: (report: FreshnessReport) => Screen;
+  buildDialog: (report: FreshnessReport) => Screen | Promise<Screen>;
 }
 
 /**
@@ -605,7 +635,7 @@ async function inspectAndRouteFreshness(opts: FreshnessRoutingOptions): Promise<
     return;
   }
   if (!needsUserAttention(report)) {
-    opts.onFresh();
+    await opts.onFresh();
     return;
   }
   if (hasInflight(report)) {
@@ -622,7 +652,7 @@ async function inspectAndRouteFreshness(opts: FreshnessRoutingOptions): Promise<
     });
     return;
   }
-  opts.dispatch({ type: 'replace', screen: opts.buildDialog(report) });
+  opts.dispatch({ type: 'replace', screen: await opts.buildDialog(report) });
   // dialog 가 표시된 시점에 onboarding 플래그 즉시 in-memory 갱신 (#3 fix).
   // file persist 는 fire-and-forget — 같은 세션 내 두 번째 dialog 에도 panel 미중복.
   opts.dispatch({ type: 'mark-freshness-prompt-shown' });
@@ -1115,10 +1145,12 @@ async function doCapture(
 }
 
 export const __testHooks = {
+  ambientWarningBlock,
   assertActiveProfileUnchanged,
   doCapture,
   doCreateProfile,
   doDelete,
   doSwitch,
-  onFirstImport
+  onFirstImport,
+  switchConfirmBodyWithAmbient
 };
