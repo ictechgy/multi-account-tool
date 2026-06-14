@@ -21,6 +21,7 @@ import { runExec } from './core/exec.js';
 import { handleSession } from './core/session-cli.js';
 import { formatDoctorReport, runDoctor } from './core/doctor.js';
 import { buildCliSupportReport, formatSupportReport } from './core/support.js';
+import { buildStatusReport, formatStatusReport } from './core/status.js';
 import { registerAllBuiltinAdapters } from './core/freshness-adapters/index.js';
 import {
   inspectLiveFreshness,
@@ -37,8 +38,9 @@ const USAGE =
   `  mat session run <cli> <profile> -- [args...]  builtin CLI 를 격리 env 로 직접 실행\n` +
   `  mat session run <cli> <profile> --check|--explain [--json] -- [args...]\n` +
   `                                                 spawn 없는 session run 사전 점검\n` +
-  `  mat session list                              실행 중/orphan 세션 목록\n` +
+  `  mat session list [--json]                     실행 중/orphan 세션 목록\n` +
   `  mat session stop <id>                         세션 종료 또는 orphan 정리\n` +
+  `  mat status [--json]                           active profile/session 상태 요약\n` +
   `  mat freshness [<cli>] [--profile <name>] [--json] [--check-only]\n` +
   `                                                 라이브 vs 활성 프로필 자격증명 비교 (OAuth\n` +
   `                                                 refresh rotation 안전성 점검). cli 미지정 시\n` +
@@ -87,7 +89,11 @@ async function main(): Promise<void> {
     await handleSupport(first, rest);
     return;
   }
-  if (first === 'session' && isSessionRunPreflightRequest(rest)) {
+  if (first === 'status') {
+    await handleStatus(rest);
+    return;
+  }
+  if (first === 'session' && isReadOnlySessionRequest(rest)) {
     await dispatchSession(rest);
     return;
   }
@@ -133,6 +139,11 @@ function isSessionRunPreflightRequest(rest: string[]): boolean {
   return beforeSeparator.includes('--check') || beforeSeparator.includes('--explain');
 }
 
+function isReadOnlySessionRequest(rest: string[]): boolean {
+  if (isSessionRunPreflightRequest(rest)) return true;
+  return rest[0] === 'list' && rest.slice(1).includes('--json');
+}
+
 async function dispatchSession(rest: string[]): Promise<void> {
   const r = await handleSession(rest);
   // signal 종료 시 self-raise (exitCode 무시) — 자식 종료 상태를 부모에 정확히 전파.
@@ -141,6 +152,47 @@ async function dispatchSession(rest: string[]): Promise<void> {
     return;
   }
   process.exit(r.exitCode);
+}
+
+async function handleStatus(rest: string[]): Promise<void> {
+  const parsed = parseStatusArgs(rest);
+  if (parsed.help) {
+    process.stdout.write(
+      `사용법:\n` +
+      `  mat status [--json]\n` +
+      `\n` +
+      `active profile 포인터와 session lifecycle 요약을 read-only 로 출력합니다.\n`
+    );
+    return;
+  }
+  const report = await buildStatusReport();
+  if (parsed.asJson) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    process.stdout.write(formatStatusReport(report));
+  }
+}
+
+interface StatusArgs {
+  asJson: boolean;
+  help: boolean;
+}
+
+function parseStatusArgs(rest: string[]): StatusArgs {
+  const out: StatusArgs = { asJson: false, help: false };
+  for (const arg of rest) {
+    if (arg === '--json') {
+      out.asJson = true;
+      continue;
+    }
+    if (arg === '--help' || arg === '-h') {
+      out.help = true;
+      continue;
+    }
+    process.stderr.write(`mat status: 알 수 없는 옵션: ${arg}\n`);
+    process.exit(2);
+  }
+  return out;
 }
 
 async function handleDoctor(rest: string[]): Promise<void> {

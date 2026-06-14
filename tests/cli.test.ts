@@ -345,3 +345,60 @@ describe('mat session run --check — dry-run preflight', () => {
     await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
+
+describe('mat status/session list observability JSON', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  it('status --json is parseable and does not run legacy data-dir migration or audit writes', async () => {
+    const legacy = join(tmp.home, '.multi-sub-terminal');
+    const current = join(tmp.home, '.multi-account-tool');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(join(legacy, 'sentinel.txt'), 'legacy');
+
+    const result = runMat(['status', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      schemaVersion?: number;
+      activeProfiles?: unknown[];
+      sessions?: { total?: number; active?: number; orphan?: number; unknown?: number };
+    };
+    expect(report.schemaVersion).toBe(1);
+    expect(report.activeProfiles).toEqual([]);
+    expect(report.sessions).toEqual({ total: 0, active: 0, orphan: 0, unknown: 0 });
+    await expect(fs.stat(legacy)).resolves.toBeTruthy();
+    await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('session list --json is parseable and does not run legacy data-dir migration', async () => {
+    const legacy = join(tmp.home, '.multi-sub-terminal');
+    const current = join(tmp.home, '.multi-account-tool');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(join(legacy, 'sentinel.txt'), 'legacy');
+
+    const result = runMat(['session', 'list', '--json'], tmp.home);
+
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.stdout) as { schemaVersion?: number; summary?: { total?: number }; sessions?: unknown[] };
+    expect(report.schemaVersion).toBe(1);
+    expect(report.summary?.total).toBe(0);
+    expect(report.sessions).toEqual([]);
+    await expect(fs.stat(legacy)).resolves.toBeTruthy();
+    await expect(fs.stat(current)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('status unknown option exits 2', () => {
+    const result = runMat(['status', '--bad'], tmp.home);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('mat status: 알 수 없는 옵션');
+  });
+});

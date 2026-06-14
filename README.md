@@ -212,8 +212,9 @@ mat session run <cli> <profile> -- [cli-args...]
                                   # run the builtin CLI executable directly in isolation
 mat session run <cli> <profile> --check|--explain [--json] -- [cli-args...]
                                   # dry-run the exact session-run validators without spawning
-mat session list                    # running / orphan sessions
+mat session list [--json]           # running / orphan sessions
 mat session stop <id>               # terminate a session or reap an orphan
+mat status [--json]                 # active-profile + session summary for dashboards/statuslines
 ```
 
 Unlike `mat exec` (temporal isolation, serialized by a lock), `mat session` gives **true concurrent isolation** — two terminals can use *different* accounts of the same CLI at the same time:
@@ -231,6 +232,8 @@ mat session start codex personal    # independent isolated dir → "personal" ac
 `mat session run` uses the same materialize → env injection → re-capture → cleanup lifecycle, but it does **not** open a shell. Instead, mat chooses the built-in CLI executable for `<cli>` (for example, `codex`) and passes `[cli-args...]` to that executable. The `--` tail is argv for the selected builtin CLI, not an arbitrary command. This framework is enabled only for built-ins with a safe command-scoped boundary today (Codex, Qwen, Kimi, Crush, Gemini CLI, Claude on Linux, OpenCode safer-run, and Aider partial-run).
 
 Use `mat session run <cli> <profile> --check -- [cli-args...]` (or `--explain`) before a real run to exercise the **same** support, profile, executable, Aider, and OpenCode hard-stop validators without spawning the CLI or creating a session directory. It exits `0` when the real run would pass preflight, `1` when a validation blocker is reported, and `2` for usage/parser errors. Add `--json` with `--check`/`--explain` for an automation-friendly report containing blockers, phases, selected executable, profile existence, and the exact argv.
+
+For observability, `mat status --json` emits a stable schema-v1 active-profile/session summary, and `mat session list --json` emits schema-v1 session lifecycle entries (`active` / `orphan` / `unknown`) with owner/child status and root env names only — no session root paths. Mutating session lifecycle commands append best-effort redacted JSONL events to `~/.multi-account-tool/audit.jsonl`; persistent audit entries hash profile/session identifiers and redact secret-like strings.
 
 **Supported CLIs** (those that relocate their *credential* directory via an env var):
 

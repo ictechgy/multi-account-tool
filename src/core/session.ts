@@ -38,6 +38,7 @@ import type { FileHandle } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
+import { appendAuditEventBestEffort } from './audit.js';
 import { findCliDef } from './cli-defs.js';
 import { UsageError, errorMessage } from './errors.js';
 import { writeFileAtomic } from './io-atomic.js';
@@ -1025,7 +1026,7 @@ export async function processStartSignature(pid: number): Promise<string | null>
  * `owner`로 접는 순간 stop 이 무관 프로세스를 kill 한다(H2 가 막으려던 바로 그 결함). 호출부가
  * `unknown` 을 각자 보수적으로(stop=신호·삭제 안 함, reap=보존) 처리하도록 3-state 로 분리한다.
  */
-type OwnerStatus = 'owner' | 'dead-or-reused' | 'unknown';
+export type OwnerStatus = 'owner' | 'dead-or-reused' | 'unknown';
 
 /**
  * pid + 시작 서명으로 프로세스 신원을 판정하는 tri-state 코어. 소유 mat(classifyOwner)과
@@ -1281,6 +1282,28 @@ export interface SessionInfo {
   pid: number;
   startedAt: string;
   alive: boolean;
+}
+
+export type SessionLifecycleStatus = 'active' | 'orphan' | 'unknown';
+
+export interface SessionListEntry {
+  id: string;
+  cli: string;
+  profile: string;
+  startedAt: string;
+  status: SessionLifecycleStatus;
+  ownerStatus: OwnerStatus;
+  childStatus: OwnerStatus;
+  ownerPid: number;
+  childPid?: number;
+  rootEnvs: string[];
+}
+
+export interface SessionListReport {
+  schemaVersion: 1;
+  generatedAt: string;
+  summary: Record<SessionLifecycleStatus | 'total', number>;
+  sessions: SessionListEntry[];
 }
 
 /**
@@ -1556,6 +1579,14 @@ async function runPlannedSession(
     roots: plan.roots.map((r) => ({ env: r.env, dir: r.dir }))
   };
   await writeSessionMeta(plan.id, meta);
+  await appendAuditEventBestEffort({
+    event: 'session.start',
+    cli: plan.cli,
+    profile: plan.profile,
+    sessionId: plan.id,
+    commandKind: target.kind,
+    outcome: 'started'
+  });
 
   const childRef: { current: ChildProcess | null } = { current: null };
   const forwarders = registerSessionForwarders(childRef);
@@ -1594,7 +1625,30 @@ async function runPlannedSession(
       /* best-effort */
     });
 
-    if (spawnError) throw spawnError;
+    if (spawnError) {
+      await appendAuditEventBestEffort({
+        event: 'session.end',
+        cli: plan.cli,
+        profile: plan.profile,
+        sessionId: plan.id,
+        commandKind: target.kind,
+        outcome: 'spawn_error',
+        recaptureFailed: !!recaptureError,
+        error: spawnError
+      });
+      throw spawnError;
+    }
+    await appendAuditEventBestEffort({
+      event: 'session.end',
+      cli: plan.cli,
+      profile: plan.profile,
+      sessionId: plan.id,
+      commandKind: target.kind,
+      outcome: recaptureError ? 'recapture_failed' : 'completed',
+      exitCode: spawnResult!.code,
+      signal: spawnResult!.signal,
+      recaptureFailed: !!recaptureError
+    });
     return { code: spawnResult!.code, signal: spawnResult!.signal, recaptureError };
   } finally {
     forwarders.dispose();
@@ -2819,22 +2873,58 @@ async function listSessionIds(): Promise<string[]> {
   }
 }
 
-/** 실행 중/orphan 세션 목록 (pid liveness 포함). */
-export async function listSessions(): Promise<SessionInfo[]> {
-  const out: SessionInfo[] = [];
+function sessionLifecycleStatus(ownerStatus: OwnerStatus, childStatus: OwnerStatus): SessionLifecycleStatus {
+  if (ownerStatus === 'owner' || childStatus === 'owner') return 'active';
+  if (ownerStatus === 'unknown' || childStatus === 'unknown') return 'unknown';
+  return 'orphan';
+}
+
+function summarizeSessionList(sessions: SessionListEntry[]): SessionListReport['summary'] {
+  const summary: SessionListReport['summary'] = { total: sessions.length, active: 0, orphan: 0, unknown: 0 };
+  for (const session of sessions) summary[session.status] += 1;
+  return summary;
+}
+
+/** 안정 JSON용 read-only 세션 목록 report. 세션을 reap/remove 하지 않는다. */
+export async function buildSessionListReport(): Promise<SessionListReport> {
+  const sessions: SessionListEntry[] = [];
   for (const id of await listSessionIds()) {
     const meta = await readSessionMeta(id);
     if (!meta) continue;
-    out.push({
+    const ownerStatus = await classifyOwner(meta);
+    const childStatus = await classifyChildOwner(meta);
+    sessions.push({
       id: meta.id,
       cli: meta.cli,
       profile: meta.profile,
-      pid: meta.pid,
+      ownerPid: meta.pid,
+      childPid: meta.childPid,
       startedAt: meta.startedAt,
-      alive: isProcessAlive(meta.pid)
+      status: sessionLifecycleStatus(ownerStatus, childStatus),
+      ownerStatus,
+      childStatus,
+      rootEnvs: meta.roots.map((root) => root.env)
     });
   }
-  return out;
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    summary: summarizeSessionList(sessions),
+    sessions
+  };
+}
+
+/** 실행 중/orphan 세션 목록 (pid liveness 포함). */
+export async function listSessions(): Promise<SessionInfo[]> {
+  const report = await buildSessionListReport();
+  return report.sessions.map((session) => ({
+    id: session.id,
+    cli: session.cli,
+    profile: session.profile,
+    pid: session.ownerPid,
+    startedAt: session.startedAt,
+    alive: session.status === 'active'
+  }));
 }
 
 /**
@@ -2851,6 +2941,11 @@ export async function stopSession(id: string): Promise<void> {
     await removeSessionDir(id).catch(() => {
       /* best-effort */
     });
+    await appendAuditEventBestEffort({
+      event: 'session.stop',
+      sessionId: id,
+      outcome: 'removed_missing'
+    });
     return;
   }
   const status = await classifyOwner(meta);
@@ -2860,6 +2955,13 @@ export async function stopSession(id: string): Promise<void> {
     } catch {
       /* 이미 죽었으면 다음 호출의 orphan 정리로 */
     }
+    await appendAuditEventBestEffort({
+      event: 'session.stop',
+      cli: meta.cli,
+      profile: meta.profile,
+      sessionId: meta.id,
+      outcome: 'signaled'
+    });
     return;
   }
   if (status === 'unknown') {
@@ -2868,6 +2970,13 @@ export async function stopSession(id: string): Promise<void> {
       `[mat] 세션 ${sanitizeForStderr(id)} 의 소유 프로세스(pid ${meta.pid})를 확인할 수 없습니다 ` +
         `(프로세스 시작 정보 조회 실패) — 안전을 위해 신호/정리를 생략합니다. 잠시 후 다시 시도하세요.\n`
     );
+    await appendAuditEventBestEffort({
+      event: 'session.stop',
+      cli: meta.cli,
+      profile: meta.profile,
+      sessionId: meta.id,
+      outcome: 'skipped_unknown'
+    });
     return;
   }
   // dead-or-reused 라도 자식 subshell 이 살아있거나(owner) 생존 여부 확정 불가(unknown)면 라이브
@@ -2878,9 +2987,23 @@ export async function stopSession(id: string): Promise<void> {
       `[mat] 세션 ${sanitizeForStderr(id)} 의 자식 프로세스(pid ${meta.childPid}) 생존 여부를 ` +
         `확정할 수 없어 정리를 생략합니다 (라이브 세션 가능성). 자식 종료 후 다시 시도하세요.\n`
     );
+    await appendAuditEventBestEffort({
+      event: 'session.stop',
+      cli: meta.cli,
+      profile: meta.profile,
+      sessionId: meta.id,
+      outcome: 'skipped_unknown'
+    });
     return;
   }
   await removeSessionDir(id); // dead-or-reused (소유 mat·자식 모두 죽음) — 재캡처 없이 정리
+  await appendAuditEventBestEffort({
+    event: 'session.stop',
+    cli: meta.cli,
+    profile: meta.profile,
+    sessionId: meta.id,
+    outcome: 'cleaned'
+  });
 }
 
 /**
@@ -2927,6 +3050,14 @@ export async function reapOrphans(): Promise<string[]> {
       /* best-effort */
     });
     writeReapWarning(id, isUnknown ? 'unknown' : 'dead-or-reused');
+    await appendAuditEventBestEffort({
+      event: 'session.reap',
+      cli: meta.cli,
+      profile: meta.profile,
+      sessionId: meta.id,
+      outcome: 'reaped',
+      reason: isUnknown ? 'unknown_ttl' : 'orphan_ttl'
+    });
     reaped.push(id);
   }
   return reaped;

@@ -53,7 +53,7 @@ import { findCliDef } from '../../src/core/cli-defs.js';
 import { UsageError } from '../../src/core/errors.js';
 import { writeFileAtomic } from '../../src/core/io-atomic.js';
 import { acquireCliLock, acquireRecaptureLock } from '../../src/core/lockfile.js';
-import { sessionDir, sessionsDir } from '../../src/core/paths.js';
+import { auditLogPath, sessionDir, sessionsDir } from '../../src/core/paths.js';
 import {
   commitStagedFile,
   profileExists,
@@ -63,6 +63,7 @@ import {
   writeProfileFile
 } from '../../src/core/profile-store.js';
 import {
+  buildSessionListReport,
   listSessions,
   materializeSession,
   planSession,
@@ -507,6 +508,20 @@ describe('runSession', () => {
     expect(mockStage).toHaveBeenCalledWith('codex', 'work', 'auth.json', 'TOK');
     expect(mockCommit).toHaveBeenCalled();
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('runSession: session lifecycle audit JSONL 을 best-effort 로 기록하고 raw profile/session id 를 남기지 않는다', async () => {
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSession({ cliId: 'codex', profileName: 'work' });
+
+    const raw = await fs.readFile(auditLogPath(), 'utf8');
+    const events = raw.trim().split('\n').map((line) => JSON.parse(line) as { event: string; profileHash?: string; sessionIdHash?: string });
+    expect(events.map((e) => e.event)).toEqual(['session.start', 'session.end']);
+    expect(events.every((e) => e.profileHash?.match(/^<hash:[0-9a-f]{12}>$/))).toBe(true);
+    expect(events.every((e) => e.sessionIdHash?.match(/^<hash:[0-9a-f]{12}>$/))).toBe(true);
+    expect(raw).not.toContain('codex-work-');
+    expect(raw).not.toContain('"profile":"work"');
   });
 
   it('session start child env 는 provider/AWS/GCP credential env 를 상속하지 않고 root env 를 마지막에 주입한다', async () => {
@@ -2522,6 +2537,48 @@ describe('listSessions / stopSession / reapOrphans', () => {
     await fs.writeFile(join(dir, 'session.json'), JSON.stringify({ id, cli: 'codex', profile: 'work', roots: [], ...meta }));
     return dir;
   }
+
+  it('buildSessionListReport: schema v1, tri-state status, root envs only(no absolute dirs), read-only', async () => {
+    const dir = await makeSessionWithMeta('codex-work-report1', {
+      pid: DEAD_PID,
+      startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      roots: [{ env: 'CODEX_HOME', dir: join(tmp.home, 'secret-session-dir') }]
+    });
+
+    const report = await buildSessionListReport();
+
+    expect(report.schemaVersion).toBe(1);
+    expect(report.summary).toMatchObject({ total: 1, orphan: 1, active: 0, unknown: 0 });
+    expect(report.sessions[0]).toMatchObject({
+      id: 'codex-work-report1',
+      cli: 'codex',
+      profile: 'work',
+      status: 'orphan',
+      ownerStatus: 'dead-or-reused',
+      childStatus: 'dead-or-reused',
+      ownerPid: DEAD_PID,
+      rootEnvs: ['CODEX_HOME']
+    });
+    expect(JSON.stringify(report)).not.toContain('secret-session-dir');
+    await expect(fs.access(dir)).resolves.toBeUndefined();
+  });
+
+  it('reapOrphans: reaped session audit event uses hashed session/profile identifiers', async () => {
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const dir = await makeSessionWithMeta('codex-work-audit01', { pid: DEAD_PID, startedAt: old });
+    const oldTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fs.utimes(dir, oldTime, oldTime);
+
+    await expect(reapOrphans()).resolves.toContain('codex-work-audit01');
+
+    const raw = await fs.readFile(auditLogPath(), 'utf8');
+    const event = JSON.parse(raw.trim()) as { event?: string; reason?: string; profileHash?: string; sessionIdHash?: string };
+    expect(event).toMatchObject({ event: 'session.reap', reason: 'orphan_ttl' });
+    expect(event.profileHash).toMatch(/^<hash:[0-9a-f]{12}>$/);
+    expect(event.sessionIdHash).toMatch(/^<hash:[0-9a-f]{12}>$/);
+    expect(raw).not.toContain('codex-work-audit01');
+    expect(raw).not.toContain('"profile":"work"');
+  });
 
   it('stopSession: unknown(서명 조회 실패) → SIGTERM·삭제 안 함, 디렉토리 보존 (#5)', async () => {
     const dir = await makeSessionWithMeta('codex-work-unknwn01', {
