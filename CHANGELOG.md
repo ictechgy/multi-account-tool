@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Antigravity (`agy`) auth-store research note and support metadata now document why product support remains blocked until upstream publishes a stable credential-store, redirect, and recapture contract.
 - Capture-time profile identity metadata for active-profile/status diagnostics. `mat status`, `mat doctor`, and `mat support` now surface only sanitized static identity hints (masked account/email fingerprints, allowlisted mode/tier signals) without parsing credential files or keyring secret entries during read-only diagnostics.
 
 
