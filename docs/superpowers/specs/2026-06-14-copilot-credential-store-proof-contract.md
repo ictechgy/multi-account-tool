@@ -132,7 +132,7 @@ A future probe or upstream-doc PR may use this shape as a review checklist. The 
       "secretValuesObservedByMat": false,
       "rawCredentialStoreOutputCommitted": false,
       "appStateCrossCheck": "matches-redacted-binding | not-run | failed",
-      "ambientTokenPolicy": "not-yet-covered | controlled-by-separate-policy",
+      "ambientTokenPolicy": "not-yet-covered | policy-documented-implementation-pending | controlled-by-implementation",
       "conclusion": "pass | fail | blocked"
     }
   ],
@@ -149,7 +149,7 @@ Minimum acceptance for a future real proof:
 - `perAccountSelector.status` must be `verified` for the target platform.
 - `entryCardinality` must be `one-per-account` or another reviewed non-ambiguous shape.
 - `appStateCrossCheck` must show the credential-store selector can be tied to the explicit app-state binding from `src/core/copilot-app-state.ts`.
-- `ambientTokenPolicy` must be covered before any product flow is unblocked.
+- `ambientTokenPolicy` must be at least `policy-documented-implementation-pending` before design review can proceed, and `controlled-by-implementation` before any product flow is unblocked.
 
 ## Pass/fail matrix
 
@@ -162,7 +162,7 @@ Minimum acceptance for a future real proof:
 | Copilot stores one aggregate token entry for all accounts | Fail / redesign | Current account-scoped source model cannot bind one profile to one account. |
 | Probe transcript contains token values or raw secret-bearing output | Reject evidence | Secret observation violates this contract. |
 | Redacted report shape passes fixture lint only | Not proof | Shape validation is not platform behavior evidence. |
-| Upstream docs or reviewed probe proves per-account selector and cardinality | May proceed to next gate | Still requires Windows decision, app-state write-back policy, and ambient-token policy before product support. |
+| Upstream docs or reviewed probe proves per-account selector and cardinality | May proceed to next gate | Still requires Windows decision, app-state write-back policy, and ambient-token implementation before product support. |
 
 ## Stop conditions
 
@@ -172,7 +172,7 @@ Copilot remains blocked if any of these are true:
 - The per-account selector is absent, ambiguous, or not stable across login/switch/refresh.
 - The proof requires observing token values or committing raw credential-store output.
 - The app-state binding cannot be cross-checked with the credential-store selector.
-- Ambient token precedence is unresolved for the target flow.
+- Ambient token precedence is unresolved or only documented but not implemented for the target product flow.
 - Windows support is claimed without a Windows Credential Manager backend and tests.
 - Any PR text implies product support, completed platform proof, or safe profile swapping before all gates are complete.
 
@@ -192,5 +192,5 @@ Copilot remains blocked if any of these are true:
 2. Human-opt-in macOS/Linux probe design with a separate security review.
 3. ✅ Windows Credential Manager source R&D contract (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`); runtime/backend remains pending.
 4. Windows Credential Manager synthetic CI spike + implementation RALPLAN.
-5. Ambient token policy for normal swap, `mat exec`, and future session flows.
-6. Copilot prototype only after app-state, credential-store, Windows, and ambient-token gates are all resolved.
+5. ✅ Ambient token policy for normal swap, `mat exec`, and future session flows (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
+6. Copilot prototype only after app-state, credential-store, Windows, ambient-token implementation, and env-secret gates are all resolved.

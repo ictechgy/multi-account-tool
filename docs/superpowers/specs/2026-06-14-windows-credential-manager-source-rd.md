@@ -153,7 +153,7 @@ Copilot remains blocked until all of these are true:
 - Windows source backend exists and passes synthetic Windows CI.
 - Copilot’s Windows Credential Manager target/account schema is proven without secrets.
 - Copilot app-state binding remains consistent with the credential-store selector.
-- Ambient-token precedence (`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`) is controlled for the target flow.
+- Ambient-token precedence (`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`) follows `docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md` and is implemented/controlled for the target flow.
 - macOS/Linux proof, Windows proof, app-state write-back policy, and ambient-token policy all pass their gates.
 
 ## Stop conditions
@@ -182,5 +182,5 @@ Keep Windows source implementation blocked if any of these are true:
 2. Windows source implementation RALPLAN.
 3. Windows source implementation PR with synthetic CI tests.
 4. Copilot Windows target/account proof after backend exists.
-5. Ambient token policy.
-6. Copilot prototype only after all platform and ambient-token gates pass.
+5. ✅ Ambient token policy (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
+6. Copilot prototype only after all platform, ambient-token implementation, and env-secret gates pass.
