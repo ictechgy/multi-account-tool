@@ -19,8 +19,10 @@ GitHub Copilot CLI (`copilot`) and Amp (`amp`) remain blocked for builtin `mat` 
 Current code remains intentionally closed:
 
 - `src/core/types.ts` exposes only `file`, `keychain`, and `os-keyring` source types.
-- `src/core/cli-defs-plugin.ts` rejects plugin source types outside that set.
-- `tests/core/env-secret.test.ts` pins rejection of `type: 'env-secret'` declarations.
+- `src/core/cli-defs-plugin.ts` rejects plugin source types outside that set, with an explicit closed parser/runtime diagnostic for `type: 'env-secret'`.
+- `src/core/env-secret.ts` contains internal draft validation and metadata-only refusal helpers for future planning/tests; those helpers are not plugin parser acceptance and do not route through product source operations.
+- The internal synthetic backend remains test-only and must not appear in public docs, runtime UX, or accepted plugin schema as product support.
+- `tests/core/env-secret.test.ts` and `tests/core/cli-defs-plugin.test.ts` pin rejection of `type: 'env-secret'` declarations.
 - `src/core/sources.ts` maps each source to live read/write/exists behavior; env-secret cannot be safely represented by the current string-oriented source operations without a separate runtime contract.
 
 ## Product boundary
@@ -109,8 +111,8 @@ Future code should use a stable typed refusal shape rather than overloading miss
 
 ### Unit
 
-- Schema validation rejects invalid env names, duplicate `saveAs`, duplicate normalized env names, unsupported backend kinds, prohibited fields, unsafe display characters, and any plaintext fallback knob.
-- Parser acceptance is paired with all consumer hard-stops or implemented semantics.
+- Internal draft validation rejects invalid env names, duplicate `saveAs`, duplicate normalized env names, unsupported backend kinds, prohibited fields, unsafe display characters, and any plaintext fallback knob.
+- Future public parser acceptance must keep those checks and pair them with all consumer hard-stops or implemented semantics.
 - The existing negative test that rejects env-secret declarations remains until the actual parser PR intentionally updates it.
 
 ### Integration
@@ -130,7 +132,7 @@ Future code should use a stable typed refusal shape rather than overloading miss
 - Logs, audit events, debug output, docs, PR text, and review artifacts contain metadata and reason codes only.
 - No secret values, token-shaped examples, hashes, fingerprints, prefixes, suffixes, lengths, raw credential-store output, or command output containing secret material.
 
-## Verification for this docs-only PR
+## Verification for closed-parser PRs
 
 - `npm run build:docs`
 - `npx vitest run tests/core/env-secret.test.ts tests/core/cli-defs-plugin.test.ts`
@@ -164,7 +166,7 @@ Keep public env-secret schema/runtime blocked if any of these are true:
 
 ## Follow-ups
 
-1. Public env-secret schema/runtime hard-stop implementation PR based on this plan.
+1. Public env-secret parser plus all-consumer hard-stop PR based on this plan.
 2. Platform backend spikes/RALPLAN for macOS Keychain, Linux Secret Service, Windows Credential Manager, or an external-provider custody model.
 3. Synthetic command-scoped runtime PR only after schema/runtime hard-stops and storage backend selection are approved.
 4. Amp config hard-stop matrix, then Amp prototype.

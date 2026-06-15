@@ -8,6 +8,7 @@ import {
   assertNoDuplicateEnvNames,
   createSyntheticEnvSecretBackend,
   deleteEnvSecret,
+  envSecretRefusal,
   eventForBinding,
   findEnvNameConflicts,
   getEnvSecretMetadata,
@@ -18,9 +19,12 @@ import {
   prepareEnvSecretChildEnv,
   storeEnvSecret,
   updateEnvSecret,
+  validateEnvSecretDraft,
+  validateEnvSecretDrafts,
   validateEnvSecretBinding,
   type EnvSecretBackend,
   type EnvSecretBinding,
+  type EnvSecretDraft,
   type EnvSecretMetadata
 } from '../../src/core/env-secret.js';
 import { validateCliDefRaw } from '../../src/core/cli-defs-plugin.js';
@@ -32,6 +36,14 @@ const binding: EnvSecretBinding = {
   profileName: 'work',
   cliId: 'synthetic-cli',
   envName: 'MAT_TEST_SECRET',
+  backend: { kind: 'synthetic', handle: 'work-handle' },
+  accountKey: 'synthetic-account'
+};
+
+const draft: EnvSecretDraft = {
+  type: 'env-secret',
+  envName: 'MAT_TEST_SECRET',
+  saveAs: 'safe.json',
   backend: { kind: 'synthetic', handle: 'work-handle' },
   accountKey: 'synthetic-account'
 };
@@ -153,6 +165,107 @@ describe('env-secret core', () => {
     expect(() => assertNoDuplicateEnvNames(['TOKEN', 'token'], 'win32')).toThrow(EnvSecretError);
   });
 
+  it('validates internal draft metadata without public parser acceptance', () => {
+    const valid = validateEnvSecretDraft(draft);
+
+    expect(valid).toEqual(draft);
+    assertNoObservedValue(JSON.stringify(valid), SENTINEL);
+  });
+
+  it('rejects unsafe internal draft fields without echoing field data', () => {
+    const secretLikeKey = 'A'.repeat(40);
+    for (const envName of ['', '1BAD', 'BAD-NAME']) {
+      expectSanitizedThrow(() => validateEnvSecretDraft({ ...draft, envName }), 'invalid-env-name');
+    }
+
+    expectSanitizedThrow(
+      () => validateEnvSecretDraft({ ...draft, saveAs: 'bad\u202E.json' }),
+      'invalid-binding'
+    );
+    expectSanitizedThrow(
+      () => validateEnvSecretDraft({ ...draft, backend: { kind: 'synthetic', handle: 'bad\u202Ehandle' } }),
+      'invalid-binding'
+    );
+    expectSanitizedThrow(
+      () => validateEnvSecretDraft({ ...draft, backend: { kind: 'platform', handle: 'safe-handle' } }),
+      'unsupported-backend'
+    );
+
+    for (const field of ['value', 'default', 'fromEnv', 'env', 'path', 'plainText']) {
+      expectSanitizedThrow(
+        () => validateEnvSecretDraft({ ...draft, [field]: 'field-data' }),
+        'prohibited-source-field',
+        'field-data'
+      );
+    }
+
+    expectSanitizedThrow(
+      () => validateEnvSecretDraft({ ...draft, [secretLikeKey]: 'field-data' }),
+      'invalid-source-draft',
+      secretLikeKey,
+      'field-data'
+    );
+  });
+
+  it('rejects duplicate internal draft identities with platform-specific env handling', () => {
+    const secretLikeSaveAs = 'A'.repeat(40);
+
+    expectSanitizedThrow(
+      () =>
+        validateEnvSecretDrafts([
+          { ...draft, saveAs: secretLikeSaveAs },
+          { ...draft, saveAs: secretLikeSaveAs, envName: 'OTHER_SECRET' }
+        ]),
+      'duplicate-save-as',
+      secretLikeSaveAs
+    );
+
+    expectSanitizedThrow(
+      () =>
+        validateEnvSecretDrafts([
+          draft,
+          { ...draft, saveAs: 'other.json', envName: 'mat_test_secret' }
+        ], { platform: 'win32' }),
+      'duplicate-env-name',
+      'MAT_TEST_SECRET',
+      'mat_test_secret'
+    );
+
+    expect(() =>
+      validateEnvSecretDrafts([
+        draft,
+        { ...draft, envName: 'OTHER_SECRET' }
+      ])
+    ).toThrow(EnvSecretError);
+
+    expect(() =>
+      validateEnvSecretDrafts([
+        draft,
+        { ...draft, saveAs: 'other.json', envName: 'mat_test_secret' }
+      ], { platform: 'linux' })
+    ).not.toThrow();
+  });
+
+  it('builds metadata-only refusal for unsupported draft routing', () => {
+    const refusal = envSecretRefusal(draft, { cliId: 'synthetic-cli', profileName: 'work' });
+    const secretLikeAccount = 'A'.repeat(40);
+    const refusalWithAccount = envSecretRefusal({ ...draft, accountKey: secretLikeAccount }, { cliId: 'synthetic-cli' });
+
+    expect(refusal).toEqual({
+      code: 'unsupported-env-secret-source',
+      detail: 'env-secret parser/runtime support is not enabled',
+      metadata: {
+        saveAs: 'safe.json',
+        envName: 'MAT_TEST_SECRET',
+        backendKind: 'synthetic',
+        cliId: 'synthetic-cli',
+        profileName: 'work'
+      }
+    });
+    assertNoObservedValue(JSON.stringify(refusal), SENTINEL, 'work-handle');
+    assertNoObservedValue(JSON.stringify(refusalWithAccount), secretLikeAccount, 'work-handle');
+  });
+
   it('runs synthetic store/load/update/delete lifecycle without exporting values', async () => {
     const backend = createSyntheticEnvSecretBackend();
 
@@ -269,11 +382,13 @@ describe('env-secret core', () => {
     const result = validateCliDefRaw({
       id: 'synthetic-env-secret-cli',
       name: 'Synthetic Env Secret CLI',
-      sources: [{ type: 'env-secret', env: 'MAT_TEST_SECRET', handle: 'work-handle', saveAs: 'secret.json' }]
+      sources: [{ ...draft, saveAs: 'plugin.json' }]
     });
 
     expect(result.def).toBeUndefined();
-    expect(result.error).toContain('type');
+    expect(result.error).toContain('env-secret');
+    expect(result.error).toContain('parser/runtime');
+    expect(result.error).not.toContain('work-handle');
   });
 
   it('keeps env-secret module outside existing product wiring boundaries', async () => {

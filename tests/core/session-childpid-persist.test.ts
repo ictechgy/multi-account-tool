@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CliDef } from '../../src/core/types.js';
 
 const CHILD_PID = 424242; // 임의의 자식 pid — session.json 에 기록되는지 확인용
+const ASYNC_POLL_LIMIT = 10000;
 
 // 자식 pid(CHILD_PID) 의 서명 조회만 지연시킨다(콜백 보관). 부모 pid 등 그 외는 즉시 resolve 해
 // runSession 이 spawn 까지 진행하게 한다 — 모든 ps 를 막으면 부모 pidStart 조회에서 멈춘다.
@@ -118,7 +119,7 @@ describe('recordChildPid — 2단계 persist (childPid 가 ps 전에 기록, #71
     // 2단계(childPidStart)는 자식 서명 조회(ps)가 pending 으로 보류되므로 이 동안 완료될 수 없다 —
     // 따라서 "childPid 있음 + childPidStart 없음" 을 안정적으로 관측할 수 있는 봉인 윈도우가 생긴다.
     let metaDuringPs: Record<string, unknown> | null = null;
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < ASYNC_POLL_LIMIT; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       metaDuringPs = await readOnlySessionMeta();
       if (metaDuringPs && metaDuringPs.childPid != null && pendingChildPsCallbacks.length >= 1) break;
@@ -172,7 +173,7 @@ describe('runSession — exit-before-write race (recordChildPid settle 보장, #
     // recordChildPid 1단계(childPid write) 완료 + 2단계 ps 가 pending 으로 보류될 때까지 흘린다.
     // 이 시점: session.json 에 childPid 있음, childPidStart 없음, 자식 ps 콜백 1개 보류.
     let armed = false;
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < ASYNC_POLL_LIMIT; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       const meta = await readOnlySessionMeta();
       if (meta && meta.childPid != null && pendingChildPsCallbacks.length >= 1) {
@@ -235,7 +236,7 @@ describe('runSession — exit-before-write race (recordChildPid settle 보장, #
 describe('recordChildPid — child exit 후 서명 skip (pid 재사용 방어, #71 round3 Codex HIGH)', () => {
   /** runSession 진행 중 spawn 된 child 가 1단계(childPid) 기록 + 2단계 ps pending 까지 도달할 때까지 흘린다. */
   async function armChildPidPending(): Promise<void> {
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < ASYNC_POLL_LIMIT; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       const meta = await readOnlySessionMeta();
       if (meta && meta.childPid != null && pendingChildPsCallbacks.length >= 1) return;
@@ -284,7 +285,7 @@ describe('recordChildPid — child exit 후 서명 skip (pid 재사용 방어, #
     flushChildPs('Mon Jan  1 00:00:00 2000\n');
 
     let metaWithSig: Record<string, unknown> | null = null;
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < ASYNC_POLL_LIMIT; i++) {
       await new Promise((resolve) => setImmediate(resolve));
       metaWithSig = await readOnlySessionMeta();
       if (metaWithSig && metaWithSig.childPidStart != null) break;

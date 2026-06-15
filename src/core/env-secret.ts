@@ -1,5 +1,27 @@
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const UNSAFE_DISPLAY_RE = /[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u;
+const DRAFT_FIELDS = new Set(['type', 'envName', 'saveAs', 'backend', 'accountKey']);
+const BACKEND_FIELDS = new Set(['kind', 'handle']);
+const DRAFT_DENIED_FIELDS = new Set([
+  'value',
+  'default',
+  'fromEnv',
+  'env',
+  'path',
+  'file',
+  'fallback',
+  'plainText',
+  'plaintext',
+  'secret',
+  'token',
+  'hash',
+  'fingerprint',
+  'prefix',
+  'suffix',
+  'length',
+  'sample',
+  'commandOutput'
+]);
 
 export type EnvSecretBackendKind = 'synthetic';
 export type EnvSecretOperation =
@@ -23,7 +45,10 @@ export type EnvSecretErrorCode =
   | 'backend-failed'
   | 'ambient-conflict'
   | 'empty-secret'
-  | 'invalid-secret-value';
+  | 'invalid-secret-value'
+  | 'invalid-source-draft'
+  | 'prohibited-source-field'
+  | 'duplicate-save-as';
 
 export interface EnvSecretBackendRef {
   kind: EnvSecretBackendKind;
@@ -45,6 +70,37 @@ export interface EnvSecretMetadata {
   backendKind: EnvSecretBackendKind;
   backendHandle: string;
   accountKey?: string;
+}
+
+export interface EnvSecretDraft {
+  type: 'env-secret';
+  envName: string;
+  saveAs: string;
+  backend: EnvSecretBackendRef;
+  accountKey?: string;
+}
+
+export interface EnvSecretDraftListOptions {
+  platform?: EnvSecretPlatform;
+}
+
+export interface EnvSecretRefusalMetadata {
+  saveAs: string;
+  envName: string;
+  backendKind: EnvSecretBackendKind;
+  cliId?: string;
+  profileName?: string;
+}
+
+export interface EnvSecretRefusal {
+  code: 'unsupported-env-secret-source';
+  detail: string;
+  metadata: EnvSecretRefusalMetadata;
+}
+
+export interface EnvSecretRefusalContext {
+  cliId?: string;
+  profileName?: string;
 }
 
 export interface EnvSecretAuditEvent {
@@ -109,6 +165,78 @@ export function validateEnvSecretBinding(input: unknown): EnvSecretBinding {
   }
 
   return binding;
+}
+
+export function validateEnvSecretDraft(input: unknown): EnvSecretDraft {
+  const raw = validateDraftObject(input);
+  rejectDraftFields(raw, DRAFT_FIELDS);
+
+  if (raw.type !== 'env-secret') {
+    throw new EnvSecretError('invalid-source-draft', 'env-secret source draft type is invalid');
+  }
+
+  const draft: EnvSecretDraft = {
+    type: 'env-secret',
+    envName: validateEnvName(raw.envName),
+    saveAs: validateDraftLabel(raw.saveAs, 'saveAs'),
+    backend: validateDraftBackend(raw.backend)
+  };
+
+  if (raw.accountKey !== undefined) {
+    draft.accountKey = validateDraftLabel(raw.accountKey, 'account key');
+  }
+
+  return draft;
+}
+
+export function validateEnvSecretDrafts(input: unknown, options: EnvSecretDraftListOptions = {}): EnvSecretDraft[] {
+  if (!Array.isArray(input)) {
+    throw new EnvSecretError('invalid-source-draft', 'env-secret source drafts must be an array');
+  }
+
+  const platform = options.platform ?? process.platform;
+  const saveAsSeen = new Map<string, string>();
+  const envSeen = new Map<string, string>();
+  const drafts = input.map((entry) => validateEnvSecretDraft(entry));
+
+  for (const draft of drafts) {
+    const previousSaveAs = saveAsSeen.get(draft.saveAs);
+    if (previousSaveAs !== undefined) {
+      throw new EnvSecretError('duplicate-save-as', 'duplicate env-secret saveAs');
+    }
+    saveAsSeen.set(draft.saveAs, draft.saveAs);
+
+    const envKey = normalizeEnvName(draft.envName, platform);
+    const previousEnvName = envSeen.get(envKey);
+    if (previousEnvName !== undefined) {
+      throw new EnvSecretError('duplicate-env-name', 'duplicate environment variable binding');
+    }
+    envSeen.set(envKey, draft.envName);
+  }
+
+  return drafts;
+}
+
+export function envSecretRefusal(draftInput: unknown, context: EnvSecretRefusalContext = {}): EnvSecretRefusal {
+  const draft = validateEnvSecretDraft(draftInput);
+  const metadata: EnvSecretRefusalMetadata = {
+    saveAs: draft.saveAs,
+    envName: draft.envName,
+    backendKind: draft.backend.kind
+  };
+
+  if (context.cliId !== undefined) {
+    metadata.cliId = validateDraftLabel(context.cliId, 'cli id');
+  }
+  if (context.profileName !== undefined) {
+    metadata.profileName = validateDraftLabel(context.profileName, 'profile name');
+  }
+
+  return {
+    code: 'unsupported-env-secret-source',
+    detail: 'env-secret parser/runtime support is not enabled',
+    metadata
+  };
 }
 
 export function validateEnvSecretValue(value: unknown): string {
@@ -359,11 +487,43 @@ function validateBackendRef(input: unknown): EnvSecretBackendRef {
   };
 }
 
+function validateDraftObject(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new EnvSecretError('invalid-source-draft', 'env-secret source draft must be an object');
+  }
+  return input as Record<string, unknown>;
+}
+
+function rejectDraftFields(raw: Record<string, unknown>, allowed: Set<string>): void {
+  for (const field of Object.keys(raw)) {
+    if (DRAFT_DENIED_FIELDS.has(field)) {
+      throw new EnvSecretError('prohibited-source-field', 'env-secret source draft contains a prohibited field');
+    }
+    if (!allowed.has(field)) {
+      throw new EnvSecretError('invalid-source-draft', 'env-secret source draft contains an unsupported field');
+    }
+  }
+}
+
+function validateDraftBackend(input: unknown): EnvSecretBackendRef {
+  const raw = validateDraftObject(input);
+  rejectDraftFields(raw, BACKEND_FIELDS);
+  return validateBackendRef(raw);
+}
+
 function validateEnvName(input: unknown): string {
   if (typeof input !== 'string' || !ENV_NAME_RE.test(input)) {
     throw new EnvSecretError('invalid-env-name', 'environment variable name is invalid');
   }
   return input;
+}
+
+function validateDraftLabel(input: unknown, fieldName: string): string {
+  const value = validateSafeLabel(input, fieldName);
+  if (value.trim() !== value || value.length > 128 || value === '.' || value === '..' || value.includes('/') || value.includes('\\')) {
+    throw new EnvSecretError('invalid-binding', `env-secret ${fieldName} is invalid`);
+  }
+  return value;
 }
 
 function validateSafeLabel(input: unknown, fieldName: string): string {
