@@ -32,6 +32,8 @@ The env-secret command-scoped injection contract defines how a future child proc
 
 This document resolves the storage/UX policy gate. The first implementation follow-up is intentionally internal and synthetic-only; future product env-secret work still needs separate schema, UX, real-backend, and command-runtime PRs with reviewer approval before users can configure or run profile-owned environment credentials.
 
+The public source/schema exposure RALPLAN is now documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`. That plan defines the future schema candidate and consumer hard-stop matrix, but it does not select a storage backend or open plugin/parser acceptance. Storage/backend custody remains a separate gate before any value can be stored or injected.
+
 ## Threat model
 
 ### Assets
@@ -193,8 +195,9 @@ Keep env-secret runtime and Amp/Copilot product support blocked if any of these 
 ## Follow-ups
 
 1. ✅ Internal env-secret runtime/schema/storage primitives with synthetic backend tests (`src/core/env-secret.ts`, `tests/core/env-secret.test.ts`); no product exposure.
-2. Public env-secret source/schema exposure RALPLAN only after the internal contract remains green.
-3. Platform-specific backend spikes for macOS Keychain, Linux Secret Service, and Windows Credential Manager if local custody is chosen.
-4. External-provider RALPLAN if no-local-custody is chosen for a CLI.
-5. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
-6. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.
+2. ✅ Public env-secret source/schema exposure RALPLAN documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`; parser/schema/product runtime remain closed.
+3. Public env-secret schema/runtime hard-stop implementation PR before plugin acceptance or profile UX.
+4. Platform-specific backend spikes for macOS Keychain, Linux Secret Service, and Windows Credential Manager if local custody is chosen.
+5. External-provider RALPLAN if no-local-custody is chosen for a CLI.
+6. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
+7. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.
