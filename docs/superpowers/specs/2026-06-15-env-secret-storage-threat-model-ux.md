@@ -34,7 +34,7 @@ This document resolves the storage/UX policy gate. The first implementation foll
 
 The public source/schema exposure RALPLAN defines the future schema candidate and consumer hard-stop matrix, but it does not open plugin/parser acceptance.
 
-The backend custody selection/proof contract chooses Linux Secret Service as the first platform-native backend spike under metadata-only proof rules; it still does not implement product storage or parser acceptance.
+The backend custody selection/proof contract chooses Linux Secret Service as the first platform-native backend spike under metadata-only proof rules. The internal spike now exists, but it still does not implement public product storage, parser acceptance, profile UX, or command injection.
 
 ## Threat model
 
@@ -95,7 +95,7 @@ Unsupported, locked, denied, or untested backends must fail closed before storag
 | Backend candidate | Status after this PR | Required before implementation |
 | --- | --- | --- |
 | macOS Keychain | Deferred platform-native candidate | Synthetic add/read/update/delete tests, explicit service/account or opaque-handle contract, denied-access failure behavior, no value output, and an argv-free write path or reviewed exception. |
-| Linux Secret Service | First backend spike selected | Synthetic entries, locked/unavailable service failure behavior, no raw secret-bearing command output in artifacts, stable attribute contract, and metadata-only proof report. |
+| Linux Secret Service | Internal proof spike implemented | Synthetic entries, locked/unavailable service failure behavior, no raw secret-bearing command output in artifacts, stable attribute contract, and metadata-only proof report. |
 | Windows Credential Manager | Pending backend | Windows source backend and synthetic CI remain required before any Windows env-secret storage claim. |
 | External provider | Future design only | Provider-specific RALPLAN covering consent, lookup failure, rotation, audit, and no local value custody. |
 | Encrypted profile file | Future design only | Key-management design, recovery and migration policy, encrypted export policy, and negative tests. |
@@ -199,7 +199,7 @@ Keep env-secret runtime and Amp/Copilot product support blocked if any of these 
 1. ✅ Internal env-secret runtime/schema/storage primitives with synthetic backend tests (`src/core/env-secret.ts`, `tests/core/env-secret.test.ts`); no product exposure.
 2. ✅ Public env-secret source/schema exposure RALPLAN documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`; parser/schema/product runtime remain closed.
 3. ✅ Backend custody selection/proof contract documented; Linux Secret Service is the first backend spike, product parser remains closed.
-4. Linux Secret Service backend spike under the custody proof contract.
+4. ✅ Internal Linux Secret Service backend spike under the custody proof contract; product parser remains closed.
 5. Public env-secret schema/runtime hard-stop implementation PR before plugin acceptance or profile UX.
 6. External-provider RALPLAN if no-local-custody is chosen for a CLI.
 7. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.

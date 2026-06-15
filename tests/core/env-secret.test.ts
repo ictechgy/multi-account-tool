@@ -170,6 +170,14 @@ describe('env-secret core', () => {
 
     expect(valid).toEqual(draft);
     assertNoObservedValue(JSON.stringify(valid), SENTINEL);
+
+    const linuxDraft = validateEnvSecretDraft({
+      ...draft,
+      backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+      accountKey: 'linux-account'
+    });
+    expect(linuxDraft.backend.kind).toBe('linux-secret-service');
+    assertNoObservedValue(JSON.stringify(linuxDraft), SENTINEL);
   });
 
   it('rejects unsafe internal draft fields without echoing field data', () => {
