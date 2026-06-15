@@ -121,8 +121,8 @@ Copilot remains blocked if any of these are true:
 
 ## Follow-ups
 
-1. Env-secret source + command-scoped injection design for Copilot/Amp-style CLIs.
+1. ✅ Env-secret source + command-scoped injection design documented in `docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`; runtime/schema/storage implementation remains pending.
 2. Human-opt-in or upstream-doc macOS/Linux Copilot account selector proof.
 3. Windows Credential Manager synthetic CI spike + implementation RALPLAN.
 4. Copilot app-state write-back policy.
-5. Copilot prototype only after app-state, credential-store, Windows, ambient-token, and env-secret gates pass.
+5. Copilot prototype only after app-state, credential-store, Windows, ambient-token runtime, and env-secret runtime gates pass.

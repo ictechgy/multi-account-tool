@@ -92,7 +92,7 @@ Keep both CLIs blocked unless a new RALPLAN verifies all applicable items below.
 
 ### Amp unblock checklist
 
-- Explicit env-secret storage/injection design, including masking, at-rest storage, and `mat exec` recapture/non-recapture semantics.
+- ✅ Env-secret storage/injection design contract documented in `docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`; runtime/schema/storage implementation remains pending.
 - `AMP_API_KEY` injection path that fails closed when conflicting ambient Amp/provider credentials are present.
 - Command-scoped `session run amp` design with a hard-stop policy for `.amp/settings.json{,c}`, `~/.config/amp/settings.json{,c}`, `--settings-file`, `--mcp-config`, MCP headers/env, and workspace overrides.
 - Decision on whether `amp login` local state can be supported; if yes, upstream-documented storage/redirect/recapture contract is required.
@@ -103,11 +103,11 @@ Keep both CLIs blocked unless a new RALPLAN verifies all applicable items below.
 1. **Copilot account-state RALPLAN** — choose the profile identity flow and exact `~/.copilot/config.json` fields to capture.
 2. **Windows Credential Manager source R&D** — add a source type only after a non-secret read/write/delete contract and CI strategy are agreed.
 3. **Copilot prototype** — macOS/Linux first if service/account attributes are proven; Windows only after source backend lands.
-4. **Env-secret profile RALPLAN** — generic source model for command-scoped env injection.
-5. **Amp prototype** — `mat exec` / `mat session run amp` only, with ambient env and config hard-stops.
+4. ✅ **Env-secret command-scoped injection design** — generic source/injection contract documented; runtime/schema/storage implementation remains pending (`docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`).
+5. **Amp prototype** — only after env-secret runtime and Amp config hard-stop matrix; `mat exec` / `mat session run amp` only, with ambient env and config hard-stops.
 
 ## Product state
 
-- Do not add `copilot` or `amp` to `BUILTIN_CLI_DEFS` yet.
+- Do not add `copilot` or `amp` to `BUILTIN_CLI_DEFS` yet; the env-secret design contract is not product support.
 - User plugin definitions can statically describe files/keychains, but a passing `mat plugin validate` report must not be treated as Copilot/Amp security support.
 - `mat session start` should remain unsupported for both until a credential redirect contract exists that is narrower than broad `HOME`/XDG redirection.
