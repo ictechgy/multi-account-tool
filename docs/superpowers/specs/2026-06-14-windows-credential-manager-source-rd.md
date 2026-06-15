@@ -12,14 +12,15 @@ Sources rechecked during this PR:
 
 - Microsoft Learn — `cmdkey`: <https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmdkey>
 - Microsoft Learn — `CredReadW`: <https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credreadw>
-- Microsoft Learn — `CredWriteA`: <https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritea>
+- Microsoft Learn — `CredWriteW`: <https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew>
+- Microsoft Learn — `CredDeleteW`: <https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-creddeletew>
 - Microsoft Learn — Credentials Management API: <https://learn.microsoft.com/en-us/windows/win32/secauthn/credentials-management>
 
 Publicly documented contract relevant to `mat`:
 
 - Windows exposes a Credentials Management API for reading/writing credentials.
-- `CredRead` reads a credential by target name and credential type from the current token/logon session credential set.
-- `CredWrite` creates or modifies a credential in the current token/logon session credential set.
+- `CredReadW` reads a credential by target name and credential type from the current token/logon session credential set.
+- `CredWriteW` creates or modifies a credential in the current token/logon session credential set.
 - `cmdkey` can create, list, and delete stored credentials, including generic credentials.
 
 What is not decided by public docs alone:
@@ -47,7 +48,7 @@ Reasons:
 - Error classification is harder to make precise enough for fail-closed profile swapping.
 - `mat` needs reliable target/type scoping comparable to macOS Keychain `service`/`account` and Linux Secret Service `service`/`account` semantics.
 
-Preferred implementation direction: a small Win32 API bridge/helper around `CredRead`, `CredWrite`, and `CredDelete`, with `CredEnumerate` only if needed for diagnostic/ambiguity handling. The bridge design itself is a future PR.
+Preferred implementation direction: a small Win32 API bridge/helper around `CredReadW`, `CredWriteW`, and `CredDeleteW`, with `CredEnumerate` only if needed for diagnostic/ambiguity handling. The bridge design itself is a future PR.
 
 ## Provisional source shape
 
