@@ -6,6 +6,8 @@ This document is a **RALPLAN-backed design/implementation plan** for a future pu
 
 The purpose is to make the next code PR reviewable before any parser acceptance exists: the future schema shape, identity rules, consumer hard-stops, and verification matrix are defined here, while current product code continues to reject `type: 'env-secret'` declarations.
 
+Backend custody is now separately selected by the companion custody-selection contract: the first backend spike should be Linux Secret Service under metadata-only proof rules. This still does not open parser/schema acceptance.
+
 GitHub Copilot CLI (`copilot`) and Amp (`amp`) remain blocked for builtin `mat` profile-swap, freshness, `mat exec`, `mat session start`, and `mat session run` product support.
 
 ## RALPLAN consensus result
@@ -37,6 +39,7 @@ This plan does **not** add any of the following behavior:
 - Freshness, doctor, preflight, recapture, audit, or masking code.
 - `amp` or `copilot` entries in `BUILTIN_CLI_DEFS`.
 - Platform Keychain, Secret Service, Windows Credential Manager, external-provider, encrypted-file, or plaintext-file backend implementation.
+- Linux Secret Service proof spike implementation; the custody selection is a prerequisite contract only.
 - Real secret values, token-shaped examples, hashes, fingerprints, raw credential-store output, or token-printing helper output.
 
 ## Future source schema candidate
@@ -158,6 +161,7 @@ Keep public env-secret schema/runtime blocked if any of these are true:
 
 - Parser acceptance would land without runtime semantics or tested hard-stops for all `Source` consumers.
 - Storage backend behavior is unspecified, unsupported, untested, or can silently degrade to plaintext.
+- The Linux Secret Service proof contract has not passed, or another backend has not replaced it through a reviewed custody decision.
 - Parent-shell environment capture is treated as profile ownership proof.
 - A token value, token-shaped placeholder, hash, fingerprint, command output, or raw credential-store output is required as proof.
 - `mat exec` or `mat session run` would inject into an arbitrary executable or shell.
@@ -166,8 +170,9 @@ Keep public env-secret schema/runtime blocked if any of these are true:
 
 ## Follow-ups
 
-1. Public env-secret parser plus all-consumer hard-stop PR based on this plan.
-2. Platform backend spikes/RALPLAN for macOS Keychain, Linux Secret Service, Windows Credential Manager, or an external-provider custody model.
-3. Synthetic command-scoped runtime PR only after schema/runtime hard-stops and storage backend selection are approved.
-4. Amp config hard-stop matrix, then Amp prototype.
-5. Copilot platform/app-state/ambient-token integration, then Copilot prototype.
+1. ✅ Backend custody selection/proof contract documented; first code spike is Linux Secret Service, parser remains closed.
+2. Linux Secret Service backend spike under the custody proof contract.
+3. Public env-secret parser plus all-consumer hard-stop PR based on this plan after backend proof.
+4. Synthetic command-scoped runtime PR only after schema/runtime hard-stops and storage backend proof are approved.
+5. Amp config hard-stop matrix, then Amp prototype.
+6. Copilot platform/app-state/ambient-token integration, then Copilot prototype.
