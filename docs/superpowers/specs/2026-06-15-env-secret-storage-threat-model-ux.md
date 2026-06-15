@@ -32,7 +32,9 @@ The env-secret command-scoped injection contract defines how a future child proc
 
 This document resolves the storage/UX policy gate. The first implementation follow-up is intentionally internal and synthetic-only; future product env-secret work still needs separate schema, UX, real-backend, and command-runtime PRs with reviewer approval before users can configure or run profile-owned environment credentials.
 
-The public source/schema exposure RALPLAN is now documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`. That plan defines the future schema candidate and consumer hard-stop matrix, but it does not select a storage backend or open plugin/parser acceptance. Storage/backend custody remains a separate gate before any value can be stored or injected.
+The public source/schema exposure RALPLAN defines the future schema candidate and consumer hard-stop matrix, but it does not open plugin/parser acceptance.
+
+The backend custody selection/proof contract chooses Linux Secret Service as the first platform-native backend spike under metadata-only proof rules; it still does not implement product storage or parser acceptance.
 
 ## Threat model
 
@@ -92,8 +94,8 @@ Unsupported, locked, denied, or untested backends must fail closed before storag
 
 | Backend candidate | Status after this PR | Required before implementation |
 | --- | --- | --- |
-| macOS Keychain | Candidate only | Synthetic add/read/update/delete tests, explicit service/account or opaque-handle contract, denied-access failure behavior, no value output. |
-| Linux Secret Service | Candidate only | Synthetic entries, locked/unavailable service failure behavior, no raw secret-bearing command output in artifacts, stable attribute contract. |
+| macOS Keychain | Deferred platform-native candidate | Synthetic add/read/update/delete tests, explicit service/account or opaque-handle contract, denied-access failure behavior, no value output, and an argv-free write path or reviewed exception. |
+| Linux Secret Service | First backend spike selected | Synthetic entries, locked/unavailable service failure behavior, no raw secret-bearing command output in artifacts, stable attribute contract, and metadata-only proof report. |
 | Windows Credential Manager | Pending backend | Windows source backend and synthetic CI remain required before any Windows env-secret storage claim. |
 | External provider | Future design only | Provider-specific RALPLAN covering consent, lookup failure, rotation, audit, and no local value custody. |
 | Encrypted profile file | Future design only | Key-management design, recovery and migration policy, encrypted export policy, and negative tests. |
@@ -196,8 +198,9 @@ Keep env-secret runtime and Amp/Copilot product support blocked if any of these 
 
 1. ✅ Internal env-secret runtime/schema/storage primitives with synthetic backend tests (`src/core/env-secret.ts`, `tests/core/env-secret.test.ts`); no product exposure.
 2. ✅ Public env-secret source/schema exposure RALPLAN documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`; parser/schema/product runtime remain closed.
-3. Public env-secret schema/runtime hard-stop implementation PR before plugin acceptance or profile UX.
-4. Platform-specific backend spikes for macOS Keychain, Linux Secret Service, and Windows Credential Manager if local custody is chosen.
-5. External-provider RALPLAN if no-local-custody is chosen for a CLI.
-6. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
-7. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.
+3. ✅ Backend custody selection/proof contract documented; Linux Secret Service is the first backend spike, product parser remains closed.
+4. Linux Secret Service backend spike under the custody proof contract.
+5. Public env-secret schema/runtime hard-stop implementation PR before plugin acceptance or profile UX.
+6. External-provider RALPLAN if no-local-custody is chosen for a CLI.
+7. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
+8. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.
