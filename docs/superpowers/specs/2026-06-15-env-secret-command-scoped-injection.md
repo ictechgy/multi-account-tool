@@ -69,6 +69,10 @@ The storage threat model and UX policy gate is documented in `docs/superpowers/s
 
 Unsupported, locked, denied, or untested backends must fail closed before storage or injection. The follow-up internal core now implements synthetic-only primitives and tests, but this injection contract still does not implement product storage or runtime wiring. A later product runtime PR must satisfy the storage/UX gate and must never write, log, hash, diff, fingerprint, or print secret values as evidence.
 
+### Public source/schema plan documented; parser remains closed
+
+The public source/schema exposure RALPLAN is documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`. That plan defines a future `env-secret` source shape and consumer hard-stop matrix, but it intentionally keeps product parser/schema acceptance blocked. A later parser PR must not land as schema-only work: every existing `Source` consumer must either implement correct env-secret behavior or have tested metadata-only refusal semantics in the same PR.
+
 ## Command-scoped injection contract
 
 Future env-secret execution is command-scoped, not shell-scoped.
@@ -222,6 +226,7 @@ Keep env-secret runtime and Copilot/Amp product support blocked if any of these 
 
 1. ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`.
 2. ✅ Internal env-secret core + synthetic backend tests landed in `src/core/env-secret.ts` and `tests/core/env-secret.test.ts`; no public schema/product runtime/real backend.
-3. Public env-secret source/schema RALPLAN before plugin acceptance or profile UX.
-4. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
-5. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.
+3. ✅ Public env-secret source/schema RALPLAN documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`; parser/schema/product runtime remain closed.
+4. Public env-secret schema/runtime hard-stop implementation PR before plugin acceptance or profile UX.
+5. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
+6. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.
