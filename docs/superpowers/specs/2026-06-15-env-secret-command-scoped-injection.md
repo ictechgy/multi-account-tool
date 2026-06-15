@@ -35,11 +35,11 @@ Future implementation PRs must recheck these official docs before coding against
 
 ## Product boundary
 
-This PR documents policy only. It intentionally does **not** add any of the following:
+This policy gate plus the internal synthetic-core follow-up intentionally still do **not** add any of the following product behavior:
 
 - `SourceType` or `Source` union changes.
 - Plugin JSON schema acceptance for env-secret declarations.
-- Profile add/import UI, profile storage, encryption, OS keyring integration, or plaintext profile-file behavior.
+- Profile add/import UI, product profile storage, encryption, OS keyring integration, or plaintext profile-file behavior.
 - `mat exec` or `mat session run` injection behavior.
 - `amp` or `copilot` entries in `BUILTIN_CLI_DEFS`.
 - Freshness, recapture, audit, or masking code.
@@ -58,7 +58,7 @@ A later implementation may introduce a source kind whose job is to bind one prof
 | Intended target | The builtin CLI/flow allowed to receive the env var. Generic shell export is not enough. |
 | Recapture policy | Default is no silent recapture from child environment; any update/rotation flow must be explicit and separately designed. |
 
-### Storage policy gate documented; implementation remains pending
+### Storage policy gate documented; product implementation remains pending
 
 The storage threat model and UX policy gate is documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`. That document ranks future backend acceptability and keeps implementation blocked:
 
@@ -67,7 +67,7 @@ The storage threat model and UX policy gate is documented in `docs/superpowers/s
 3. Encrypted profile-file storage requires a separate key-management design.
 4. Plaintext profile-file storage is blocked by default and cannot be a silent fallback.
 
-Unsupported, locked, denied, or untested backends must fail closed before storage or injection. This injection contract still does not implement storage. A later runtime PR must satisfy the storage/UX gate and must never write, log, hash, diff, fingerprint, or print secret values as evidence.
+Unsupported, locked, denied, or untested backends must fail closed before storage or injection. The follow-up internal core now implements synthetic-only primitives and tests, but this injection contract still does not implement product storage or runtime wiring. A later product runtime PR must satisfy the storage/UX gate and must never write, log, hash, diff, fingerprint, or print secret values as evidence.
 
 ## Command-scoped injection contract
 
@@ -210,17 +210,18 @@ Keep env-secret runtime and Copilot/Amp product support blocked if any of these 
 
 ## Product non-goals
 
-- No `env-secret` source implementation.
+- No public `env-secret` source implementation.
 - No `SourceType` or plugin schema changes.
 - No profile storage migration.
-- No secret read/write/delete behavior.
+- No product secret read/write/delete behavior or real backend custody.
 - No Copilot or Amp builtin support.
 - No `mat exec` or `mat session run` behavior changes.
 - No generated examples containing token-like values.
 
 ## Follow-ups
 
-1. ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`; runtime/schema/storage implementation remains pending.
-2. Env-secret runtime/schema/storage implementation PR with synthetic tests.
-3. Amp command-scoped prototype only after env-secret runtime and Amp config hard-stop matrix.
-4. Copilot prototype only after env-secret runtime plus platform/app-state/ambient-token gates.
+1. ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`.
+2. ✅ Internal env-secret core + synthetic backend tests landed in `src/core/env-secret.ts` and `tests/core/env-secret.test.ts`; no public schema/product runtime/real backend.
+3. Public env-secret source/schema RALPLAN before plugin acceptance or profile UX.
+4. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
+5. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.

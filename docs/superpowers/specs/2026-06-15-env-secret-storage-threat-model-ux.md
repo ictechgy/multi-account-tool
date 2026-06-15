@@ -4,7 +4,7 @@
 
 This document is a **docs-only design gate** for future profile-owned env-secret storage. It defines the storage threat model, user consent UX, backend policy ranking, no-secret evidence rules, and future test obligations that must exist before any env-secret value is stored or injected by `mat`.
 
-This document does not implement storage. It does not enable Amp (`amp`) or GitHub Copilot CLI (`copilot`) product support. It only narrows what a later runtime PR is allowed to propose.
+This document itself is a policy gate. The follow-up internal implementation now adds synthetic-only env-secret primitives in `src/core/env-secret.ts`, but it still does not enable Amp (`amp`) or GitHub Copilot CLI (`copilot`) product support, public schema, real storage backends, or user-facing runtime behavior.
 
 ## RALPLAN consensus result
 
@@ -14,13 +14,13 @@ This document does not implement storage. It does not enable Amp (`amp`) or GitH
 
 ## Product boundary
 
-This PR documents policy only. It intentionally does **not** add any of the following:
+This policy gate plus the internal synthetic-core follow-up intentionally still do **not** add any of the following product behavior:
 
 - New `SourceType` or `Source` union entries.
 - Plugin JSON schema acceptance for environment-secret declarations.
 - Profile add/import UI or TUI flows.
-- Runtime storage, read, write, update, rotate, or delete behavior.
-- Environment injection behavior for `mat exec` or `mat session run`.
+- Product runtime storage, read, write, update, rotate, or delete behavior.
+- Product environment injection behavior for `mat exec` or `mat session run`.
 - Profile migration, backup/export implementation, encryption code, or OS credential-store integration.
 - Freshness, recapture, doctor, audit, or masking code.
 - `amp` or `copilot` entries in `BUILTIN_CLI_DEFS`.
@@ -30,7 +30,7 @@ This PR documents policy only. It intentionally does **not** add any of the foll
 
 The env-secret command-scoped injection contract defines how a future child process may receive a profile-owned environment credential after storage exists. That contract intentionally deferred the at-rest decision.
 
-This document resolves the storage/UX policy gate, but not the implementation gate. After this document, future env-secret work still needs a separate runtime/schema/storage PR with synthetic tests and reviewer approval before any value can be handled.
+This document resolves the storage/UX policy gate. The first implementation follow-up is intentionally internal and synthetic-only; future product env-secret work still needs separate schema, UX, real-backend, and command-runtime PRs with reviewer approval before users can configure or run profile-owned environment credentials.
 
 ## Threat model
 
@@ -188,12 +188,13 @@ Keep env-secret runtime and Amp/Copilot product support blocked if any of these 
 - Secret values, token-shaped examples, hashes, fingerprints, or command output are required as proof.
 - Plaintext storage is used as a default or silent fallback.
 - Delete/rotation/export semantics are unresolved.
-- PR text implies this docs-only contract implemented runtime storage or command injection.
+- PR text implies this policy gate alone implemented product runtime storage or command injection.
 
 ## Follow-ups
 
-1. Env-secret runtime/schema/storage RALPLAN with synthetic backend tests.
-2. Platform-specific backend spikes for macOS Keychain, Linux Secret Service, and Windows Credential Manager if local custody is chosen.
-3. External-provider RALPLAN if no-local-custody is chosen for a CLI.
-4. Amp command-scoped prototype only after env-secret runtime and Amp config hard-stop matrix.
-5. Copilot prototype only after env-secret runtime plus platform/app-state/ambient-token gates.
+1. ✅ Internal env-secret runtime/schema/storage primitives with synthetic backend tests (`src/core/env-secret.ts`, `tests/core/env-secret.test.ts`); no product exposure.
+2. Public env-secret source/schema exposure RALPLAN only after the internal contract remains green.
+3. Platform-specific backend spikes for macOS Keychain, Linux Secret Service, and Windows Credential Manager if local custody is chosen.
+4. External-provider RALPLAN if no-local-custody is chosen for a CLI.
+5. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
+6. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.

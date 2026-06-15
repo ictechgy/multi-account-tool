@@ -92,8 +92,9 @@ Keep both CLIs blocked unless a new RALPLAN verifies all applicable items below.
 
 ### Amp unblock checklist
 
-- ✅ Env-secret command-scoped injection contract documented in `docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`; runtime/schema/storage implementation remains pending.
-- ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`; runtime/schema/storage implementation remains pending.
+- ✅ Env-secret command-scoped injection contract documented in `docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`; product runtime/schema remains pending.
+- ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`; real backend/product storage remains pending.
+- ✅ Internal env-secret core + synthetic backend tests landed in `src/core/env-secret.ts` and `tests/core/env-secret.test.ts`; no Amp product wiring.
 - `AMP_API_KEY` injection path that fails closed when conflicting ambient Amp/provider credentials are present.
 - Command-scoped `session run amp` design with a hard-stop policy for `.amp/settings.json{,c}`, `~/.config/amp/settings.json{,c}`, `--settings-file`, `--mcp-config`, MCP headers/env, and workspace overrides.
 - Decision on whether `amp login` local state can be supported; if yes, upstream-documented storage/redirect/recapture contract is required.
@@ -104,9 +105,10 @@ Keep both CLIs blocked unless a new RALPLAN verifies all applicable items below.
 1. **Copilot account-state RALPLAN** — choose the profile identity flow and exact `~/.copilot/config.json` fields to capture.
 2. **Windows Credential Manager source R&D** — add a source type only after a non-secret read/write/delete contract and CI strategy are agreed.
 3. **Copilot prototype** — macOS/Linux first if service/account attributes are proven; Windows only after source backend lands.
-4. ✅ **Env-secret command-scoped injection design** — generic source/injection contract documented; runtime/schema/storage implementation remains pending (`docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`).
-5. ✅ **Env-secret storage threat model/UX gate** — backend policy ranking, consent UX, export/backup defaults, and fail-closed platform matrix documented; runtime/schema/storage implementation remains pending (`docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`).
-6. **Amp prototype** — only after env-secret runtime and Amp config hard-stop matrix; `mat exec` / `mat session run amp` only, with ambient env and config hard-stops.
+4. ✅ **Env-secret command-scoped injection design** — generic source/injection contract documented; product runtime/schema pending (`docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`).
+5. ✅ **Env-secret storage threat model/UX gate** — backend policy ranking, consent UX, export/backup defaults, and fail-closed platform matrix documented; real backend/product storage pending (`docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`).
+6. ✅ **Internal env-secret core + synthetic backend tests** — `src/core/env-secret.ts` + `tests/core/env-secret.test.ts`; no SourceType/plugin schema/CLI/TUI/Amp wiring.
+7. **Amp prototype** — only after env-secret product runtime and Amp config hard-stop matrix; `mat exec` / `mat session run amp` only, with ambient env and config hard-stops.
 
 ## Product state
 
