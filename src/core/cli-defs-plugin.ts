@@ -60,6 +60,9 @@ interface SourceParseResult {
 /** 단일 source 객체 검증 + 정규화. 실패 시 error 메시지 반환. */
 function parseSource(raw: unknown, idx: number): SourceParseResult {
   if (!isPlainObject(raw)) return { error: `sources[${idx}] 는 객체여야 합니다.` };
+  if (raw.type === 'env-secret') {
+    return { error: `sources[${idx}].type 'env-secret' 는 아직 parser/runtime 지원이 활성화되지 않았습니다.` };
+  }
   if (raw.type !== 'file' && raw.type !== 'keychain' && raw.type !== 'os-keyring') {
     return { error: `sources[${idx}].type 는 'file', 'keychain' 또는 'os-keyring' 이어야 합니다.` };
   }

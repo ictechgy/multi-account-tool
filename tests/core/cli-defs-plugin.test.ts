@@ -132,6 +132,44 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain(expectedKeyword as string);
   });
 
+  it('env-secret source 는 closed parser/runtime diagnostic 으로 거부한다', () => {
+    const r = validateCliDefRaw({
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'synthetic', handle: 'work-handle' }
+      }]
+    });
+
+    expect(r.def).toBeUndefined();
+    expect(r.error).toContain('env-secret');
+    expect(r.error).toContain('parser/runtime');
+    expect(r.error).not.toContain('work-handle');
+
+    const lint = validatePluginDefinition({
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'synthetic', handle: 'work-handle' }
+      }]
+    });
+    expect(lint.def).toBeUndefined();
+    expect(lint.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        code: 'schema_invalid',
+        message: expect.stringContaining('parser/runtime')
+      })
+    ]);
+    expect(lint.diagnostics[0].message).not.toContain('work-handle');
+  });
+
   it('보안 회귀 가드: raw 에 session/sessionRun/warning 이 있어도 결과 def 에 없음 (plugin 은 세션 격리 미수용)', () => {
     // 세션 격리는 빌트인 def 전용이다 — plugin 이 임의 env 를 주입할 수 있게 하면 신뢰 경계가
     // 무너진다(예: 사용자 입력 env 로 자격증명 디렉토리를 임의 위치로 리다이렉트). validateCliDefRaw
@@ -535,6 +573,26 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.defs.map(d => d.id)).toEqual(['ok']);
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]).toContain('bad-id.json');
+  });
+
+  it('on-disk env-secret plugin 은 로드되지 않고 payload 를 누설하지 않는다', async () => {
+    await writePlugin('future-env.json', {
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'synthetic', handle: 'work-handle' }
+      }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.defs).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('env-secret');
+    expect(r.warnings[0]).toContain('parser/runtime');
+    expect(r.warnings[0]).not.toContain('work-handle');
   });
 
   it('plugin 끼리 id 충돌 → 첫 등장만 채택, 후속은 warning + skip', async () => {
