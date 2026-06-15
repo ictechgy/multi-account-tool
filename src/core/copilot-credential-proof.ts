@@ -35,6 +35,7 @@ export type CopilotCredentialProofIssueCode =
   | 'invalid-subject'
   | 'invalid-evidence-kind'
   | 'invalid-observed-at'
+  | 'invalid-notes'
   | 'invalid-platforms'
   | 'duplicate-platform'
   | 'invalid-platform'
@@ -54,6 +55,7 @@ export type CopilotCredentialProofIssueCode =
   | 'inconsistent-fail'
   | 'inconsistent-blocked'
   | 'windows-pass-blocked'
+  | 'unknown-key'
   | 'forbidden-evidence-key'
   | 'token-shaped-value'
   | 'real-label-value';
@@ -158,22 +160,52 @@ const CLAIMED_CONCLUSIONS = new Set<CopilotCredentialProofClaimedConclusion>(['p
 const ALLOWED_SELECTOR_FIELDS = new Set(['acct', 'account', 'redactedSelectorField']);
 const SERVICE_ONLY_SELECTOR_FIELDS = new Set(['service', 'serviceName', 'svc', 'namespace', 'serviceNamespace']);
 const ALLOWED_VALUE_POLICIES = new Set(['not-committed', 'synthetic-only']);
+const ROOT_KEYS = new Set(['schemaVersion', 'subject', 'evidenceKind', 'observedAt', 'platforms', 'notes']);
+const PLATFORM_REPORT_KEYS = new Set([
+  'platform',
+  'serviceName',
+  'serviceNameSource',
+  'perAccountSelector',
+  'entryCardinality',
+  'secretValuesObservedByMat',
+  'rawCredentialStoreOutputCommitted',
+  'appStateCrossCheck',
+  'ambientTokenPolicy',
+  'conclusion'
+]);
+const SELECTOR_KEYS = new Set(['status', 'fieldName', 'valuePolicy']);
+const SAFE_METADATA_NORMALIZED_KEYS = new Set(
+  [...ROOT_KEYS, ...PLATFORM_REPORT_KEYS, ...SELECTOR_KEYS].map((key) => normalizeKey(key))
+);
 const FORBIDDEN_NORMALIZED_KEYS = new Set([
   'securityoutput',
   'secrettooloutput',
   'rawoutput',
+  'rawcredentialstoreoutput',
   'credentialblob',
   'token',
   'accesstoken',
   'refreshtoken',
   'oauthtoken',
   'githubtoken',
+  'tokenhash',
   'secret',
   'password',
   'hash',
   'fingerprint',
   'digest',
-  'sha256'
+  'sha256',
+  'sha256digest',
+  'login',
+  'displaylogin',
+  'organization',
+  'org',
+  'accountid',
+  'stableaccountid',
+  'userid',
+  'username',
+  'accountlabel',
+  'label'
 ]);
 
 const TOKEN_SHAPE_PATTERNS = [
@@ -216,7 +248,29 @@ function isNonEmptyEvidenceValue(value: unknown): boolean {
 
 function isForbiddenEvidenceKey(key: string): boolean {
   const normalized = normalizeKey(key);
-  return FORBIDDEN_NORMALIZED_KEYS.has(normalized) || normalized.endsWith('token');
+  if (SAFE_METADATA_NORMALIZED_KEYS.has(normalized)) return false;
+  return (
+    FORBIDDEN_NORMALIZED_KEYS.has(normalized) ||
+    normalized.includes('token') ||
+    normalized.includes('secret') ||
+    normalized.includes('password') ||
+    normalized.includes('hash') ||
+    normalized.includes('fingerprint') ||
+    normalized.includes('digest') ||
+    normalized.includes('sha256') ||
+    (normalized.includes('raw') && normalized.includes('output')) ||
+    (normalized.includes('credential') && normalized.includes('blob'))
+  );
+}
+
+function safePathSegment(key: string): string {
+  if (tokenShapePresent(key) || realLabelPresent(key)) return '<redacted-key>';
+  if (/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(key)) return key;
+  return '<redacted-key>';
+}
+
+function childPathForKey(path: string, key: string): string {
+  return `${path}.${safePathSegment(key)}`;
 }
 
 function tokenShapePresent(value: string): boolean {
@@ -250,7 +304,9 @@ export function collectCopilotCredentialProofUnsafeEvidence(
   if (!isPlainObject(value)) return findings;
 
   for (const [key, child] of Object.entries(value)) {
-    const childPath = `${path}.${key}`;
+    const childPath = childPathForKey(path, key);
+    if (tokenShapePresent(key)) findings.push({ kind: 'token-shaped-value', path: childPath });
+    if (realLabelPresent(key)) findings.push({ kind: 'real-label-value', path: childPath });
     if (isForbiddenEvidenceKey(key) && isNonEmptyEvidenceValue(child)) {
       findings.push({ kind: 'forbidden-key', path: childPath });
     }
@@ -268,6 +324,19 @@ function unsafeEvidenceIssue(finding: UnsafeEvidenceFinding): CopilotCredentialP
     return issue('real-label-value', finding.path, 'Real-looking account label is present; key path only is reported.');
   }
   return issue('token-shaped-value', finding.path, 'Token-shaped value is present; key path only is reported.');
+}
+
+function validateAllowedKeys(
+  value: JsonObject,
+  allowed: ReadonlySet<string>,
+  path: string,
+  issues: CopilotCredentialProofIssue[]
+): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      issues.push(issue('unknown-key', childPathForKey(path, key), 'Unexpected field in Copilot proof report.'));
+    }
+  }
 }
 
 function validateObservedAt(value: unknown, issues: CopilotCredentialProofIssue[]): void {
@@ -321,6 +390,8 @@ function validateSelector(
     issues.push(issue('invalid-selector', path, 'perAccountSelector must be an object.'));
     return undefined;
   }
+
+  validateAllowedKeys(raw, SELECTOR_KEYS, path, issues);
 
   const status = enumValue(raw.status, SELECTOR_STATUSES, `${path}.status`, 'invalid-selector-status', issues);
   const fieldName = nonEmptyString(raw.fieldName);
@@ -417,8 +488,9 @@ function metadataConclusionFor(
   issues: CopilotCredentialProofIssue[],
   normalized?: CopilotCredentialProofPlatformReport
 ): CopilotCredentialProofMetadataConclusion {
+  if (issues.length > 0) return 'metadata-fail';
   if (platform === 'windows-credential-manager' || claimedConclusion === 'blocked') return 'metadata-blocked';
-  if (claimedConclusion === 'pass' && normalized && passCriteriaMet(normalized) && issues.length === 0) return 'metadata-pass';
+  if (claimedConclusion === 'pass' && normalized && passCriteriaMet(normalized)) return 'metadata-pass';
   return 'metadata-fail';
 }
 
@@ -433,6 +505,8 @@ function validatePlatform(raw: unknown, index: number): CopilotCredentialProofPl
       issues: [issue('invalid-platforms', path, 'Platform report must be an object.')]
     };
   }
+
+  validateAllowedKeys(raw, PLATFORM_REPORT_KEYS, path, issues);
 
   const platform = enumValue(raw.platform, PLATFORMS, `${path}.platform`, 'invalid-platform', issues);
   validateRequiredString(raw.serviceName, SERVICE_NAME, `${path}.serviceName`, 'invalid-service-name', 'serviceName must be copilot-cli.', issues);
@@ -546,7 +620,19 @@ export function validateCopilotCredentialProofReport(raw: string | unknown): Cop
     return invalidResult([issue('invalid-root', '$', 'Copilot proof report root must be an object.')]);
   }
 
-  const issues = collectCopilotCredentialProofUnsafeEvidence(parsed).map(unsafeEvidenceIssue);
+  const unsafeEvidenceIssues = collectCopilotCredentialProofUnsafeEvidence(parsed).map(unsafeEvidenceIssue);
+  const issues = unsafeEvidenceIssues.filter((entry) => !/^\$\.platforms\[\d+\](?:\.|$)/.test(entry.path));
+  const unsafeIssuesByPlatform = new Map<number, CopilotCredentialProofIssue[]>();
+  for (const unsafeIssue of unsafeEvidenceIssues) {
+    const match = unsafeIssue.path.match(/^\$\.platforms\[(\d+)\](?:\.|$)/);
+    if (!match) continue;
+    const index = Number(match[1]);
+    const existing = unsafeIssuesByPlatform.get(index) ?? [];
+    existing.push(unsafeIssue);
+    unsafeIssuesByPlatform.set(index, existing);
+  }
+
+  validateAllowedKeys(parsed, ROOT_KEYS, '$', issues);
 
   if (parsed.schemaVersion !== 1) {
     issues.push(issue('invalid-schema-version', '$.schemaVersion', 'schemaVersion must be 1.'));
@@ -556,6 +642,12 @@ export function validateCopilotCredentialProofReport(raw: string | unknown): Cop
   }
   enumValue(parsed.evidenceKind, EVIDENCE_KINDS, '$.evidenceKind', 'invalid-evidence-kind', issues);
   validateObservedAt(parsed.observedAt, issues);
+  if (
+    parsed.notes !== undefined &&
+    (!Array.isArray(parsed.notes) || parsed.notes.some((entry) => typeof entry !== 'string'))
+  ) {
+    issues.push(issue('invalid-notes', '$.notes', 'notes must be an array of strings when present.'));
+  }
 
   const platformsRaw = parsed.platforms;
   if (!Array.isArray(platformsRaw) || platformsRaw.length === 0) {
@@ -570,7 +662,16 @@ export function validateCopilotCredentialProofReport(raw: string | unknown): Cop
     };
   }
 
-  const platforms = platformsRaw.map((entry, index) => validatePlatform(entry, index));
+  const platforms = platformsRaw.map((entry, index) => {
+    const validation = validatePlatform(entry, index);
+    const unsafeIssues = unsafeIssuesByPlatform.get(index) ?? [];
+    if (unsafeIssues.length === 0) return validation;
+    return {
+      ...validation,
+      metadataConclusion: 'metadata-fail' as const,
+      issues: [...unsafeIssues, ...validation.issues]
+    };
+  });
   const seenPlatforms = new Set<string>();
   for (const platform of platforms) {
     if (platform.platform === 'unknown') continue;

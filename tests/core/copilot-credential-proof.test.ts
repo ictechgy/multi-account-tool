@@ -166,6 +166,7 @@ describe('Copilot credential proof report validator', () => {
     expect(result.ok).toBe(false);
     expect(codesFor(report)).toContain('token-shaped-value');
     expect(serialized).toContain('$.platforms[0].diagnostic');
+    expect(result.platforms[0].metadataConclusion).toBe('metadata-fail');
     expectNoObservedValue(serialized, githubToken);
   });
 
@@ -183,6 +184,60 @@ describe('Copilot credential proof report validator', () => {
     expect(serialized).toContain('$.platforms[0].raw_output');
     expect(serialized).toContain('$.platforms[1].access_token');
     expectNoObservedValue(serialized, rawTranscript, 'synthetic-token-value');
+  });
+
+  it('rejects unknown extra fields including raw output, hash, identity, and organization aliases', () => {
+    const values = [
+      'synthetic raw transcript value',
+      'synthetic token hash',
+      'synthetic digest',
+      'synthetic login',
+      'synthetic organization',
+      'synthetic account id'
+    ];
+    const report = cloneReport((entry) => {
+      const target = entry.platforms[0] as unknown as Record<string, unknown>;
+      target.rawCredentialStoreOutput = values[0];
+      target.tokenHash = values[1];
+      target.sha256Digest = values[2];
+      target.login = values[3];
+      target.organization = values[4];
+      target.accountId = values[5];
+    });
+
+    const result = validateCopilotCredentialProofReport(report);
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(false);
+    expect(codesFor(report)).toContain('unknown-key');
+    expect(codesFor(report)).toContain('forbidden-evidence-key');
+    expect(result.platforms[0].metadataConclusion).toBe('metadata-fail');
+    expect(serialized).toContain('$.platforms[0].rawCredentialStoreOutput');
+    expect(serialized).toContain('$.platforms[0].tokenHash');
+    expect(serialized).toContain('$.platforms[0].sha256Digest');
+    expect(serialized).toContain('$.platforms[0].login');
+    expect(serialized).toContain('$.platforms[0].organization');
+    expect(serialized).toContain('$.platforms[0].accountId');
+    expectNoObservedValue(serialized, ...values);
+  });
+
+  it('redacts unsafe key names in issue paths without echoing the key text', () => {
+    const tokenKey = ['gh', 'p', '_', 'B'.repeat(24)].join('');
+    const realLabelKey = ['person', '@', 'example', '.', 'com'].join('');
+    const report = cloneReport((entry) => {
+      (entry.platforms[0] as unknown as Record<string, unknown>)[tokenKey] = 'synthetic key name evidence';
+      (entry.platforms[1] as unknown as Record<string, unknown>)[realLabelKey] = 'synthetic key name evidence';
+    });
+
+    const result = validateCopilotCredentialProofReport(report);
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(false);
+    expect(codesFor(report)).toContain('token-shaped-value');
+    expect(codesFor(report)).toContain('real-label-value');
+    expect(serialized).toContain('$.platforms[0].<redacted-key>');
+    expect(serialized).toContain('$.platforms[1].<redacted-key>');
+    expectNoObservedValue(serialized, tokenKey, realLabelKey);
+    expect(result.platforms[0].metadataConclusion).toBe('metadata-fail');
+    expect(result.platforms[1].metadataConclusion).toBe('metadata-fail');
   });
 
   it('rejects non-fixture email labels without echoing the label', () => {
@@ -213,6 +268,7 @@ describe('Copilot credential proof report validator', () => {
     expectInvalid({ ...baseReport(), subject: 'other' }, 'invalid-subject');
     expectInvalid({ ...baseReport(), evidenceKind: 'fixture-only' }, 'invalid-evidence-kind');
     expectInvalid({ ...baseReport(), observedAt: '2026-06-15' }, 'invalid-observed-at');
+    expectInvalid({ ...baseReport(), notes: [{ text: 'not allowed' }] }, 'invalid-notes');
     expectInvalid({ ...baseReport(), platforms: [] }, 'invalid-platforms');
 
     const duplicate = cloneReport((entry) => {
