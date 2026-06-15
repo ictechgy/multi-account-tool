@@ -110,7 +110,7 @@ Failing any item keeps Linux Copilot support blocked.
 
 ## Redacted report shape for future probes
 
-A future probe or upstream-doc PR may use this shape as a review checklist. The shape is intentionally descriptive; adding a validator or probe is a separate follow-up.
+A future probe or upstream-doc PR may use this shape as a review checklist. The shape is intentionally descriptive. The 2026-06-15 validator added after this contract is a metadata gate only; adding a real platform probe remains a separate follow-up.
 
 ```json
 {
@@ -120,7 +120,7 @@ A future probe or upstream-doc PR may use this shape as a review checklist. The 
   "observedAt": "2026-06-14T00:00:00.000Z",
   "platforms": [
     {
-      "platform": "darwin-keychain | linux-secret-service",
+      "platform": "darwin-keychain | linux-secret-service | windows-credential-manager",
       "serviceName": "copilot-cli",
       "serviceNameSource": "official-docs",
       "perAccountSelector": {
@@ -142,6 +142,23 @@ A future probe or upstream-doc PR may use this shape as a review checklist. The 
 }
 ```
 
+The validator added in `src/core/copilot-credential-proof.ts` currently accepts only `not-committed` and `synthetic-only` selector value policies. `hash-only-after-review` remains a future RALPLAN/security-review item, not an accepted committed proof policy.
+
+## Redacted proof-report validator (2026-06-15)
+
+`src/core/copilot-credential-proof.ts` validates committed, redacted proof-report metadata before any real probe or product flow exists. It is intentionally pure: no filesystem, process, shell, keyring, Secret Service, Keychain, or Windows Credential Manager access.
+
+Validator scope:
+
+- `proofLevel` is always `metadata-report-only`.
+- `productSupport` is always `blocked`.
+- macOS/Linux `pass` claims must include `serviceName: "copilot-cli"`, a reviewed selector field (`acct`, `account`, or `redactedSelectorField`), value policy `not-committed` or `synthetic-only`, one-entry-per-account cardinality, app-state cross-check, ambient-token policy coverage, and no secret/raw-output flags.
+- Windows `pass` is always rejected until both a Windows backend and Copilot target/account schema are reviewed; Windows may only be represented as blocked metadata.
+- The shared unsafe-evidence scanner rejects token-shaped strings, real-looking non-fixture labels, raw-output fields, secret-like keys, hashes, and fingerprints while reporting key paths only.
+- Tests and fixtures live under `tests/core/copilot-credential-proof.test.ts` and `tests/fixtures/copilot-credential-proof/`.
+
+This validator does **not** prove platform behavior, does **not** read local credential stores, and does **not** unblock Copilot product support.
+
 Minimum acceptance for a future real proof:
 
 - `secretValuesObservedByMat` must be `false`.
@@ -161,7 +178,7 @@ Minimum acceptance for a future real proof:
 | `service=copilot-cli` returns multiple entries without a selector | Fail / blocked | Service-wide lookup risks wrong-account swap or destructive clear. |
 | Copilot stores one aggregate token entry for all accounts | Fail / redesign | Current account-scoped source model cannot bind one profile to one account. |
 | Probe transcript contains token values or raw secret-bearing output | Reject evidence | Secret observation violates this contract. |
-| Redacted report shape passes fixture lint only | Not proof | Shape validation is not platform behavior evidence. |
+| Redacted report validator passes metadata shape only | Not proof | Shape validation is not platform behavior evidence. |
 | Upstream docs or reviewed probe proves per-account selector and cardinality | May proceed to next gate | Still requires Windows decision, app-state write-back policy, and ambient-token implementation before product support. |
 
 ## Stop conditions
@@ -188,9 +205,9 @@ Copilot remains blocked if any of these are true:
 
 ## Next follow-ups
 
-1. Optional redacted probe-report validator after this contract is reviewed.
-2. Human-opt-in macOS/Linux probe design with a separate security review.
+1. ✅ Redacted proof-report validator (`src/core/copilot-credential-proof.ts`) — metadata gate only, not platform proof.
+2. Human-opt-in macOS/Linux probe design with a separate security review remains pending.
 3. ✅ Windows Credential Manager source R&D contract (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`); runtime/backend remains pending.
-4. Windows Credential Manager synthetic CI spike + implementation RALPLAN.
+4. ✅ Windows Credential Manager synthetic CI spike; implementation RALPLAN/backend remains pending.
 5. ✅ Ambient token policy for normal swap, `mat exec`, and future session flows (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
 6. Copilot prototype only after app-state, credential-store, Windows, ambient-token implementation, and env-secret gates are all resolved.
