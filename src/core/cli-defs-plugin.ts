@@ -18,6 +18,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { hasUnsafeDisplayChar } from './display-safety.js';
+import { validatePublicEnvSecretSource } from './env-secret-source.js';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
 import { redactSecretLikeText } from './redaction.js';
 import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from './types.js';
@@ -60,11 +61,8 @@ interface SourceParseResult {
 /** 단일 source 객체 검증 + 정규화. 실패 시 error 메시지 반환. */
 function parseSource(raw: unknown, idx: number): SourceParseResult {
   if (!isPlainObject(raw)) return { error: `sources[${idx}] 는 객체여야 합니다.` };
-  if (raw.type === 'env-secret') {
-    return { error: `sources[${idx}].type 'env-secret' 는 아직 parser/runtime 지원이 활성화되지 않았습니다.` };
-  }
-  if (raw.type !== 'file' && raw.type !== 'keychain' && raw.type !== 'os-keyring') {
-    return { error: `sources[${idx}].type 는 'file', 'keychain' 또는 'os-keyring' 이어야 합니다.` };
+  if (raw.type !== 'file' && raw.type !== 'keychain' && raw.type !== 'os-keyring' && raw.type !== 'env-secret') {
+    return { error: `sources[${idx}].type 는 'file', 'keychain', 'os-keyring' 또는 'env-secret' 이어야 합니다.` };
   }
   if (typeof raw.saveAs !== 'string') return { error: `sources[${idx}].saveAs 는 문자열이어야 합니다.` };
   let safeSaveAs: string;
@@ -72,6 +70,13 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     safeSaveAs = validateProfileFileName(raw.saveAs);
   } catch (err) {
     return { error: `sources[${idx}].saveAs: ${(err as Error).message}` };
+  }
+  if (raw.type === 'env-secret') {
+    try {
+      return { source: validatePublicEnvSecretSource({ ...raw, saveAs: safeSaveAs }) };
+    } catch (err) {
+      return { error: `sources[${idx}].type 'env-secret' schema is invalid or runtime-blocked: ${(err as Error).message}` };
+    }
   }
   if (raw.type === 'file') {
     if (typeof raw.path !== 'string' || raw.path.length === 0) {
@@ -314,6 +319,9 @@ function lintPluginDefinition(raw: unknown, def: CliDef, context: PluginValidati
           sourceIndex: i
         }));
       }
+      continue;
+    }
+    if (source.type === 'env-secret') {
       continue;
     }
     if (source.account == null && isGenericCredentialService(source.service)) {

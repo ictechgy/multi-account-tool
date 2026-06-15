@@ -386,20 +386,38 @@ describe('env-secret core', () => {
     assertNoObservedValue(JSON.stringify(metadataListForBindings([binding])), SENTINEL);
   });
 
-  it('keeps plugin schema rejecting env-secret declarations', () => {
+  it('accepts public env-secret schema only for reviewed backend metadata', () => {
     const result = validateCliDefRaw({
+      id: 'linux-env-secret-cli',
+      name: 'Linux Env Secret CLI',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'plugin.json',
+        backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+        accountKey: 'linux-account'
+      }]
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.def?.sources[0]).toMatchObject({
+      type: 'env-secret',
+      envName: 'MAT_TEST_SECRET',
+      saveAs: 'plugin.json',
+      backend: { kind: 'linux-secret-service' }
+    });
+
+    const synthetic = validateCliDefRaw({
       id: 'synthetic-env-secret-cli',
       name: 'Synthetic Env Secret CLI',
       sources: [{ ...draft, saveAs: 'plugin.json' }]
     });
-
-    expect(result.def).toBeUndefined();
-    expect(result.error).toContain('env-secret');
-    expect(result.error).toContain('parser/runtime');
-    expect(result.error).not.toContain('work-handle');
+    expect(synthetic.def).toBeUndefined();
+    expect(synthetic.error).toContain('env-secret');
+    expect(synthetic.error).not.toContain('work-handle');
   });
 
-  it('keeps env-secret module outside existing product wiring boundaries', async () => {
+  it('keeps public env-secret schema outside product storage/injection wiring', async () => {
     const root = fileURLToPath(new URL('../../', import.meta.url));
     const boundaryFiles = [
       'src/core/sources.ts',
@@ -414,7 +432,7 @@ describe('env-secret core', () => {
 
     for (const file of boundaryFiles) {
       const text = await fs.readFile(`${root}${file}`, 'utf8');
-      expect(text).not.toMatch(/env-secret|envSecret|EnvSecret/);
+      expect(text).not.toMatch(/env-secret-linux-secret-service|createLssEnvBackend|readOsKeyringSerializedStrict|writeOsKeyringSerializedStrict|prepareEnvSecretChildEnv/);
     }
 
     const envSecretText = await fs.readFile(`${root}src/core/env-secret.ts`, 'utf8');

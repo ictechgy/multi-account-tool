@@ -23,13 +23,14 @@
  */
 
 import { findCliDef } from './cli-defs.js';
+import { envSecretSourceMetadata, isEnvSecretSource } from './env-secret-source.js';
 import { UnknownCliError } from './errors.js';
 import { redactSecretLikeMessage } from './freshness-adapters/_shared.js';
 import { readProfileFile } from './profile-store.js';
 import { readSource } from './sources.js';
 
 /** 라이브 vs 저장본 비교 결과의 4-state 분류. */
-export type CompareKind = 'fresh' | 'rotated' | 'stale' | 'inflight';
+export type CompareKind = 'fresh' | 'rotated' | 'stale' | 'inflight' | 'unsupported';
 
 /** `rotated` 결과의 세분화 — kind='rotated' 일 때만 의미. */
 export type RotatedSubtype = 'value-only' | 'meta-only' | 'both';
@@ -325,6 +326,18 @@ export async function inspectLiveFreshness(
   const adapter = adapters.get(cliId);
   const sources: SourceFreshness[] = [];
   for (const src of def.sources) {
+    if (isEnvSecretSource(src)) {
+      const meta = envSecretSourceMetadata(src);
+      sources.push({
+        saveAs: src.saveAs,
+        result: {
+          kind: 'unsupported',
+          confidence: 'high',
+          detail: `${meta.reason}: ${meta.envName}/${meta.backendKind}`
+        }
+      });
+      continue;
+    }
     const stored = await readProfileFile(cliId, profileName, src.saveAs);
     const live = await readSource(src);
     sources.push({ saveAs: src.saveAs, result: compareOne(adapter, src.saveAs, stored, live) });

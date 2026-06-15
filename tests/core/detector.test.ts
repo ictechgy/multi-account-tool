@@ -12,7 +12,7 @@ vi.mock('../../src/core/sources.js', () => ({
   sourceExists: vi.fn()
 }));
 
-import { BUILTIN_CLI_DEFS } from '../../src/core/cli-defs.js';
+import { BUILTIN_CLI_DEFS, resetCliDefCache } from '../../src/core/cli-defs.js';
 import { detectAll } from '../../src/core/detector.js';
 import { sourceExists } from '../../src/core/sources.js';
 import type { Source } from '../../src/core/types.js';
@@ -82,5 +82,38 @@ describe('detectAll', () => {
   it('sourceExists 가 reject 하면 detectAll 도 reject (에러 무시 안 함)', async () => {
     mockSourceExists.mockRejectedValue(new Error('fs unavailable'));
     await expect(detectAll()).rejects.toThrow('fs unavailable');
+  });
+
+  it('env-secret source 는 missing 으로 오분류하지 않고 unsupported metadata 로 제외한다', async () => {
+    mockSourceExists.mockResolvedValue(false);
+    const cli = {
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret' as const,
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'linux-secret-service' as const, handle: 'linux-handle' },
+        accountKey: 'linux-account'
+      }]
+    };
+    BUILTIN_CLI_DEFS.push(cli);
+    resetCliDefCache();
+    try {
+      const results = await detectAll();
+      const env = results.find((r) => r.cli.id === 'future-env');
+      expect(env).toMatchObject({
+        hasLiveCredentials: false,
+        hasAnyLiveCredential: false,
+        present: [],
+        missing: [],
+        unsupported: ['future.json']
+      });
+      expect(results.map((r) => r.cli.id)).toContain('codex');
+      expect(mockSourceExists).not.toHaveBeenCalledWith(cli.sources[0]);
+    } finally {
+      BUILTIN_CLI_DEFS.pop();
+      resetCliDefCache();
+    }
   });
 });

@@ -97,6 +97,38 @@ describe('support registry — support/explain reports', () => {
     expect(JSON.stringify(report)).toMatch(/profile-swap only|profile swap/i);
   });
 
+  it('reports plugin env-secret sources as metadata-only blocked without raw backend/account fields', async () => {
+    const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      join(dir, 'future-env.json'),
+      JSON.stringify({
+        id: 'future-env',
+        name: 'Future Env',
+        sources: [{
+          type: 'env-secret',
+          envName: 'MAT_TEST_SECRET',
+          saveAs: 'future.json',
+          backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+          accountKey: 'linux-account'
+        }]
+      })
+    );
+    resetCliDefCache();
+
+    const report = buildCliSupportReport('future-env');
+    const serialized = JSON.stringify(report);
+
+    expect(report.cli).toMatchObject({ id: 'future-env', builtin: false, kind: 'plugin' });
+    expect(report.capabilities.swap.status).toBe('blocked');
+    expect(report.capabilities.freshness.status).toBe('blocked');
+    expect(report.capabilities.sessionStart.status).toBe('unsupported');
+    expect(report.capabilities.sessionRun.status).toBe('unsupported');
+    expect(report.sources).toEqual([{ type: 'env-secret', saveAs: 'future.json' }]);
+    expect(serialized).not.toContain('linux-handle');
+    expect(serialized).not.toContain('linux-account');
+  });
+
   it('keeps known-blocked ids blocked even if a user plugin uses the same id', async () => {
     const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
     await fs.mkdir(dir, { recursive: true });

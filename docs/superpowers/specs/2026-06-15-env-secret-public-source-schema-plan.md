@@ -2,58 +2,56 @@
 
 ## Summary
 
-This document is a **RALPLAN-backed design/implementation plan** for a future public `env-secret` source/schema. It intentionally does **not** add a `SourceType`, plugin schema acceptance, profile UX, product storage, command injection, built-in CLI support, freshness adapter, or real backend.
+This document is a **RALPLAN-backed design/implementation plan** for a public `env-secret` source/schema. The follow-up implementation now accepts a metadata-only public schema and pairs it with tested runtime hard-stops. It intentionally does **not** add profile UX, product storage, command injection, built-in CLI support, product env-secret injection, or Amp/Copilot support.
 
-The purpose is to make the next code PR reviewable before any parser acceptance exists: the future schema shape, identity rules, consumer hard-stops, and verification matrix are defined here, while current product code continues to reject `type: 'env-secret'` declarations.
+The purpose was to make the code PR reviewable before parser acceptance: the schema shape, identity rules, consumer hard-stops, and verification matrix are defined here. The implementation outcome is parser acceptance for safe metadata only, with existing product operations refusing the source before value handling.
 
-Backend custody is now separately selected by the companion custody-selection contract, and the first internal Linux Secret Service backend spike exists under metadata-only proof rules. This still does not open parser/schema acceptance.
+Backend custody is separately selected by the companion custody-selection contract, and the first internal Linux Secret Service backend spike exists under metadata-only proof rules. The public schema exposes only the `linux-secret-service` backend kind and still does not open product storage or injection.
 
 GitHub Copilot CLI (`copilot`) and Amp (`amp`) remain blocked for builtin `mat` profile-swap, freshness, `mat exec`, `mat session start`, and `mat session run` product support.
 
 ## RALPLAN consensus result
 
-- Planner decision: choose a docs-only public schema plan now; do not expose plugin schema until every `Source` consumer has tested env-secret semantics or tested metadata-only hard-stops.
-- Architect R1 review: **APPROVE** — docs-only is architecturally justified because `Source` currently feeds live read/write/exists paths; accepting schema now would create a product surface before custody and runtime semantics exist.
-- Critic R1 review: **APPROVE** — principles, alternatives, pre-mortem, test plan, and verification are concrete; keep parser/schema boundaries explicitly rejected in this PR.
+- Planner decision for the plan phase: choose a docs-first public schema plan; do not expose plugin schema until every `Source` consumer has tested env-secret semantics or tested metadata-only hard-stops.
+- Architect R1 review: **APPROVE** — the docs-first gate was architecturally justified because `Source` feeds live read/write/exists paths; accepting schema without consumer behavior would create a product surface before custody and runtime semantics exist.
+- Critic R1 review: **APPROVE** — principles, alternatives, pre-mortem, test plan, and verification are concrete.
+- Follow-up implementation decision: expose parser/schema only with all-consumer metadata-only hard-stops; do not imply product runtime support.
 
 ## Current code boundary
 
-Current code remains intentionally closed:
+Current code accepts `env-secret` as safe metadata only:
 
-- `src/core/types.ts` exposes only `file`, `keychain`, and `os-keyring` source types.
-- `src/core/cli-defs-plugin.ts` rejects plugin source types outside that set, with an explicit closed parser/runtime diagnostic for `type: 'env-secret'`.
-- `src/core/env-secret.ts` contains internal draft validation and metadata-only refusal helpers for future planning/tests; those helpers are not plugin parser acceptance and do not route through product source operations.
-- The internal synthetic backend remains test-only and must not appear in public docs, runtime UX, or accepted plugin schema as product support.
-- `tests/core/env-secret.test.ts` and `tests/core/cli-defs-plugin.test.ts` pin rejection of `type: 'env-secret'` declarations.
-- `src/core/sources.ts` maps each source to live read/write/exists behavior; env-secret cannot be safely represented by the current string-oriented source operations without a separate runtime contract.
+- `src/core/types.ts` includes `EnvSecretSource` in the public `Source` union.
+- `src/core/cli-defs-plugin.ts` accepts plugin `type: 'env-secret'` only after draft validation, `accountKey` presence, and public backend validation.
+- Public backend acceptance is limited to `backend.kind: 'linux-secret-service'`; the internal `synthetic` backend remains test-only and is rejected by the plugin parser.
+- `src/core/env-secret-source.ts` centralizes safe metadata, validation, and typed `unsupported-env-secret-source` refusals.
+- `src/core/sources.ts`, `src/core/detector.ts`, `src/core/freshness.ts`, `src/core/doctor.ts`, `src/core/switcher.ts`, `src/core/exec.ts`, `src/core/session.ts`, and `src/core/support.ts` either throw a sanitized typed refusal or report metadata-only blocked/not-checked/unsupported status. Detector returns per-CLI `unsupported` metadata so one env-secret plugin does not break unrelated first-import detection.
+- Tests pin public schema acceptance, synthetic backend rejection, raw handle/account redaction, and hard-stops across source, detector, freshness, doctor, snapshot/restore/switch, session, and support surfaces.
 
 ## Product boundary
 
-This plan does **not** add any of the following behavior:
+This implementation does **not** add any of the following behavior:
 
-- `SourceType` or `Source` union changes.
-- Plugin JSON schema acceptance for `env-secret` declarations.
 - Profile add/import/update/delete/rotate/export/backup UX.
 - Product storage, read, write, update, rotate, delete, or metadata-list behavior.
 - Product environment injection for `mat exec` or `mat session run`.
-- Freshness, doctor, preflight, recapture, audit, or masking code.
+- Freshness value comparison, recapture, audit, or masking code for env-secret values.
 - `amp` or `copilot` entries in `BUILTIN_CLI_DEFS`.
-- Platform Keychain, Secret Service, Windows Credential Manager, external-provider, encrypted-file, or plaintext-file backend implementation.
-- Linux Secret Service proof spike implementation; the custody selection is a prerequisite contract only.
+- Platform Keychain, Windows Credential Manager, external-provider, encrypted-file, or plaintext-file product backend implementation.
 - Real secret values, token-shaped examples, hashes, fingerprints, raw credential-store output, or token-printing helper output.
 
-## Future source schema candidate
+## Public source schema
 
-A future implementation may introduce a distinct public source kind with the following shape. This table is normative for the next implementation plan but remains non-product until a code PR implements validation and hard-stops.
+The public metadata-only source kind has the following shape. It is non-product for value custody/injection until a later reviewed runtime PR replaces hard-stops.
 
-| Field | Future requirement |
+| Field | Requirement |
 | --- | --- |
 | `type` | Literal `env-secret`; it must not be an alias for `file`, `keychain`, or `os-keyring`. |
 | `envName` | Canonical environment variable name. It must satisfy the internal env-name rules and is metadata, not proof of ownership. |
 | `saveAs` | Stable source identity/reporting key. For env-secret it is **not** a profile file containing a value. |
-| `backend.kind` | Only explicitly implemented backend kinds are allowed. Public schema must not expose test-only synthetic storage unless a future PR makes that an explicit reviewed decision. |
+| `backend.kind` | Only `linux-secret-service` is public today. Public schema must not expose test-only synthetic storage unless a future PR makes that an explicit reviewed decision. |
 | `backend.handle` | Opaque storage reference. It is not a value, account proof, hash, or fingerprint. |
-| `accountKey` | Optional metadata for upstream account binding. It must never contain secret material and cannot prove ownership by itself. |
+| `accountKey` | Required metadata for upstream account binding. It must never contain secret material and cannot prove ownership by itself. |
 
 ### Prohibited fields
 
@@ -69,7 +67,7 @@ The public schema must reject any field that would embed or imply secret materia
 
 ## Identity and uniqueness rules
 
-Future code must treat identity as a composition of safe metadata, not as a value observation:
+Code must treat identity as a composition of safe metadata, not as a value observation:
 
 - `saveAs` remains the report/profile-source identity used by existing source arrays and diagnostics.
 - `(cliId, profileName, envName, accountKey?)` identifies the profile-owned child-environment binding.
@@ -80,43 +78,43 @@ Future code must treat identity as a composition of safe metadata, not as a valu
 
 ## No schema-only PR rule
 
-A future public parser/schema PR must not land by itself. It must include, in the same PR, one of these reviewed outcomes for every existing `Source` consumer:
+The public parser/schema PR must not land by itself. It must include, in the same PR, one of these reviewed outcomes for every existing `Source` consumer:
 
 1. Correct env-secret behavior for that consumer, or
 2. A tested metadata-only hard-stop/refusal result.
 
-A parser that accepts `type: 'env-secret'` while detector, freshness, switch, snapshot, restore, `mat exec`, or `mat session run` still treat it as ordinary missing/stale credentials is unsafe and must be rejected.
+This implementation chooses option 2 everywhere: a parser that accepts `type: 'env-secret'` while detector, freshness, switch, snapshot, restore, `mat exec`, or `mat session run` still treat it as ordinary missing/stale credentials is unsafe and must be rejected.
 
-## Future runtime consumer matrix
+## Runtime consumer matrix
 
-| Consumer | Required future behavior before schema acceptance |
+| Consumer | Current behavior |
 | --- | --- |
-| `readSource` / `writeSource` | Must not read or write env-secret values through the existing string serialization path. If unsupported, throw a sanitized typed refusal before value handling. |
-| `sourceExists` / detector | Must distinguish an unsupported env-secret source from ordinary missing credentials. A plain boolean `false` is insufficient because it looks recoverable. |
-| Freshness | Must report metadata and a stable reason code, not `fresh`, `stale`, value-diff, hash, fingerprint, or live comparison. |
-| Doctor/preflight | May report presence/absence, backend kind, env name, profile, CLI, and reason code only. |
-| Snapshot/restore/switch | Must hard-stop until at-rest backend custody and explicit profile binding are implemented. |
+| `readSource` / `writeSource` | Throws sanitized typed refusal before value handling. |
+| `sourceExists` / detector | `sourceExists` throws sanitized typed refusal; detector reports per-CLI `unsupported` metadata instead of reporting ordinary missing credentials or failing unrelated CLIs. |
+| Freshness | Reports `unsupported` with stable reason metadata, not `fresh`, `stale`, value-diff, hash, fingerprint, or live comparison. |
+| Doctor/support/preflight | Reports safe metadata-only blocked/not-checked/unsupported status. |
+| Snapshot/restore/switch | Hard-stops until at-rest backend custody and explicit profile binding are implemented. |
 | Profile export/backup | Must exclude values by default and include only metadata/relink requirements unless a separate encrypted-export design is approved. |
-| `mat exec` | May inject only after storage, scrub, masking, audit, and CLI-specific hard-stop tests pass. |
-| `mat session run` | Same as `mat exec`, plus existing command-scoped session invariants. |
-| `mat session start` | Out of scope; a long-lived shell cannot preserve the env-secret ownership claim. |
+| `mat exec` | Explicitly blocks before lock/switch/spawn, including already-active no-op swap paths; injection requires later storage, scrub, masking, audit, and CLI-specific hard-stop tests. |
+| `mat session run` | Blocks in session planning/preflight; injection requires later `mat exec`-equivalent runtime plus command-scoped session invariants. |
+| `mat session start` | Blocks in session planning; a long-lived shell remains out of scope for env-secret ownership claims. |
 
 ### Typed refusal shape
 
-Future code should use a stable typed refusal shape rather than overloading missing/stale states. At minimum it should include:
+Code uses a stable typed refusal shape rather than overloading missing/stale states. At minimum it should include:
 
 - a kind/code such as `unsupported-env-secret-source`,
 - safe metadata (`saveAs`, `envName`, `cliId`, `profileName` when available, backend kind),
 - a sanitized human detail,
 - no value, hash, fingerprint, command output, or token-shaped sample.
 
-## Future implementation test requirements
+## Implementation test requirements
 
 ### Unit
 
 - Internal draft validation rejects invalid env names, duplicate `saveAs`, duplicate normalized env names, unsupported backend kinds, prohibited fields, unsafe display characters, and any plaintext fallback knob.
-- Future public parser acceptance must keep those checks and pair them with all consumer hard-stops or implemented semantics.
-- The existing negative test that rejects env-secret declarations remains until the actual parser PR intentionally updates it.
+- Public parser acceptance keeps those checks and pairs them with all consumer hard-stops or implemented semantics.
+- Tests now assert public `linux-secret-service` schema acceptance and continued rejection of internal `synthetic`.
 
 ### Integration
 
@@ -135,24 +133,13 @@ Future code should use a stable typed refusal shape rather than overloading miss
 - Logs, audit events, debug output, docs, PR text, and review artifacts contain metadata and reason codes only.
 - No secret values, token-shaped examples, hashes, fingerprints, prefixes, suffixes, lengths, raw credential-store output, or command output containing secret material.
 
-## Verification for closed-parser PRs
+## Verification for this implementation PR
 
 - `npm run build:docs`
-- `npx vitest run tests/core/env-secret.test.ts tests/core/cli-defs-plugin.test.ts`
+- `npx vitest run tests/core/cli-defs-plugin.test.ts tests/core/env-secret.test.ts tests/core/sources.test.ts tests/core/detector.test.ts tests/core/freshness.test.ts tests/core/doctor.test.ts tests/core/switcher.test.ts tests/core/session.test.ts tests/core/support.test.ts tests/core/exec.test.ts`
 - `npm run typecheck`
 - `npm test`
-- Static scan proving code-level product boundaries remain closed:
-  - `src/core/types.ts`
-  - `src/core/cli-defs-plugin.ts`
-  - `src/core/sources.ts`
-  - `src/core/switcher.ts`
-  - `src/core/exec.ts`
-  - `src/core/session.ts`
-  - `src/core/session-cli.ts`
-  - `src/cli.tsx`
-  - `src/app.tsx`
-  - `src/core/cli-defs.ts`
-- Static scan proving `type: 'env-secret'` appears only in docs/spec planning or the existing negative test, not in source acceptance.
+- Static scan proving product support remains closed: no builtin `env-secret` CLI, no Amp/Copilot wiring, no command injection, no profile value storage, and no strict backend helper calls from product flows.
 - Token-shaped addition scan over docs and roadmap changes.
 
 ## Stop conditions
@@ -170,9 +157,9 @@ Keep public env-secret schema/runtime blocked if any of these are true:
 
 ## Follow-ups
 
-1. ✅ Backend custody selection/proof contract documented; first code spike is Linux Secret Service, parser remains closed.
-2. ✅ Internal Linux Secret Service backend spike under the custody proof contract; parser remains closed.
-3. Public env-secret parser plus all-consumer hard-stop PR based on this plan after backend proof.
+1. ✅ Backend custody selection/proof contract documented; first code spike is Linux Secret Service.
+2. ✅ Internal Linux Secret Service backend spike under the custody proof contract, completed before public parser opening.
+3. ✅ Public env-secret parser plus all-consumer metadata-only hard-stop PR based on this plan.
 4. Synthetic command-scoped runtime PR only after schema/runtime hard-stops and storage backend proof are approved.
 5. Amp config hard-stop matrix, then Amp prototype.
 6. Copilot platform/app-state/ambient-token integration, then Copilot prototype.

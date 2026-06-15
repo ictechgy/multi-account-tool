@@ -240,6 +240,37 @@ describe('doctor — read-only safety report', () => {
     expect(serialized).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
   });
 
+  it('reports env-secret sources as metadata-only without probing backend or leaking bindings', async () => {
+    mocks.getAllCliDefs.mockReturnValue([
+      {
+        id: 'future-env',
+        name: 'Future Env',
+        sources: [{
+          type: 'env-secret',
+          envName: 'MAT_TEST_SECRET',
+          saveAs: 'future.json',
+          backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+          accountKey: 'linux-account'
+        }]
+      }
+    ]);
+
+    const report = await runDoctor({ cwd: tmp.home, env: {}, now: new Date('2026-06-14T00:00:00Z') });
+    const serialized = JSON.stringify(report);
+
+    expect(report.clis[0].sources[0]).toMatchObject({
+      saveAs: 'future.json',
+      type: 'env-secret',
+      status: 'not-checked',
+      detail: expect.stringContaining('unsupported-env-secret-source')
+    });
+    expect(report.clis[0].sources[0].detail).toContain('MAT_TEST_SECRET/linux-secret-service');
+    expect(report.clis[0].issues.map((i) => i.code)).toContain('source.not-checked');
+    expect(mocks.sourceExists).not.toHaveBeenCalled();
+    expect(serialized).not.toContain('linux-handle');
+    expect(serialized).not.toContain('linux-account');
+  });
+
   it('formats a concise human report', async () => {
     mocks.getAllCliDefs.mockReturnValue([
       { id: 'aider', name: 'Aider', sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }] }

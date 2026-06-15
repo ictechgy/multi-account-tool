@@ -106,6 +106,18 @@ const FAKE_CLI_DEF = {
   sources: []
 } satisfies CliDef;
 
+const ENV_SECRET_CLI_DEF = {
+  id: 'future-env',
+  name: 'Future Env (fixture)',
+  sources: [{
+    type: 'env-secret',
+    envName: 'MAT_TEST_SECRET',
+    saveAs: 'future.json',
+    backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+    accountKey: 'linux-account'
+  }]
+} satisfies CliDef;
+
 /** runExec 가 사용하는 ChildProcess 필드만 흉내내는 fake. 다른 필드는 의도적으로 없음. */
 type FakeChildProcess = EventEmitter & {
   exitCode: number | null;
@@ -164,15 +176,17 @@ function latestSignalListener(sig: NodeJS.Signals): (received: NodeJS.Signals) =
 
 describe('runExec', () => {
   let release: ReturnType<typeof vi.fn>;
-  let savedAmbientEnv: { OPENAI_API_KEY?: string; CODEX_HOME?: string };
+  let savedAmbientEnv: { OPENAI_API_KEY?: string; CODEX_HOME?: string; MAT_TEST_SECRET?: string };
 
   beforeEach(() => {
     savedAmbientEnv = {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      CODEX_HOME: process.env.CODEX_HOME
+      CODEX_HOME: process.env.CODEX_HOME,
+      MAT_TEST_SECRET: process.env.MAT_TEST_SECRET
     };
     delete process.env.OPENAI_API_KEY;
     delete process.env.CODEX_HOME;
+    delete process.env.MAT_TEST_SECRET;
     vi.clearAllMocks();
     release = vi.fn().mockResolvedValue(undefined);
     mockAcquire.mockResolvedValue(release as () => Promise<void>);
@@ -217,6 +231,7 @@ describe('runExec', () => {
   afterEach(() => {
     restoreEnvVar('OPENAI_API_KEY', savedAmbientEnv.OPENAI_API_KEY);
     restoreEnvVar('CODEX_HOME', savedAmbientEnv.CODEX_HOME);
+    restoreEnvVar('MAT_TEST_SECRET', savedAmbientEnv.MAT_TEST_SECRET);
     vi.clearAllMocks();
   });
 
@@ -295,6 +310,51 @@ describe('runExec', () => {
     expect(result.code).toBe(0);
     expect(mockSwitch).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('env-secret CLI 는 already-active 여도 exec spawn 전 hard-stop 한다', async () => {
+    mockFindCliDef.mockReturnValue(ENV_SECRET_CLI_DEF);
+    mockGetActive.mockResolvedValue('work');
+    process.env.MAT_TEST_SECRET = 'ambient-no-pass';
+
+    const err = await runExec({
+      cliId: 'future-env', profileName: 'work', command: 'future-env', args: []
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    const text = JSON.stringify({ message: (err as Error).message, code: (err as { code?: string }).code });
+
+    expect(err).toMatchObject({ code: 'unsupported-env-secret-source' });
+    expect(text).toContain('MAT_TEST_SECRET');
+    expect(text).not.toContain('linux-handle');
+    expect(text).not.toContain('linux-account');
+    expect(text).not.toContain('ambient-no-pass');
+    expect(mockAcquire).not.toHaveBeenCalled();
+    expect(mockSwitch).not.toHaveBeenCalled();
+    expect(mockSnapshot).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('env-secret CLI 는 swapped exec 경로도 lock/switch/spawn 전 hard-stop 한다', async () => {
+    mockFindCliDef.mockReturnValue(ENV_SECRET_CLI_DEF);
+    mockGetActive.mockResolvedValue('default');
+
+    const err = await runExec({
+      cliId: 'future-env', profileName: 'work', command: 'future-env', args: ['run']
+    }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    const text = JSON.stringify({ message: (err as Error).message, code: (err as { code?: string }).code });
+
+    expect(err).toMatchObject({ code: 'unsupported-env-secret-source' });
+    expect(text).not.toContain('linux-handle');
+    expect(text).not.toContain('linux-account');
+    expect(mockAcquire).not.toHaveBeenCalled();
+    expect(mockSwitch).not.toHaveBeenCalled();
+    expect(mockSnapshot).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it('자식이 non-zero 로 종료: code 반환 + restore 수행', async () => {

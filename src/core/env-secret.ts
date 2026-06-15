@@ -46,6 +46,7 @@ export type EnvSecretErrorCode =
   | 'ambient-conflict'
   | 'empty-secret'
   | 'invalid-secret-value'
+  | 'unsupported-env-secret-source'
   | 'invalid-source-draft'
   | 'prohibited-source-field'
   | 'duplicate-save-as';

@@ -30,7 +30,7 @@ vi.mock('../../src/core/sources.js', () => ({
 // 'tri-cli' fake CliDef (3 sources) 주입 — switcher 의 reverse-order rollback 검증용.
 // BUILTIN 에는 1~2 source CLI 만 있어 sequential 과 구분 안 됨 (line 196 한계 해결).
 // vi.hoisted 로 factory 보다 먼저 평가되도록 보장.
-const { TRI_CLI, KEYRING_CLI } = vi.hoisted(() => ({
+const { TRI_CLI, KEYRING_CLI, ENV_SECRET_CLI } = vi.hoisted(() => ({
   TRI_CLI: {
     id: 'tri-cli',
     name: 'Tri Source Test CLI',
@@ -50,6 +50,17 @@ const { TRI_CLI, KEYRING_CLI } = vi.hoisted(() => ({
       { type: 'os-keyring', service: 'goose', account: 'secrets', backend: 'secret-service', saveAs: 'goose-keyring.json' },
       { type: 'file', path: '/tmp/mat-goose-secrets.yaml', saveAs: 'goose-secrets.yaml' }
     ]
+  },
+  ENV_SECRET_CLI: {
+    id: 'env-secret-cli',
+    name: 'Env Secret Test CLI',
+    sources: [{
+      type: 'env-secret',
+      envName: 'MAT_TEST_SECRET',
+      saveAs: 'future.json',
+      backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+      accountKey: 'linux-account'
+    }]
   }
 }));
 
@@ -59,7 +70,13 @@ vi.mock('../../src/core/cli-defs.js', async (importOriginal) => {
     ...actual,
     // fake CliDef 만 override, 나머지 ('codex' / 'gemini' 등) 는 real lookup 유지.
     findCliDef: (id: string) =>
-      id === 'tri-cli' ? TRI_CLI : id === 'keyring-cli' ? KEYRING_CLI : actual.findCliDef(id)
+      id === 'tri-cli'
+        ? TRI_CLI
+        : id === 'keyring-cli'
+          ? KEYRING_CLI
+          : id === 'env-secret-cli'
+            ? ENV_SECRET_CLI
+            : actual.findCliDef(id)
   };
 });
 
@@ -179,6 +196,15 @@ describe('switcher', () => {
       expect(result.empty).toEqual(['goose-keyring.json']);
       expect(result.captured).toEqual(['goose-secrets.yaml']);
       expect(await readProfileFile('keyring-cli', 'work', 'goose-secrets.yaml')).toBe('yaml-creds');
+    });
+
+    it('env-secret source 는 snapshot 전 metadata-only hard-stop (live read/profile 생성 없음)', async () => {
+      await expect(snapshotLiveToProfile('env-secret-cli', 'work'))
+        .rejects.toMatchObject({ code: 'unsupported-env-secret-source' });
+
+      expect(mockReadSource).not.toHaveBeenCalled();
+      expect(mockWriteSource).not.toHaveBeenCalled();
+      expect(await profileExists('env-secret-cli', 'work')).toBe(false);
     });
   });
 
@@ -341,6 +367,17 @@ describe('switcher', () => {
       expect((calls[4][0] as Source).saveAs).toBe('a.json');
       expect(calls[4][1]).toBe('live-a');
     });
+
+    it('env-secret source 는 restore 전 metadata-only hard-stop (profile/live read-write 없음)', async () => {
+      await setupProfile('env-secret-cli', 'work');
+      await writeProfileFile('env-secret-cli', 'work', 'future.json', 'stored');
+
+      await expect(restoreProfileToLive('env-secret-cli', 'work'))
+        .rejects.toMatchObject({ code: 'unsupported-env-secret-source' });
+
+      expect(mockReadSource).not.toHaveBeenCalled();
+      expect(mockWriteSource).not.toHaveBeenCalled();
+    });
   });
 
   describe('switchProfile', () => {
@@ -476,6 +513,17 @@ describe('switcher', () => {
 
     it('알 수 없는 cli → throw', async () => {
       await expect(switchProfile('unknown-cli', 'p')).rejects.toThrow(/알 수 없는 CLI/);
+    });
+
+    it('env-secret source 는 switch 전 metadata-only hard-stop (setActive/live mutation 없음)', async () => {
+      await setupProfile('env-secret-cli', 'work');
+
+      await expect(switchProfile('env-secret-cli', 'work'))
+        .rejects.toMatchObject({ code: 'unsupported-env-secret-source' });
+
+      expect(mockReadSource).not.toHaveBeenCalled();
+      expect(mockWriteSource).not.toHaveBeenCalled();
+      expect(await getActiveProfile('env-secret-cli')).toBeUndefined();
     });
   });
 

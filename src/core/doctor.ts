@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs';
 import { detectAmbientWarnings } from './ambient.js';
 import { getAllCliDefs, getCliDefsWarnings } from './cli-defs.js';
 import { loadConfig } from './config.js';
+import { envSecretSourceMetadata } from './env-secret-source.js';
 import { errorMessage, redactMessage } from './errors.js';
 import { expandTilde, dataDir } from './paths.js';
 import { normalizeIsoString, normalizeProfileIdentity, formatProfileIdentity } from './profile-identity.js';
@@ -172,6 +173,16 @@ async function inspectOsKeyringSource(src: Extract<Source, { type: 'os-keyring' 
   }
 }
 
+async function inspectEnvSecretSource(src: Extract<Source, { type: 'env-secret' }>): Promise<DoctorSourceStatus> {
+  const meta = envSecretSourceMetadata(src);
+  return {
+    saveAs: redactMessage(meta.saveAs),
+    type: src.type,
+    status: 'not-checked',
+    detail: `${meta.reason}: ${meta.envName}/${meta.backendKind}; product runtime is blocked`
+  };
+}
+
 async function inspectSource(src: Source): Promise<DoctorSourceStatus> {
   switch (src.type) {
     case 'file':
@@ -180,6 +191,8 @@ async function inspectSource(src: Source): Promise<DoctorSourceStatus> {
       return inspectKeychainSource(src);
     case 'os-keyring':
       return inspectOsKeyringSource(src);
+    case 'env-secret':
+      return inspectEnvSecretSource(src);
     default: {
       const neverSrc: never = src;
       return neverSrc;

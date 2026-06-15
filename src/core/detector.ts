@@ -15,6 +15,7 @@
  */
 
 import { getAllCliDefs } from './cli-defs.js';
+import { isEnvSecretSource } from './env-secret-source.js';
 import { sourceExists } from './sources.js';
 import type { CliDef } from './types.js';
 
@@ -31,6 +32,11 @@ export interface DetectionResult {
    * 미설치(ENOENT) soft-fail 시에도 여기로 분류된다 — 모듈 상단 주석 참조 (#59/#73).
    */
   missing: string[];
+  /**
+   * 감지는 지원하지 않지만 ordinary missing 으로 오분류하면 안 되는 source 의 saveAs 명.
+   * env-secret 은 metadata-only hard-stop 상태이므로 first-import 후보에서 제외된다.
+   */
+  unsupported?: string[];
 }
 
 /** builtin + plugin 모든 CLI 에 대해 라이브 자격증명 존재 여부를 병렬 감지. */
@@ -39,6 +45,17 @@ export async function detectAll(): Promise<DetectionResult[]> {
 }
 
 async function detect(cli: CliDef): Promise<DetectionResult> {
+  const unsupported = cli.sources.filter(isEnvSecretSource).map((src) => src.saveAs);
+  if (unsupported.length > 0) {
+    return {
+      cli,
+      hasLiveCredentials: false,
+      hasAnyLiveCredential: false,
+      present: [],
+      missing: [],
+      unsupported
+    };
+  }
   const results = await Promise.all(
     cli.sources.map(async (src) => ({ saveAs: src.saveAs, exists: await sourceExists(src) }))
   );

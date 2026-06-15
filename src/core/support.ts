@@ -7,6 +7,7 @@
  */
 
 import { BUILTIN_CLI_DEFS, findCliDef } from './cli-defs.js';
+import { isEnvSecretSource } from './env-secret-source.js';
 import { UnknownCliError, redactMessage } from './errors.js';
 import { BUILTIN_FRESHNESS_ADAPTER_IDS } from './freshness-adapters/index.js';
 import { identityCapabilitiesForCli } from './profile-identity.js';
@@ -338,11 +339,25 @@ function sourceSummary(def: CliDef): Array<{ type: Source['type']; saveAs: strin
 }
 
 function deriveSwap(def: CliDef): SupportCapability {
+  if (def.sources.some(isEnvSecretSource)) {
+    return cap(
+      'blocked',
+      'Profile swap is blocked because env-secret sources are accepted only as metadata.',
+      ['env-secret product storage and restore semantics are not enabled.']
+    );
+  }
   return cap('supported', `Profile swap is supported for ${def.sources.length} configured source(s).`);
 }
 
-function deriveFreshness(cliId: string): SupportCapability {
-  if (ADAPTER_BACKED_FRESHNESS.has(cliId)) {
+function deriveFreshness(def: CliDef): SupportCapability {
+  if (def.sources.some(isEnvSecretSource)) {
+    return cap(
+      'blocked',
+      'Freshness is metadata-only blocked for env-secret sources.',
+      ['env-secret values must not be read or compared through freshness.']
+    );
+  }
+  if (ADAPTER_BACKED_FRESHNESS.has(def.id)) {
     return cap('supported', 'Adapter-backed freshness check is available for identity/rotation-aware drift classification.');
   }
   return cap(
@@ -397,10 +412,11 @@ function defaultNextSteps(cliId: string, caps: CliSupportReport['capabilities'])
 
 function buildFromCliDef(def: CliDef, kind: 'builtin' | 'plugin'): CliSupportReport {
   const metadata = kind === 'builtin' ? REGISTRY[def.id] : pluginMetadata();
+  const hasEnvSecret = def.sources.some(isEnvSecretSource);
   const start = mergeCapability(deriveSessionStart(def), metadata.capabilities?.sessionStart);
   const baseCaps = {
     swap: deriveSwap(def),
-    freshness: deriveFreshness(def.id),
+    freshness: deriveFreshness(def),
     sessionStart: start,
     sessionRun: deriveSessionRun(def, start)
   };
@@ -410,6 +426,10 @@ function buildFromCliDef(def: CliDef, kind: 'builtin' | 'plugin'): CliSupportRep
     sessionStart: start,
     sessionRun: mergeCapability(baseCaps.sessionRun, metadata.capabilities?.sessionRun)
   };
+  if (hasEnvSecret) {
+    capabilities.swap = baseCaps.swap;
+    capabilities.freshness = baseCaps.freshness;
+  }
   return {
     schemaVersion: SCHEMA_VERSION,
     cli: { id: def.id, name: redactMessage(def.name), builtin: kind === 'builtin', kind },

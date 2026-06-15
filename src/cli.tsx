@@ -643,6 +643,7 @@ function hasUnsafe(reports: FreshnessReport[]): boolean {
       // PR-S: inflight (cross-source race) 도 unsafe — 사용자가 retry 또는 source
       // 간 정합성 점검해야 함. exit 1 으로 CI chain 차단해 swap 사고 방지.
       if (s.result.kind === 'inflight') return true;
+      if (s.result.kind === 'unsupported') return true;
       return false;
     })
   );

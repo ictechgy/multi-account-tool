@@ -136,6 +136,20 @@ const QWEN_DEF = {
   sessionRun: { executable: 'qwen' }
 } satisfies CliDef;
 
+const ENV_SECRET_DEF = {
+  id: 'future-env',
+  name: 'Future Env (fixture)',
+  sources: [{
+    type: 'env-secret',
+    envName: 'MAT_TEST_SECRET',
+    saveAs: 'future.json',
+    backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+    accountKey: 'linux-account'
+  }],
+  session: { roots: [{ env: 'FUTURE_HOME', base: '~/.future' }] },
+  sessionRun: { executable: 'future-env' }
+} satisfies CliDef;
+
 type FakeChildProcess = EventEmitter & {
   pid?: number;
   exitCode: number | null;
@@ -645,6 +659,17 @@ describe('runSession', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
+  it('env-secret source 는 session start 계획 단계에서 hard-stop 하고 spawn 하지 않는다', async () => {
+    mockFindCliDef.mockReturnValue(ENV_SECRET_DEF);
+
+    await expect(runSession({ cliId: 'future-env', profileName: 'work' }))
+      .rejects.toThrow(/env-secret/);
+
+    expect(mockReadProfile).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
   it('알 수 없는 CLI → UsageError', async () => {
     mockFindCliDef.mockReturnValue(undefined);
     await expect(runSession({ cliId: 'nope', profileName: 'work' })).rejects.toBeInstanceOf(
@@ -876,6 +901,31 @@ describe('runSessionCommand', () => {
     });
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight blocked report: env-secret source blocks session run before profile reads or spawn', async () => {
+    mockFindCliDef.mockReturnValue(ENV_SECRET_DEF);
+
+    const err = await runSessionCommand({ cliId: 'future-env', profileName: 'work', args: [] }).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(UsageError);
+
+    const report = await preflightSessionRunCommand({ cliId: 'future-env', profileName: 'work', args: [] });
+    const serialized = JSON.stringify(report);
+    expect(report.ok).toBe(false);
+    expect(report.blockers[0]).toMatchObject({
+      phase: 'support',
+      code: 'session-isolation-unsupported'
+    });
+    expect(report.blockers[0].message).toContain('env-secret');
+    expect(mockReadProfile).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    expect(serialized).not.toContain('linux-handle');
+    expect(serialized).not.toContain('linux-account');
     await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
   });
 
@@ -2445,6 +2495,12 @@ describe('planSession / claude — keychain 미지원 + linux file 격리 (PR-2)
     expect(root.creds).toHaveLength(1);
     expect(root.creds[0].rel).toBe('.credentials.json'); // base 기준 상대경로
     expect(root.creds[0].absInSession).toBe(join(dir, '.credentials.json'));
+  });
+
+  it('env-secret source + session → planSession 이 metadata-only hard-stop 으로 throw', () => {
+    expect(() => planSession(ENV_SECRET_DEF, 'work', 'future-env-work-abcd1234')).toThrow(
+      /env-secret/
+    );
   });
 });
 

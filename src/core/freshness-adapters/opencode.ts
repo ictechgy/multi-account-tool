@@ -71,7 +71,7 @@ function compareProvider(stored: ProviderAuth, live: ProviderAuth): CompareResul
  * aggregation 으로 분류할 때만 의미 — 본 severity 순서는 그 통합 단계에서
  * rotated 보다 덜 위험 (in-flight 는 일시적, rotated 는 영구적) 으로 처리.
  */
-const KIND_SEVERITY: Record<CompareKind, number> = { fresh: 0, inflight: 1, rotated: 2, stale: 3 };
+const KIND_SEVERITY: Record<CompareKind, number> = { fresh: 0, inflight: 1, rotated: 2, stale: 3, unsupported: 4 };
 const SUBTYPE_SEVERITY: Record<RotatedSubtype, number> = { 'meta-only': 0, 'value-only': 1, both: 2 };
 
 function pickWorse(a: CompareResult, b: CompareResult): CompareResult {
