@@ -6,7 +6,7 @@ This document is a **RALPLAN-backed design/implementation plan** for a future pu
 
 The purpose is to make the next code PR reviewable before any parser acceptance exists: the future schema shape, identity rules, consumer hard-stops, and verification matrix are defined here, while current product code continues to reject `type: 'env-secret'` declarations.
 
-Backend custody is now separately selected by the companion custody-selection contract: the first backend spike should be Linux Secret Service under metadata-only proof rules. This still does not open parser/schema acceptance.
+Backend custody is now separately selected by the companion custody-selection contract, and the first internal Linux Secret Service backend spike exists under metadata-only proof rules. This still does not open parser/schema acceptance.
 
 GitHub Copilot CLI (`copilot`) and Amp (`amp`) remain blocked for builtin `mat` profile-swap, freshness, `mat exec`, `mat session start`, and `mat session run` product support.
 
@@ -171,7 +171,7 @@ Keep public env-secret schema/runtime blocked if any of these are true:
 ## Follow-ups
 
 1. ✅ Backend custody selection/proof contract documented; first code spike is Linux Secret Service, parser remains closed.
-2. Linux Secret Service backend spike under the custody proof contract.
+2. ✅ Internal Linux Secret Service backend spike under the custody proof contract; parser remains closed.
 3. Public env-secret parser plus all-consumer hard-stop PR based on this plan after backend proof.
 4. Synthetic command-scoped runtime PR only after schema/runtime hard-stops and storage backend proof are approved.
 5. Amp config hard-stop matrix, then Amp prototype.

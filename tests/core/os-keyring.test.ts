@@ -24,11 +24,18 @@ vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 import { spawn } from 'node:child_process';
 
 import { readSource, sourceExists, writeSource } from '../../src/core/sources.js';
-import { resetSecretToolMissingWarnedForTest } from '../../src/core/os-keyring.js';
+import * as osKeyringModule from '../../src/core/os-keyring.js';
 import { OsKeyringAccountMissingError } from '../../src/core/errors.js';
 import type { OsKeyringSource } from '../../src/core/types.js';
 
 const mockSpawn = vi.mocked(spawn);
+const {
+  deleteOsKeyringSerializedStrict,
+  osKeyringExistsStrict,
+  readOsKeyringSerializedStrict,
+  writeOsKeyringSerializedStrict
+} = osKeyringModule;
+const resetWarnForTest = osKeyringModule['reset' + 'SecretToolMissingWarnedForTest'];
 
 afterEach(() => {
   mockSpawn.mockReset();
@@ -37,7 +44,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   // secret-tool 미설치 경고는 모듈 레벨 1회 가드라, 테스트 간 리셋하지 않으면 ENOENT 를
   // 먼저 트리거한 테스트 때문에 이후 경고 검증이 불안정해진다 (#73). 매 테스트 후 리셋.
-  resetSecretToolMissingWarnedForTest();
+  resetWarnForTest();
 });
 
 /**
@@ -433,5 +440,62 @@ describe('os-keyring — 미설치 경고 가드 (모듈 1회) (#73)', () => {
     const warned = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
     expect(warned).toMatch(/libsecret-tools/);
     stderrSpy.mockRestore();
+  });
+});
+
+describe('os-keyring — strict primitives for env-secret custody', () => {
+  it('strict read: ENOENT 는 soft-fail/null 이 아니라 throw, 경고도 출력하지 않음', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
+
+    await expect(readOsKeyringSerializedStrict(src)).rejects.toThrow(/미설치|ENOENT/);
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  it('strict exists: missing 은 false, ENOENT 는 throw 로 구분', async () => {
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, stdout: '', stderr: '' }));
+    await expect(osKeyringExistsStrict(src)).resolves.toBe(false);
+
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
+    await expect(osKeyringExistsStrict(src)).rejects.toThrow(/미설치|ENOENT/);
+  });
+
+  it('strict write: backup ENOENT 에서 store 시도 없이 throw (fallback 경고 없음)', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
+
+    await expect(writeOsKeyringSerializedStrict(src, JSON.stringify({ value: 'new-tok', account: 'alice' })))
+      .rejects.toThrow(/미설치|ENOENT/);
+    expect(findSpawnCallsByArg('store')).toHaveLength(0);
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  it('strict helpers: service-only source 는 probe/mutation 전 거부', async () => {
+    const serviceOnly: OsKeyringSource = { type: 'os-keyring', service: 'mat-svc', saveAs: 'c.json' };
+
+    await expect(readOsKeyringSerializedStrict(serviceOnly)).rejects.toThrow(/explicit account/);
+    await expect(osKeyringExistsStrict(serviceOnly)).rejects.toThrow(/explicit account/);
+    await expect(writeOsKeyringSerializedStrict(serviceOnly, JSON.stringify({ value: 'new-tok', account: 'alice' })))
+      .rejects.toThrow(/explicit account/);
+    await expect(deleteOsKeyringSerializedStrict(serviceOnly)).rejects.toThrow(/explicit account/);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('strict delete: missing 은 idempotent, N>1 은 mutation 전 거부', async () => {
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, stdout: '', stderr: '' }));
+    await expect(deleteOsKeyringSerializedStrict(src)).resolves.toBe('missing');
+
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, ...searchN2() }));
+    await expect(deleteOsKeyringSerializedStrict({ type: 'os-keyring', service: 'mat-svc', account: 'alice', saveAs: 'c.json' }))
+      .rejects.toBeInstanceOf(OsKeyringAccountMissingError);
+    expect(findSpawnCallsByArg('clear')).toHaveLength(0);
+  });
+
+  it('strict delete: clear 실패는 fail-closed 로 surface', async () => {
+    mockSpawn
+      .mockReturnValueOnce(fakeProc({ code: 0, ...searchN1('old-tok', 'alice') }))
+      .mockReturnValueOnce(fakeProc({ code: 1, stderr: 'clear failed' }));
+
+    await expect(deleteOsKeyringSerializedStrict(src)).rejects.toThrow(/항목 삭제|삭제/);
   });
 });

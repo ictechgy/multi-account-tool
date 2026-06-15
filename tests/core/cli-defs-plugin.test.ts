@@ -148,6 +148,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain('env-secret');
     expect(r.error).toContain('parser/runtime');
     expect(r.error).not.toContain('work-handle');
+    expect(r.error).not.toContain('linux-secret-service');
 
     const lint = validatePluginDefinition({
       id: 'future-env',
@@ -168,6 +169,38 @@ describe('validateCliDefRaw (순수 validator)', () => {
       })
     ]);
     expect(lint.diagnostics[0].message).not.toContain('work-handle');
+    expect(lint.diagnostics[0].message).not.toContain('linux-secret-service');
+
+    const linuxBackend = validateCliDefRaw({
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'linux-secret-service', handle: 'linux-handle' }
+      }]
+    });
+    expect(linuxBackend.def).toBeUndefined();
+    expect(linuxBackend.error).toContain('env-secret');
+    expect(linuxBackend.error).toContain('parser/runtime');
+    expect(linuxBackend.error).not.toContain('linux-secret-service');
+    expect(linuxBackend.error).not.toContain('linux-handle');
+  });
+
+  it('public parser accepted source-type diagnostic remains file/keychain/os-keyring only', () => {
+    const r = validateCliDefRaw({
+      id: 'bad-type',
+      name: 'Bad Type',
+      sources: [{ type: 'linux-secret-service', saveAs: 'future.json' }]
+    });
+
+    expect(r.def).toBeUndefined();
+    expect(r.error).toContain('file');
+    expect(r.error).toContain('keychain');
+    expect(r.error).toContain('os-keyring');
+    expect(r.error).not.toContain('env-secret');
+    expect(r.error).not.toContain('linux-secret-service');
   });
 
   it('보안 회귀 가드: raw 에 session/sessionRun/warning 이 있어도 결과 def 에 없음 (plugin 은 세션 격리 미수용)', () => {

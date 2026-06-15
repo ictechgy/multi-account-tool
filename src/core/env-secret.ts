@@ -23,7 +23,7 @@ const DRAFT_DENIED_FIELDS = new Set([
   'commandOutput'
 ]);
 
-export type EnvSecretBackendKind = 'synthetic';
+export type EnvSecretBackendKind = 'synthetic' | 'linux-secret-service';
 export type EnvSecretOperation =
   | 'store'
   | 'load'
@@ -365,7 +365,7 @@ export async function getEnvSecretMetadata(
 }
 
 export async function listEnvSecretMetadata(backend: EnvSecretBackend): Promise<EnvSecretMetadata[]> {
-  if (backend.kind !== 'synthetic') {
+  if (!backend || !isEnvSecretBackendKind(backend.kind)) {
     throw new EnvSecretError('unsupported-backend', 'env-secret backend is unsupported');
   }
   let metadata: EnvSecretMetadata[];
@@ -478,11 +478,11 @@ function validateBackendRef(input: unknown): EnvSecretBackendRef {
     throw new EnvSecretError('invalid-binding', 'env-secret backend reference must be an object');
   }
   const raw = input as Record<string, unknown>;
-  if (raw.kind !== 'synthetic') {
+  if (!isEnvSecretBackendKind(raw.kind)) {
     throw new EnvSecretError('unsupported-backend', 'env-secret backend is unsupported');
   }
   return {
-    kind: 'synthetic',
+    kind: raw.kind,
     handle: validateSafeLabel(raw.handle, 'backend handle')
   };
 }
@@ -534,9 +534,13 @@ function validateSafeLabel(input: unknown, fieldName: string): string {
 }
 
 function ensureBackendMatches(backend: EnvSecretBackend, binding: EnvSecretBinding): void {
-  if (!backend || backend.kind !== binding.backend.kind || backend.kind !== 'synthetic') {
+  if (!backend || backend.kind !== binding.backend.kind || !isEnvSecretBackendKind(backend.kind)) {
     throw new EnvSecretError('unsupported-backend', 'env-secret backend is unsupported');
   }
+}
+
+function isEnvSecretBackendKind(kind: unknown): kind is EnvSecretBackendKind {
+  return kind === 'synthetic' || kind === 'linux-secret-service';
 }
 
 function sanitizeMetadata(metadata: EnvSecretMetadata): EnvSecretMetadata {

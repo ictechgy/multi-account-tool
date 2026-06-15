@@ -118,6 +118,20 @@ function assertValidOsKeyringSource(src: OsKeyringSource): void {
 }
 
 /**
+ * env-secret custody 용 strict helper 는 service-only probe/mutation 을 허용하지 않는다.
+ *
+ * 기존 public os-keyring source 는 account 생략을 유지하지만, env-secret backend 는
+ * profile-owned binding 을 accountKey 로 고정해야 하므로 strict path 에서는 조회 전부터
+ * 명시 account 를 요구한다.
+ */
+function assertStrictOsKeyringSource(src: OsKeyringSource): void {
+  assertValidOsKeyringSource(src);
+  if (!hasAccount(src.account)) {
+    throw new Error('os-keyring strict custody operation requires an explicit account');
+  }
+}
+
+/**
  * spawn 실패(미설치 ENOENT / 권한·기타) / daemon-down 을 구분한 에러. raw search
  * 출력(secret 포함 가능)은 절대 포함하지 않는다 — 구조적 메시지만 (parse-failure
  * secret 누설 차단, plan F4).
@@ -240,9 +254,12 @@ async function rawSearch(service: string, scopeAccount?: string): Promise<CmdRes
  *  - N>1 → OsKeyringAccountMissingError (clear deletes-all 로 인한 data loss 차단).
  *  - N=1 → { value, account }. secret 추출 실패 시 raw output 미포함 구조적 throw.
  */
+type SecretToolMissingPolicy = 'soft-fail' | 'throw';
+
 async function osKeyringBackup(
   service: string,
-  scopeAccount?: string
+  scopeAccount?: string,
+  missingPolicy: SecretToolMissingPolicy = 'soft-fail'
 ): Promise<OsKeyringBackup | null> {
   const r = await rawSearch(service, scopeAccount);
   // 미설치(ENOENT)만 tooling 이 깨진 경우 — yaml fallback 으로 진행하되 wrong-account
@@ -251,6 +268,7 @@ async function osKeyringBackup(
   // wrong-account 위험이 의도 이상 확대된다 → fail-closed throw (#73). daemon-down
   // (code>0)도 infra 문제라 throw 유지.
   if (isSecretToolMissing(r)) {
+    if (missingPolicy === 'throw') throw osKeyringErr('조회', r);
     warnSecretToolMissing();
     return null;
   }
@@ -323,6 +341,22 @@ export async function readOsKeyringSerialized(src: OsKeyringSource): Promise<str
 }
 
 /**
+ * env-secret 등 file fallback 이 안전하지 않은 호출자를 위한 strict read.
+ *
+ * 기존 `readOsKeyringSerialized` 는 secret-tool 미설치(ENOENT)를 null 로 soft-fail 해
+ * Goose yaml fallback 을 보존한다. env-secret custody 에서는 backend unavailable 을
+ * missing 으로 오인하거나 plaintext/file fallback 으로 흐르면 안 되므로 ENOENT 도
+ * 구조적 throw 로 처리한다. raw search output 은 반환/에러에 포함하지 않는다.
+ */
+export async function readOsKeyringSerializedStrict(src: OsKeyringSource): Promise<string | null> {
+  assertStrictOsKeyringSource(src);
+  const backup = await osKeyringBackup(src.service, src.account, 'throw');
+  if (!backup) return null;
+  const stored: KeychainStored = { value: backup.value, account: backup.account ?? undefined };
+  return JSON.stringify(stored);
+}
+
+/**
  * 직렬화된 JSON 을 받아 os-keyring 항목을 복원 (writeKeychainSerialized 미러).
  *
  * account 우선순위: src.account (정의 명시) > stored.account (캡처 시 기록) >
@@ -332,7 +366,11 @@ export async function readOsKeyringSerialized(src: OsKeyringSource): Promise<str
  *   실패 시 backup 으로 rollback. libsecret store 는 upsert 지만, 새 account 가
  *   기존과 다르면 옛 항목이 잔류하므로 clear 단계로 macOS 와 동일하게 정리한다.
  */
-export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized: string): Promise<void> {
+async function writeOsKeyringWithPolicy(
+  src: OsKeyringSource,
+  serialized: string,
+  missingPolicy: SecretToolMissingPolicy
+): Promise<void> {
   assertValidOsKeyringSource(src);
   const stored = JSON.parse(serialized) as KeychainStored;
   // corrupt / legacy backup 방어: value 가 문자열이 아니면 store 의 stdin 에
@@ -346,7 +384,7 @@ export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized:
       ? stored.account
       : process.env.USER || 'default';
 
-  const backup = await osKeyringBackup(src.service, src.account);
+  const backup = await osKeyringBackup(src.service, src.account, missingPolicy);
   if (backup) {
     // clear/rollback 대상 account 확정: stderr 역조회 account → scope 된 src.account.
     // 둘 다 없으면 어떤 항목을 지울지 모르는 채 clear/rollback 을 건너뛰어 옛 항목이
@@ -360,6 +398,22 @@ export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized:
     await osKeyringClear(src.service, recoverAccount);
   }
   await osKeyringStoreOrRollback(src.service, account, stored.value, backup);
+}
+
+export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized: string): Promise<void> {
+  return writeOsKeyringWithPolicy(src, serialized, 'soft-fail');
+}
+
+/**
+ * env-secret 등 fallback 금지 custody 호출자를 위한 strict write.
+ *
+ * backup 조회 단계의 ENOENT 도 soft-fail 하지 않는다. store 자체 실패는 기존처럼
+ * throw 되지만, strict write 는 미설치 상태에서 file/yaml fallback 경고를 출력하지 않고
+ * 곧바로 fail-closed 한다.
+ */
+export async function writeOsKeyringSerializedStrict(src: OsKeyringSource, serialized: string): Promise<void> {
+  assertStrictOsKeyringSource(src);
+  return writeOsKeyringWithPolicy(src, serialized, 'throw');
 }
 
 /**
@@ -386,4 +440,42 @@ export async function osKeyringExists(src: OsKeyringSource): Promise<boolean> {
   const count = blockCount(r.stdout);
   if (count > 1) throw new OsKeyringAccountMissingError(src.service, count);
   return count >= 1;
+}
+
+/**
+ * env-secret custody 용 strict exists/probe.
+ *
+ * 기존 `osKeyringExists` 는 secret-tool ENOENT 를 false 로 soft-fail 해 file backend
+ * fallback 을 막지 않는다. strict exists 는 ENOENT/EACCES/daemon-down 을 모두 throw
+ * 해 backend unavailable/denied 상태를 missing 으로 오인하지 않게 한다.
+ */
+export async function osKeyringExistsStrict(src: OsKeyringSource): Promise<boolean> {
+  assertStrictOsKeyringSource(src);
+  const r = await rawSearch(src.service, src.account);
+  if (r.code !== 0) throw osKeyringErr('조회', r);
+  const count = blockCount(r.stdout);
+  if (count > 1) throw new OsKeyringAccountMissingError(src.service, count);
+  return count >= 1;
+}
+
+export type OsKeyringDeleteResult = 'deleted' | 'missing';
+
+/**
+ * env-secret custody 용 strict delete/cleanup.
+ *
+ * - missing 은 idempotent cleanup 으로 `missing` 반환.
+ * - ENOENT/EACCES/daemon-down 은 throw (fallback 금지).
+ * - account 생략/N>1/account 미식별 상태는 throw (wrong-entry 삭제 차단).
+ * - raw backend output/secret value 는 반환하지 않는다.
+ */
+export async function deleteOsKeyringSerializedStrict(src: OsKeyringSource): Promise<OsKeyringDeleteResult> {
+  assertStrictOsKeyringSource(src);
+  const backup = await osKeyringBackup(src.service, src.account, 'throw');
+  if (!backup) return 'missing';
+  const account = backup.account ?? (hasAccount(src.account) ? src.account : null);
+  if (account == null) {
+    throw new OsKeyringAccountMissingError(src.service, 1);
+  }
+  await osKeyringClear(src.service, account);
+  return 'deleted';
 }

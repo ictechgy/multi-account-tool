@@ -139,6 +139,12 @@ product support status: blocked
 
 The report may include test names, file names, backend family, platform, reason codes, and pass/fail categories. It must not include real user labels, real credential labels, raw backend output, or any value-derived observation.
 
+## Implementation status after backend spike
+
+The first internal Linux Secret Service backend spike is now implemented as proof-only code. It adds a strict env-secret backend adapter and strict Secret Service primitives while preserving the existing public os-keyring source fallback semantics.
+
+This does not open public parser/schema acceptance, profile UX, command injection, Amp support, or Copilot support. Public `SourceType` remains unchanged and plugin declarations with `type: 'env-secret'` continue to be rejected before runtime.
+
 ## Public parser preconditions
 
 A later public parser/schema PR must not accept `type: 'env-secret'` until all of these are true:
@@ -175,7 +181,7 @@ Stop the backend spike or parser work if any of these occur:
 
 ## Follow-ups
 
-1. Linux Secret Service backend spike under this proof contract; product parser remains closed.
+1. ✅ Internal Linux Secret Service backend spike under this proof contract; product parser remains closed.
 2. Public parser plus all-consumer typed hard-stop PR only after backend proof and status/refusal APIs are ready.
 3. macOS argv-free Keychain backend design or reviewed exception, if macOS env-secret custody is needed.
 4. Windows Credential Manager source implementation only after package and CI scope include Windows.
