@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "subject": "github-copilot-cli",
+  "evidenceKind": "human-reviewed-local-probe",
+  "observedAt": "2026-06-15T00:00:00.000Z",
+  "platforms": [
+    {
+      "platform": "darwin-keychain",
+      "serviceName": "copilot-cli",
+      "serviceNameSource": "synthetic-fixture",
+      "perAccountSelector": {
+        "status": "verified",
+        "fieldName": "acct",
+        "valuePolicy": "synthetic-only"
+      },
+      "entryCardinality": "one-per-account",
+      "secretValuesObservedByMat": false,
+      "rawCredentialStoreOutputCommitted": false,
+      "appStateCrossCheck": "matches-redacted-binding",
+      "ambientTokenPolicy": "policy-documented-implementation-pending",
+      "conclusion": "pass"
+    },
+    {
+      "platform": "linux-secret-service",
+      "serviceName": "copilot-cli",
+      "serviceNameSource": "synthetic-fixture",
+      "perAccountSelector": {
+        "status": "verified",
+        "fieldName": "account",
+        "valuePolicy": "synthetic-only"
+      },
+      "entryCardinality": "one-per-account",
+      "secretValuesObservedByMat": false,
+      "rawCredentialStoreOutputCommitted": false,
+      "appStateCrossCheck": "matches-redacted-binding",
+      "ambientTokenPolicy": "controlled-by-implementation",
+      "conclusion": "pass"
+    },
+    {
+      "platform": "windows-credential-manager",
+      "serviceName": "copilot-cli",
+      "serviceNameSource": "synthetic-fixture",
+      "perAccountSelector": {
+        "status": "unverified"
+      },
+      "entryCardinality": "unverified",
+      "secretValuesObservedByMat": false,
+      "rawCredentialStoreOutputCommitted": false,
+      "appStateCrossCheck": "not-run",
+      "ambientTokenPolicy": "policy-documented-implementation-pending",
+      "conclusion": "blocked"
+    }
+  ],
+  "notes": [
+    "Synthetic fixture only; metadata-report validation is not platform proof."
+  ]
+}
