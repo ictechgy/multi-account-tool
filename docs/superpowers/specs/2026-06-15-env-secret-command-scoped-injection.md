@@ -62,12 +62,12 @@ A later implementation may introduce a source kind whose job is to bind one prof
 
 The storage threat model and UX policy gate is documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`. That document ranks future backend acceptability and keeps implementation blocked:
 
-1. Platform credential store or external provider/no-local-custody are the preferred directions when backed by synthetic tests and explicit consent UX.
-2. Encrypted profile-file storage requires a separate key-management design.
-3. Plaintext profile-file storage is blocked by default and cannot be a silent fallback.
-4. Unsupported, locked, denied, or untested backends must fail closed before storage or injection.
+1. Platform credential store is the preferred local-custody direction when backed by synthetic tests and explicit consent UX.
+2. External provider/no-local-custody is acceptable when a provider-specific design covers consent, lookup failure, rotation, audit, and availability.
+3. Encrypted profile-file storage requires a separate key-management design.
+4. Plaintext profile-file storage is blocked by default and cannot be a silent fallback.
 
-This injection contract still does not implement storage. A later runtime PR must satisfy the storage/UX gate and must never write, log, hash, diff, fingerprint, or print secret values as evidence.
+Unsupported, locked, denied, or untested backends must fail closed before storage or injection. This injection contract still does not implement storage. A later runtime PR must satisfy the storage/UX gate and must never write, log, hash, diff, fingerprint, or print secret values as evidence.
 
 ## Command-scoped injection contract
 
