@@ -58,16 +58,16 @@ A later implementation may introduce a source kind whose job is to bind one prof
 | Intended target | The builtin CLI/flow allowed to receive the env var. Generic shell export is not enough. |
 | Recapture policy | Default is no silent recapture from child environment; any update/rotation flow must be explicit and separately designed. |
 
-### Storage decision remains pending
+### Storage policy gate documented; implementation remains pending
 
-Before runtime implementation, a separate storage threat-model PR must choose and test one of these approaches or reject them:
+The storage threat model and UX policy gate is documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`. That document ranks future backend acceptability and keeps implementation blocked:
 
-1. OS keyring / platform credential store backend.
-2. Encrypted profile file with explicit key-management UX.
-3. Plaintext profile-file storage with prominent opt-in and documented risk.
-4. A hybrid where env-secret values are never stored by `mat` and are supplied only through a user-approved external secret provider.
+1. Platform credential store or external provider/no-local-custody are the preferred directions when backed by synthetic tests and explicit consent UX.
+2. Encrypted profile-file storage requires a separate key-management design.
+3. Plaintext profile-file storage is blocked by default and cannot be a silent fallback.
+4. Unsupported, locked, denied, or untested backends must fail closed before storage or injection.
 
-This contract does not choose among them. It only requires that the chosen backend never writes, logs, hashes, diffs, or prints secret values as evidence.
+This injection contract still does not implement storage. A later runtime PR must satisfy the storage/UX gate and must never write, log, hash, diff, fingerprint, or print secret values as evidence.
 
 ## Command-scoped injection contract
 
@@ -220,7 +220,7 @@ Keep env-secret runtime and Copilot/Amp product support blocked if any of these 
 
 ## Follow-ups
 
-1. Env-secret storage threat model and UX RALPLAN.
-2. Env-secret runtime/schema implementation PR with synthetic tests.
+1. ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`; runtime/schema/storage implementation remains pending.
+2. Env-secret runtime/schema/storage implementation PR with synthetic tests.
 3. Amp command-scoped prototype only after env-secret runtime and Amp config hard-stop matrix.
 4. Copilot prototype only after env-secret runtime plus platform/app-state/ambient-token gates.
