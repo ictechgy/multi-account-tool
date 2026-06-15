@@ -136,9 +136,10 @@ A future product PR may add Copilot only if all of these are true:
 1. ✅ **Redacted Copilot app-state fixture/parser PR** — parse account-selection state without secrets; fixture parser safety gate only, not product support.
 2. ✅ **macOS/Linux credential-store proof contract/R&D artifact** — defines required non-secret evidence and redaction rules; actual platform proof remains pending (`docs/superpowers/specs/2026-06-14-copilot-credential-store-proof-contract.md`).
 3. **macOS/Linux human-opt-in or upstream-doc platform proof PR** — prove account selectors/cardinality without secrets before any prototype.
-4. **Windows Credential Manager source R&D PR** — source backend and CI/test strategy before Windows support claims.
-5. **Ambient token policy PR** — decide normal swap vs `mat exec` vs future session behavior.
-6. **Copilot prototype PR** — only after the previous gates.
+4. ✅ **Windows Credential Manager source R&D contract** — defines backend/API/CI requirements; runtime implementation remains pending (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`).
+5. **Windows Credential Manager synthetic CI spike + implementation RALPLAN** — prove synthetic CredRead/CredWrite/CredDelete behavior before runtime support.
+6. **Ambient token policy PR** — decide normal swap vs `mat exec` vs future session behavior.
+7. **Copilot prototype PR** — only after the previous gates.
 
 ## Non-goals
 

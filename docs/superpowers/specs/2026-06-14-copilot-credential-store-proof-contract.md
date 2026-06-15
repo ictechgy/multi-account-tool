@@ -190,6 +190,7 @@ Copilot remains blocked if any of these are true:
 
 1. Optional redacted probe-report validator after this contract is reviewed.
 2. Human-opt-in macOS/Linux probe design with a separate security review.
-3. Windows Credential Manager source R&D.
-4. Ambient token policy for normal swap, `mat exec`, and future session flows.
-5. Copilot prototype only after app-state, credential-store, Windows, and ambient-token gates are all resolved.
+3. ✅ Windows Credential Manager source R&D contract (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`); runtime/backend remains pending.
+4. Windows Credential Manager synthetic CI spike + implementation RALPLAN.
+5. Ambient token policy for normal swap, `mat exec`, and future session flows.
+6. Copilot prototype only after app-state, credential-store, Windows, and ambient-token gates are all resolved.
