@@ -227,6 +227,7 @@ Keep env-secret runtime and Copilot/Amp product support blocked if any of these 
 1. ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`.
 2. ✅ Internal env-secret core + synthetic backend tests landed in `src/core/env-secret.ts` and `tests/core/env-secret.test.ts`; no public schema/product runtime/real backend.
 3. ✅ Public env-secret source/schema RALPLAN documented in `docs/superpowers/specs/2026-06-15-env-secret-public-source-schema-plan.md`; parser/schema/product runtime remain closed.
-4. Public env-secret schema/runtime hard-stop implementation PR before plugin acceptance or profile UX.
-5. Amp command-scoped prototype only after env-secret product runtime and Amp config hard-stop matrix.
-6. Copilot prototype only after env-secret product runtime plus platform/app-state/ambient-token gates.
+4. ✅ Public env-secret schema/runtime hard-stop implementation landed as metadata-only parser acceptance plus all-consumer hard-stops; product injection and profile UX remain blocked.
+5. ✅ Internal synthetic command-scoped runtime approval gate landed in `src/core/env-secret-command-runtime.ts` and `tests/core/env-secret-command-runtime.test.ts`; it proves child-env construction with a synthetic backend only and does not wire `mat exec`, `mat session run`, Linux Secret Service runtime injection, Amp, Copilot, or plugin runtime injection.
+6. Amp command-scoped prototype only after env-secret product runtime wiring is separately approved and the Amp config hard-stop matrix passes.
+7. Copilot prototype only after env-secret product runtime wiring plus platform/app-state/ambient-token gates pass.
