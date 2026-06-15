@@ -96,7 +96,7 @@ Keep both CLIs blocked unless a new RALPLAN verifies all applicable items below.
 - ✅ Env-secret storage threat model/UX gate documented in `docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`; real backend/product storage remains pending.
 - ✅ Internal env-secret core + synthetic backend tests landed in `src/core/env-secret.ts` and `tests/core/env-secret.test.ts`; no Amp product wiring.
 - `AMP_API_KEY` injection path that fails closed when conflicting ambient Amp/provider credentials are present.
-- Command-scoped `session run amp` design with a hard-stop policy for `.amp/settings.json{,c}`, `~/.config/amp/settings.json{,c}`, `--settings-file`, `--mcp-config`, MCP headers/env, and workspace overrides.
+- ✅ Amp config hard-stop matrix landed in `src/core/amp-config-hard-stop.ts` and `docs/superpowers/specs/2026-06-15-amp-config-hard-stop-matrix.md`; it covers `.amp/settings.json{,c}`, `~/.config/amp/settings.json{,c}`, `--settings-file`, `--mcp-config`, MCP `command`/`args`/`env`/`url`/`headers`, plugins, permissions, managed settings, and workspace overrides without Amp product wiring.
 - Decision on whether `amp login` local state can be supported; if yes, upstream-documented storage/redirect/recapture contract is required.
 - Tests proving no profile secret values are printed, logged, or copied into project/workspace config.
 
@@ -108,7 +108,7 @@ Keep both CLIs blocked unless a new RALPLAN verifies all applicable items below.
 4. ✅ **Env-secret command-scoped injection design** — generic source/injection contract documented; product runtime/schema pending (`docs/superpowers/specs/2026-06-15-env-secret-command-scoped-injection.md`).
 5. ✅ **Env-secret storage threat model/UX gate** — backend policy ranking, consent UX, export/backup defaults, and fail-closed platform matrix documented; real backend/product storage pending (`docs/superpowers/specs/2026-06-15-env-secret-storage-threat-model-ux.md`).
 6. ✅ **Internal env-secret core + synthetic backend tests** — `src/core/env-secret.ts` + `tests/core/env-secret.test.ts`; no SourceType/plugin schema/CLI/TUI/Amp wiring.
-7. **Amp prototype** — only after env-secret product runtime and Amp config hard-stop matrix; `mat exec` / `mat session run amp` only, with ambient env and config hard-stops.
+7. **Amp prototype** — only after env-secret product runtime wiring is separately approved; reuse the Amp config hard-stop matrix from `docs/superpowers/specs/2026-06-15-amp-config-hard-stop-matrix.md`; `mat exec` / `mat session run amp` only, with ambient env and config hard-stops.
 
 ## Product state
 
