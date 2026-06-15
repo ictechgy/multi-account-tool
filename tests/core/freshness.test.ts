@@ -2,7 +2,7 @@
  * freshness 모듈 단위 테스트.
  *
  * 검증 매트릭스:
- *  - CompareResult 4-state (fresh / rotated / stale / inflight) — fallback 경로
+ *  - CompareResult 5-state (fresh / rotated / stale / inflight / unsupported) — fallback/hard-stop 경로
  *  - rotation 화이트리스트 normalize (refresh_token / access_token 등만 비교, 캐시 필드 무시)
  *  - adapter registry (register/reset/get) idempotency
  *  - inspectLiveFreshness 의 source 별 누락 케이스 (양쪽 부재/라이브 부재/저장본 부재)
@@ -26,6 +26,7 @@ import {
   type FreshnessReport,
   type SourceAdapter
 } from '../../src/core/freshness.js';
+import { resetCliDefCache } from '../../src/core/cli-defs.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
 describe('fallbackCompare — prototype pollution 방어 (quad-review HIGH fix)', () => {
@@ -154,6 +155,7 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
 
   afterEach(async () => {
     resetAdapters();
+    resetCliDefCache();
     await tmp.cleanup();
   });
 
@@ -207,6 +209,39 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(caught).toBeInstanceOf(UsageError);
     expect((caught as { exitCode: number }).exitCode).toBe(2);
     expect((caught as { cliId: string }).cliId).toBe('does-not-exist');
+  });
+
+  it('env-secret source 는 freshness 에서 unsupported metadata-only 로 보고', async () => {
+    const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, 'future-env.json'), JSON.stringify({
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+        accountKey: 'linux-account'
+      }]
+    }));
+    resetCliDefCache();
+
+    const report = await inspectLiveFreshness('future-env', 'work');
+    expect(report.sources).toEqual([
+      expect.objectContaining({
+        saveAs: 'future.json',
+        result: expect.objectContaining({
+          kind: 'unsupported',
+          confidence: 'high',
+          detail: expect.stringContaining('unsupported-env-secret-source')
+        })
+      })
+    ]);
+    const text = JSON.stringify(report);
+    expect(text).toContain('MAT_TEST_SECRET');
+    expect(text).not.toContain('linux-handle');
+    expect(text).not.toContain('linux-account');
   });
 
   it('adapter 등록 시 fallback 대신 adapter.compare 호출', async () => {
@@ -470,6 +505,11 @@ describe('needsUserAttention (PR-G)', () => {
     expect(needsUserAttention(makeReport(['inflight']))).toBe(true);
   });
 
+  it('unsupported 하나라도 → true (metadata-only hard-stop 안내)', () => {
+    expect(needsUserAttention(makeReport(['unsupported']))).toBe(true);
+    expect(needsUserAttention(makeReport(['fresh', 'unsupported']))).toBe(true);
+  });
+
   it('빈 sources → false (보고할 source 없음 — dialog 의미 없음)', () => {
     expect(needsUserAttention(makeReport([]))).toBe(false);
   });
@@ -481,8 +521,9 @@ describe('hasInflight (PR-G)', () => {
     expect(hasInflight(makeReport(['fresh', 'rotated', 'inflight']))).toBe(true);
   });
 
-  it('inflight 없음 → false (rotated/stale 만 있어도)', () => {
+  it('inflight 없음 → false (rotated/stale/unsupported 만 있어도)', () => {
     expect(hasInflight(makeReport(['rotated', 'stale']))).toBe(false);
+    expect(hasInflight(makeReport(['unsupported']))).toBe(false);
     expect(hasInflight(makeReport(['fresh']))).toBe(false);
   });
 });
@@ -495,7 +536,7 @@ describe('hasInflight (PR-G)', () => {
  * 모든 가능한 CompareKind 조합에 대해 검증.
  */
 describe('predicate invariants (PR-G)', () => {
-  const KINDS: CompareResult['kind'][] = ['fresh', 'rotated', 'stale', 'inflight'];
+  const KINDS: CompareResult['kind'][] = ['fresh', 'rotated', 'stale', 'inflight', 'unsupported'];
 
   it('hasInflight(report) ⇒ needsUserAttention(report) — 모든 단일 source 케이스', () => {
     for (const kind of KINDS) {

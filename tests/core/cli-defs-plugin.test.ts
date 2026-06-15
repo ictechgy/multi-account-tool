@@ -132,7 +132,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain(expectedKeyword as string);
   });
 
-  it('env-secret source 는 closed parser/runtime diagnostic 으로 거부한다', () => {
+  it('env-secret source 는 public schema 로 수용하되 runtime/product support 는 열지 않는다', () => {
     const r = validateCliDefRaw({
       id: 'future-env',
       name: 'Future Env',
@@ -140,15 +140,19 @@ describe('validateCliDefRaw (순수 validator)', () => {
         type: 'env-secret',
         envName: 'MAT_TEST_SECRET',
         saveAs: 'future.json',
-        backend: { kind: 'synthetic', handle: 'work-handle' }
+        backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+        accountKey: 'linux-account'
       }]
     });
 
-    expect(r.def).toBeUndefined();
-    expect(r.error).toContain('env-secret');
-    expect(r.error).toContain('parser/runtime');
-    expect(r.error).not.toContain('work-handle');
-    expect(r.error).not.toContain('linux-secret-service');
+    expect(r.error).toBeUndefined();
+    expect(r.def?.sources[0]).toMatchObject({
+      type: 'env-secret',
+      envName: 'MAT_TEST_SECRET',
+      saveAs: 'future.json',
+      backend: { kind: 'linux-secret-service' },
+      accountKey: 'linux-account'
+    });
 
     const lint = validatePluginDefinition({
       id: 'future-env',
@@ -157,21 +161,30 @@ describe('validateCliDefRaw (순수 validator)', () => {
         type: 'env-secret',
         envName: 'MAT_TEST_SECRET',
         saveAs: 'future.json',
-        backend: { kind: 'synthetic', handle: 'work-handle' }
+        backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+        accountKey: 'linux-account'
       }]
     });
-    expect(lint.def).toBeUndefined();
-    expect(lint.diagnostics).toEqual([
-      expect.objectContaining({
-        severity: 'error',
-        code: 'schema_invalid',
-        message: expect.stringContaining('parser/runtime')
-      })
-    ]);
-    expect(lint.diagnostics[0].message).not.toContain('work-handle');
-    expect(lint.diagnostics[0].message).not.toContain('linux-secret-service');
+    expect(lint.def?.sources[0].type).toBe('env-secret');
+    expect(lint.diagnostics).toEqual([]);
 
-    const linuxBackend = validateCliDefRaw({
+    const syntheticBackend = validateCliDefRaw({
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'synthetic', handle: 'work-handle' },
+        accountKey: 'synthetic-account'
+      }]
+    });
+    expect(syntheticBackend.def).toBeUndefined();
+    expect(syntheticBackend.error).toContain('env-secret');
+    expect(syntheticBackend.error).not.toContain('synthetic-account');
+    expect(syntheticBackend.error).not.toContain('work-handle');
+
+    const missingAccount = validateCliDefRaw({
       id: 'future-env',
       name: 'Future Env',
       sources: [{
@@ -181,14 +194,12 @@ describe('validateCliDefRaw (순수 validator)', () => {
         backend: { kind: 'linux-secret-service', handle: 'linux-handle' }
       }]
     });
-    expect(linuxBackend.def).toBeUndefined();
-    expect(linuxBackend.error).toContain('env-secret');
-    expect(linuxBackend.error).toContain('parser/runtime');
-    expect(linuxBackend.error).not.toContain('linux-secret-service');
-    expect(linuxBackend.error).not.toContain('linux-handle');
+    expect(missingAccount.def).toBeUndefined();
+    expect(missingAccount.error).toContain('account');
+    expect(missingAccount.error).not.toContain('linux-handle');
   });
 
-  it('public parser accepted source-type diagnostic remains file/keychain/os-keyring only', () => {
+  it('public parser accepted source-type diagnostic includes env-secret but not backend details', () => {
     const r = validateCliDefRaw({
       id: 'bad-type',
       name: 'Bad Type',
@@ -199,7 +210,7 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain('file');
     expect(r.error).toContain('keychain');
     expect(r.error).toContain('os-keyring');
-    expect(r.error).not.toContain('env-secret');
+    expect(r.error).toContain('env-secret');
     expect(r.error).not.toContain('linux-secret-service');
   });
 
@@ -608,7 +619,7 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.warnings[0]).toContain('bad-id.json');
   });
 
-  it('on-disk env-secret plugin 은 로드되지 않고 payload 를 누설하지 않는다', async () => {
+  it('on-disk env-secret plugin 은 metadata 로 로드되며 runtime 은 별도 hard-stop 대상이다', async () => {
     await writePlugin('future-env.json', {
       id: 'future-env',
       name: 'Future Env',
@@ -616,7 +627,33 @@ describe('loadUserCliDefs — fs 통합', () => {
         type: 'env-secret',
         envName: 'MAT_TEST_SECRET',
         saveAs: 'future.json',
-        backend: { kind: 'synthetic', handle: 'work-handle' }
+        backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+        accountKey: 'linux-account'
+      }]
+    });
+
+    const r = loadUserCliDefs();
+    expect(r.warnings).toEqual([]);
+    expect(r.defs).toHaveLength(1);
+    expect(r.defs[0].sources[0]).toMatchObject({
+      type: 'env-secret',
+      envName: 'MAT_TEST_SECRET',
+      saveAs: 'future.json',
+      backend: { kind: 'linux-secret-service' },
+      accountKey: 'linux-account'
+    });
+  });
+
+  it('on-disk env-secret validation failure 는 payload 를 누설하지 않는다', async () => {
+    await writePlugin('future-env.json', {
+      id: 'future-env',
+      name: 'Future Env',
+      sources: [{
+        type: 'env-secret',
+        envName: 'MAT_TEST_SECRET',
+        saveAs: 'future.json',
+        backend: { kind: 'synthetic', handle: 'work-handle' },
+        accountKey: 'synthetic-account'
       }]
     });
 
@@ -624,8 +661,8 @@ describe('loadUserCliDefs — fs 통합', () => {
     expect(r.defs).toEqual([]);
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]).toContain('env-secret');
-    expect(r.warnings[0]).toContain('parser/runtime');
     expect(r.warnings[0]).not.toContain('work-handle');
+    expect(r.warnings[0]).not.toContain('synthetic-account');
   });
 
   it('plugin 끼리 id 충돌 → 첫 등장만 채택, 후속은 warning + skip', async () => {

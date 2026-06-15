@@ -4,7 +4,7 @@
  * - keychain: macOS Keychain의 generic password 항목
  * - os-keyring: Linux Secret Service (secret-tool) 기반 자격증명 항목
  */
-export type SourceType = 'file' | 'keychain' | 'os-keyring';
+export type SourceType = 'file' | 'keychain' | 'os-keyring' | 'env-secret';
 
 /**
  * 파일 기반 자격증명 source.
@@ -86,7 +86,30 @@ export interface OsKeyringSource {
   saveAs: string;
 }
 
-export type Source = FileSource | KeychainSource | OsKeyringSource;
+/**
+ * Profile-owned environment secret source.
+ *
+ * This public schema is accepted only as safe metadata. Product storage,
+ * command injection, profile UX, and CLI-specific Amp/Copilot support remain
+ * blocked until later PRs replace the hard-stops in each Source consumer.
+ */
+export interface EnvSecretSource {
+  type: 'env-secret';
+  /** Child-process environment variable name to receive the future secret. */
+  envName: string;
+  /** Profile/source identity key. Not a file containing a value for env-secret. */
+  saveAs: string;
+  /** Public backends are limited to reviewed, implemented custody families. */
+  backend: {
+    kind: 'linux-secret-service';
+    /** Opaque storage handle. Must not be printed as proof or identity. */
+    handle: string;
+  };
+  /** Required account binding metadata for Linux Secret Service custody. */
+  accountKey: string;
+}
+
+export type Source = FileSource | KeychainSource | OsKeyringSource | EnvSecretSource;
 
 /**
  * 세션 시작 시 base 하위 디렉토리를 세션 root 로 재귀 복사할 allow-list 항목.

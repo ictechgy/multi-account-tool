@@ -15,6 +15,7 @@
 import { findCliDef } from './cli-defs.js';
 import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile, setActiveProfile } from './config.js';
+import { assertNoEnvSecretSources } from './env-secret-source.js';
 import { UnknownCliError } from './errors.js';
 import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
 import { buildProfileIdentity, type IdentitySourceInput } from './profile-identity.js';
@@ -58,6 +59,7 @@ async function snapshotLiveToProfileUnlocked(
   profileName: string
 ): Promise<SnapshotResult> {
   const def = mustFindCli(cliId);
+  assertNoEnvSecretSources(def.sources, 'snapshot');
   if (!(await profileExists(cliId, profileName))) {
     await createProfile(cliId, profileName);
   }
@@ -124,6 +126,7 @@ async function restoreProfileToLiveUnlocked(
   profileName: string
 ): Promise<RestoreResult> {
   const def = mustFindCli(cliId);
+  assertNoEnvSecretSources(def.sources, 'restore');
   if (!(await profileExists(cliId, profileName))) {
     throw new Error(`프로필을 찾을 수 없습니다: ${cliId}/${profileName}`);
   }
@@ -235,7 +238,8 @@ export async function switchProfile(
   toProfile: string,
   options?: SwitchOptions
 ): Promise<SwitchResult> {
-  mustFindCli(cliId);
+  const def = mustFindCli(cliId);
+  assertNoEnvSecretSources(def.sources, 'switch');
   return withCliMutationLock(
     { cliId, profileName: toProfile, execMode: 'foreground', affectsCliIds: [cliId] },
     () => switchProfileUnlocked(cliId, toProfile, options)

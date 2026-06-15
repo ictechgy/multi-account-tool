@@ -231,7 +231,7 @@ export function planSession(def: CliDef, profile: string, id: string): SessionPl
       // 경로만 옮길 뿐 keychain/keyring entry 는 그대로다. 따라서 file source 만 세션 격리한다.
       throw new UsageError(
         `세션 격리는 file source 만 지원합니다 (${def.id}: '${src.type}' source). ` +
-          `keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트로 격리할 수 없습니다.`
+          `keychain/OS-keyring/env-secret 자격증명은 env 디렉토리 리다이렉트로 격리할 수 없습니다.`
       );
     }
     const fileAbs = expandTilde(src.path);

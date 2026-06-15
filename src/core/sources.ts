@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { expandTilde } from './paths.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
+import { unsupportedEnvSecretSource } from './env-secret-source.js';
 import { writeFileAtomic } from './io-atomic.js';
 import { readOsKeyringSerialized, writeOsKeyringSerialized, osKeyringExists } from './os-keyring.js';
 import type { KeychainSource, KeychainStored, Source } from './types.js';
@@ -355,6 +356,8 @@ export async function readSource(src: Source): Promise<string | null> {
       return readKeychainSerialized(src);
     case 'os-keyring':
       return readOsKeyringSerialized(src);
+    case 'env-secret':
+      throw unsupportedEnvSecretSource(src, 'read-source');
     default:
       return assertNever(src);
   }
@@ -369,6 +372,8 @@ export async function writeSource(src: Source, value: string): Promise<void> {
       return writeKeychainSerialized(src, value);
     case 'os-keyring':
       return writeOsKeyringSerialized(src, value);
+    case 'env-secret':
+      throw unsupportedEnvSecretSource(src, 'write-source');
     default:
       return assertNever(src);
   }
@@ -384,6 +389,8 @@ export async function sourceExists(src: Source): Promise<boolean> {
       return keychainExists(src.service, src.account);
     case 'os-keyring':
       return osKeyringExists(src);
+    case 'env-secret':
+      throw unsupportedEnvSecretSource(src, 'source-exists');
     default:
       return assertNever(src);
   }

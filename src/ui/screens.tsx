@@ -373,6 +373,7 @@ function statusColor(result: CompareResult): string | undefined {
   if (result.kind === 'fresh') return 'green';
   if (result.kind === 'stale') return 'red';
   if (result.kind === 'inflight') return 'yellow';
+  if (result.kind === 'unsupported') return 'red';
   // rotated
   return 'yellow';
 }

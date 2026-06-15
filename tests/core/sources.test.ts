@@ -25,7 +25,7 @@ import { spawn } from 'node:child_process';
 
 import { readSource, runCommand, sourceExists, writeSource } from '../../src/core/sources.js';
 import { KeychainAccountMissingError } from '../../src/core/errors.js';
-import type { FileSource, KeychainSource, KeychainStored } from '../../src/core/types.js';
+import type { EnvSecretSource, FileSource, KeychainSource, KeychainStored } from '../../src/core/types.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
@@ -197,6 +197,35 @@ describe('sources — file branch (real fs)', () => {
     await fs.mkdir(dirPath);
     const src: FileSource = { type: 'file', path: dirPath, saveAs: 'a.json' };
     await expect(readSource(src)).rejects.toMatchObject({ code: 'EISDIR' });
+  });
+});
+
+describe('sources — env-secret public schema hard-stop', () => {
+  const src: EnvSecretSource = {
+    type: 'env-secret',
+    envName: 'MAT_TEST_SECRET',
+    saveAs: 'future.json',
+    backend: { kind: 'linux-secret-service', handle: 'linux-handle' },
+    accountKey: 'linux-account'
+  };
+
+  it('read/write/exists refuse before live value handling and omit handle/account', async () => {
+    await expect(readSource(src)).rejects.toMatchObject({ code: 'unsupported-env-secret-source' });
+    await expect(writeSource(src, 'secret-value')).rejects.toMatchObject({ code: 'unsupported-env-secret-source' });
+    await expect(sourceExists(src)).rejects.toMatchObject({ code: 'unsupported-env-secret-source' });
+
+    for (const call of [
+      readSource(src).catch((err) => err as Error),
+      writeSource(src, 'secret-value').catch((err) => err as Error),
+      sourceExists(src).catch((err) => err as Error)
+    ]) {
+      const err = await call;
+      expect(err.message).toContain('env-secret');
+      expect(err.message).not.toContain('linux-handle');
+      expect(err.message).not.toContain('linux-account');
+      expect(err.message).not.toContain('secret-value');
+    }
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 });
 

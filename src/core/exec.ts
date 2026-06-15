@@ -37,10 +37,12 @@ import { detectAmbientWarnings, formatAmbientWarnings } from './ambient.js';
 import { findCliDef } from './cli-defs.js';
 import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile } from './config.js';
+import { assertNoEnvSecretSources } from './env-secret-source.js';
 import { UsageError, errorMessage } from './errors.js';
 import { profileExists, validateProfileName } from './profile-store.js';
 import { snapshotLiveToProfile, switchProfile } from './switcher.js';
 import { getRecaptureTimeoutMs, withTimeout } from './timeout.js';
+import type { CliDef } from './types.js';
 
 export interface ExecOptions {
   cliId: string;
@@ -69,7 +71,8 @@ const FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
  * spawn 실패 시 throw — restore 는 throw 전에 best-effort 로 시도된다.
  */
 export async function runExec(opts: ExecOptions): Promise<ExecResult> {
-  const profileName = validateInputs(opts);
+  const { def, profileName } = validateInputs(opts);
+  assertNoEnvSecretSources(def.sources, 'exec');
 
   // 신호 forwarder: spawn 전후, restore 중 시그널 모두 흡수해 finally 가 완료되도록.
   // 자식이 존재하면 forward, 아니면 무시. 받은 시그널은 cli.tsx 가 재발생시킨다.
@@ -106,15 +109,16 @@ export async function runExec(opts: ExecOptions): Promise<ExecResult> {
 }
 
 /** 검증: cli 존재, profile 이름 유효, profile 존재, cmd 비어있지 않음. UsageError. */
-function validateInputs(opts: ExecOptions): string {
-  if (!findCliDef(opts.cliId)) {
+function validateInputs(opts: ExecOptions): { def: CliDef; profileName: string } {
+  const def = findCliDef(opts.cliId);
+  if (!def) {
     throw new UsageError(`알 수 없는 CLI: ${opts.cliId}`);
   }
   const profileName = validateProfileName(opts.profileName);
   if (!opts.command) {
     throw new UsageError('실행할 명령이 비어 있습니다. `-- <cmd>` 뒤에 명령을 지정하세요.');
   }
-  return profileName;
+  return { def, profileName };
 }
 
 /** 활성 프로필 조회. 미설정이면 UsageError (mat exec 거부). */
