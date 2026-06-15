@@ -19,7 +19,7 @@ The next safe Copilot step is explicit account-state design: `mat` must know whi
 - `SourceType` currently supports only `file`, macOS `keychain`, and Linux `os-keyring` (`src/core/types.ts`). There is no Windows Credential Manager backend yet.
 - `KeychainSource.account` and `OsKeyringSource.account` already model account-scoped native keyring entries, but they need a proven upstream account/attribute contract before Copilot can use them safely.
 - `mat plugin validate` is a static schema/lint check; it does not read credential stores and must not be treated as security certification.
-- The Copilot/Amp research note keeps Copilot blocked until explicit account binding, platform credential-store contracts, a minimal config-state strategy, and an ambient token policy exist.
+- The Copilot/Amp research note keeps Copilot blocked until explicit account binding, platform credential-store contracts, a minimal config-state strategy, and ambient token policy gates exist. The ambient-token policy is now documented in `docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`; runtime/env-secret implementation remains pending.
 
 ## Principles
 
@@ -92,15 +92,17 @@ Required policy before write-back support:
 
 ## Ambient token policy
 
-Copilot can be affected by ambient fallbacks such as `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, and GitHub CLI token fallback.
+Copilot can be affected by ambient fallbacks such as `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, and GitHub CLI token fallback. The flow-specific policy is now documented in `docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`.
 
-A future implementation must define separate behavior for each flow:
+A future implementation must enforce that policy before support:
 
 | Flow | Required behavior before support |
 | --- | --- |
 | Normal profile swap | Fail closed if ambient tokens could make the active process use a different account than the bound profile. |
-| `mat exec` | Either scrub competing env/fallbacks or intentionally inject one profile-owned token into the child; document which. |
+| `mat exec` | Either scrub competing env/fallbacks or intentionally inject one profile-owned token into the child through a future env-secret source; document which. |
 | Future session flow | Do not claim session isolation until token fallback, credential-store state, and app-state redirect are all scoped to the session. |
+
+The documented policy does not implement env-secret sources and does not unblock Copilot product support.
 
 ## Required parser/fixture cases
 
@@ -138,7 +140,7 @@ A future product PR may add Copilot only if all of these are true:
 3. **macOS/Linux human-opt-in or upstream-doc platform proof PR** — prove account selectors/cardinality without secrets before any prototype.
 4. ✅ **Windows Credential Manager source R&D contract** — defines backend/API/CI requirements; runtime implementation remains pending (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`).
 5. **Windows Credential Manager synthetic CI spike + implementation RALPLAN** — prove synthetic CredRead/CredWrite/CredDelete behavior before runtime support.
-6. **Ambient token policy PR** — decide normal swap vs `mat exec` vs future session behavior.
+6. ✅ **Ambient token policy PR** — normal swap vs `mat exec` vs future session behavior documented; runtime/env-secret implementation remains pending (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`).
 7. **Copilot prototype PR** — only after the previous gates.
 
 ## Non-goals
