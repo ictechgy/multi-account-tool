@@ -2,9 +2,9 @@
 
 ## Summary
 
-This document is a **docs-only R&D contract** for a future Windows Credential Manager source backend. It does not implement a backend, does not add a new `SourceType`, does not touch Windows credentials, and does not claim Windows or Copilot product support.
+This document started as a **docs-only R&D contract** for a future Windows Credential Manager source backend and now also records a **non-product Windows-CI-only synthetic API proof**. It still does not implement a backend, does not add a new `SourceType`, does not add product runtime helpers, and does not claim Windows or Copilot product support.
 
-The goal is to define the minimum safety, API, serialization, rollback, and CI requirements before `mat` can add a Windows credential-store source.
+The goal is to define the minimum safety, API, serialization, rollback, and CI requirements before `mat` can add a Windows credential-store source. The synthetic proof only validates that GitHub's Windows runner can perform scoped `CredWriteW`/`CredReadW`/`CredDeleteW` round-trips against a random repo-specific target.
 
 ## Official/public evidence rechecked
 
@@ -23,18 +23,31 @@ Publicly documented contract relevant to `mat`:
 - `CredWriteW` creates or modifies a credential in the current token/logon session credential set.
 - `cmdkey` can create, list, and delete stored credentials, including generic credentials.
 
+## Non-product synthetic CI proof (2026-06-15)
+
+The first executable artifact is intentionally outside product runtime:
+
+- Workflow: `.github/workflows/windows-credential-manager-spike.yml`
+- Script: `scripts/windows-credential-manager-synthetic.ps1`
+- Runner: `windows-latest`
+- Scope: one random target named `mat-ci/<run-id>/<guid>` with `CRED_TYPE_GENERIC` and `CRED_PERSIST_SESSION`
+- APIs: direct `CredWriteW`, `CredReadW`, `CredDeleteW`, and `CredFree` P/Invoke declarations with `SetLastError=true` on failing Win32 calls
+- Logging: phase/status plus safe target prefix/run id and Win32 error name/code only; no target GUID, secret value, credential blob, pointer, or raw credential output
+
+This proof covers only these API semantics: missing read, write/read equality by exact UTF-16LE byte length, overwrite/read equality, delete, final missing read, and cleanup. It is not a Windows source backend and it does not prove any Copilot target/account contract.
+
 What is not decided by public docs alone:
 
 - The exact Node/TypeScript integration path for `mat`.
 - How to represent Windows credential target/type fields in `Source` without committing to an unstable public schema too early.
-- The exact CI cleanup and rollback behavior for synthetic Windows credentials.
+- The exact product-runtime cleanup and rollback behavior for Windows credentials beyond the non-product synthetic API proof.
 - Any GitHub Copilot Windows target/account schema.
 
 ## Decision
 
-Do not implement a backend in this PR.
+Do not implement a product backend in this PR.
 
-Use this document as the contract for a future, separately reviewed Windows implementation. Any provisional name such as `win-credential` is **non-normative** and must not be treated as public schema until an implementation PR commits to it.
+This PR may add only a standalone Windows-CI-only synthetic proof script/workflow that exercises the Win32 Credentials Management API against a random `mat-ci/<run-id>/<guid>` target. Use this document as the contract for a future, separately reviewed Windows implementation. Any provisional name such as `win-credential` is **non-normative** and must not be treated as public schema until an implementation PR commits to it.
 
 ## Why `cmdkey` is not the product backend plan
 
@@ -172,13 +185,13 @@ Keep Windows source implementation blocked if any of these are true:
 
 - No `SourceType` change in this PR.
 - No plugin schema change in this PR.
-- No Windows runtime helper in this PR.
-- No credential reads/writes/deletes in this PR.
+- No Windows product runtime helper in this PR.
+- No product credential reads/writes/deletes in this PR; only the standalone synthetic CI proof may touch a random `mat-ci/<run-id>/<guid>` target.
 - No Copilot builtin, freshness adapter, profile swap, session, or command-run support in this PR.
 
 ## Follow-up order
 
-1. Non-product Windows-CI-only synthetic credential spike.
+1. ✅ Non-product Windows-CI-only synthetic credential spike (`.github/workflows/windows-credential-manager-spike.yml`, `scripts/windows-credential-manager-synthetic.ps1`); product backend/support remains blocked.
 2. Windows source implementation RALPLAN.
 3. Windows source implementation PR with synthetic CI tests.
 4. Copilot Windows target/account proof after backend exists.
