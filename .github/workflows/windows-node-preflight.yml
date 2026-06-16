@@ -99,14 +99,5 @@ jobs:
         run: npm run typecheck
 
       - name: Targeted Windows-safe core tests
-        shell: pwsh
         run: |
-          $tests = @(
-            'tests/core/copilot-credential-proof.test.ts',
-            'tests/core/env-secret.test.ts',
-            'tests/core/env-secret-command-runtime.test.ts',
-            'tests/core/env-secret-product-runtime.test.ts',
-            'tests/core/amp-config-hard-stop.test.ts'
-          )
-          $futureWindowsTests = Get-ChildItem -Path 'tests/core' -Filter 'windows-credential-manager*.test.ts' -File -ErrorAction SilentlyContinue | ForEach-Object { "tests/core/$($_.Name)" }
-          npx vitest run @tests @futureWindowsTests
+          node -e "const fs=require('node:fs'); const cp=require('node:child_process'); const tests=['tests/core/copilot-credential-proof.test.ts','tests/core/env-secret.test.ts','tests/core/env-secret-command-runtime.test.ts','tests/core/env-secret-product-runtime.test.ts','tests/core/amp-config-hard-stop.test.ts']; const future=fs.readdirSync('tests/core').filter((name)=>/^windows-credential-manager.*\.test\.ts$/.test(name)).map((name)=>'tests/core/'+name); const args=['node_modules/vitest/vitest.mjs','run',...tests,...future]; console.log('Running targeted Windows preflight tests:'); for (const test of [...tests,...future]) console.log(' - '+test); const result=cp.spawnSync(process.execPath, args, { stdio: 'inherit' }); process.exit(result.status ?? 1);"
