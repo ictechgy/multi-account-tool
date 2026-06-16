@@ -106,7 +106,7 @@ Required workflow:
 5. A passing validator result means **metadata report accepted**, not platform proof.
 6. A second reviewer signs off whether the source evidence behind the report is sufficient platform proof.
 
-A platform report may claim `conclusion: "pass"` only when all minimum acceptance criteria in the proof contract are met. Windows remains blocked in this workflow until its backend and Copilot target/account schema are separately proven.
+A platform report may claim `conclusion: "pass"` only when all minimum acceptance criteria in the proof contract are met. Windows reports can be structurally represented with value-free `windowsCredentialBindingProof`, but Windows platform proof remains blocked until human-reviewed source evidence proves Copilot's TargetName/account-guard layout.
 
 ## Failure taxonomy
 
@@ -139,7 +139,7 @@ This design leaves these gates pending:
 2. If executable, run a dedicated security review before adding any script.
 3. Collect and review macOS evidence without committing raw local output.
 4. Collect and review Linux evidence without committing raw local output.
-5. Keep Windows blocked until Windows source backend and Copilot target/account schema are proven.
+5. Keep Windows product support blocked until Windows source backend and human-reviewed Copilot TargetName/account-guard evidence are proven; metadata-report validation alone is insufficient.
 6. Implement ambient-token/env-secret runtime controls before any product flow.
 7. Add Copilot product support only after platform proof, app-state write-back policy, Windows/backend gates, and ambient-token/env-secret gates pass.
 

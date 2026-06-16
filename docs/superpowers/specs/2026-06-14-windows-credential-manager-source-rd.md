@@ -190,7 +190,7 @@ Windows Credential Manager support is necessary for cross-platform Copilot suppo
 Copilot remains blocked until all of these are true:
 
 - Windows source backend exists and passes synthetic Windows CI.
-- Copilot’s Windows Credential Manager target/account schema is proven without secrets.
+- Copilot’s Windows Credential Manager TargetName/account-guard schema is proven without secrets. The metadata-report validator can now represent this as value-free `windowsCredentialBindingProof`, but a passing report shape is not platform proof.
 - Copilot app-state binding remains consistent with the credential-store selector.
 - Ambient-token precedence (`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token`) follows `docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md` and is implemented/controlled for the target flow.
 - macOS/Linux proof, Windows proof, app-state write-back policy, and ambient-token policy all pass their gates.
@@ -214,6 +214,7 @@ Keep Windows source implementation blocked if any of these are true:
 - No Copilot/Amp builtin, freshness adapter, profile swap, session, command-run, or target/account support is claimed by the public primitive alone.
 - No trusted `mat session start/run` boundary for user plugin CLIs.
 - A passing plugin validation report remains static schema/lint evidence, not proof that an upstream CLI will use the intended Windows credential target/account.
+- A passing Copilot Windows metadata report remains report-shape evidence, not proof that Copilot actually uses the represented TargetName/account-guard layout.
 
 ## Follow-up order
 
@@ -221,6 +222,7 @@ Keep Windows source implementation blocked if any of these are true:
 2. ✅ Feature-scoped Windows Node/package-support preflight (`.github/workflows/windows-node-preflight.yml`); targeted typecheck/tests only, no `win32` package support claim.
 3. ✅ Internal Windows Credential Manager backend proof (`src/core/windows-credential-manager.ts`, `tests/core/windows-credential-manager.test.ts`); direct Win32 bridge + synthetic Windows tests only, no public source/schema/runtime wiring.
 4. ✅ Public Windows source schema/runtime wiring (`SourceType`/`sources.ts`/plugin parser`) with no builtin/package Windows support claim.
-5. Copilot Windows target/account proof after backend exists and public wiring direction is settled.
-6. ✅ Ambient token policy (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
-7. Copilot prototype only after all platform, ambient-token implementation, and env-secret gates pass.
+5. ✅ Copilot Windows metadata-report gate: value-free TargetName/account-guard schema validation in `src/core/copilot-credential-proof.ts`; no platform proof or product support claim.
+6. Human-reviewed Copilot Windows TargetName/account-guard evidence after backend/public primitive direction is settled.
+7. ✅ Ambient token policy (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
+8. Copilot prototype only after all platform, ambient-token implementation, and env-secret gates pass.
