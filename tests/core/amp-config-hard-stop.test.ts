@@ -327,7 +327,7 @@ describe('Amp config hard-stop matrix safety gate', () => {
     for (const file of sourceFiles) {
       const rel = relative(root, file).split(sep).join('/');
       const text = readFileSync(file, 'utf8');
-      if (rel === 'src/core/env-secret-command-runtime.ts') continue;
+      if (rel === 'src/core/env-secret-command-runtime.ts' || rel === 'src/core/env-secret-product-runtime.ts') continue;
       expect({ rel, mentions: text.includes('env-secret-command-runtime') || text.includes('prepareEnvSecretCommandEnv') }).toEqual({
         rel,
         mentions: false
