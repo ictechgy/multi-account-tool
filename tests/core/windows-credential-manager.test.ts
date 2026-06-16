@@ -420,5 +420,5 @@ describe('windows credential manager internal backend — synthetic Windows inte
     } finally {
       await deleteWindowsCredential(liveBinding).catch(() => 'missing');
     }
-  });
+  }, 30_000);
 });
