@@ -135,7 +135,7 @@ Stop the proof path immediately if any of these occur:
 
 This design leaves these gates pending:
 
-1. Decide whether a future proof uses a reviewed manual checklist or an executable local probe.
+1. ✅ Add a reviewed manual metadata-admission checklist gate before any executable probe (`docs/superpowers/specs/2026-06-16-copilot-proof-metadata-admission-gate.md`).
 2. If executable, run a dedicated security review before adding any script.
 3. Collect and review macOS evidence without committing raw local output.
 4. Collect and review Linux evidence without committing raw local output.
@@ -153,11 +153,15 @@ This design leaves these gates pending:
 - No proof report fixture claiming real platform proof.
 - No checked-in local machine output.
 
+## Follow-up implementation note (2026-06-16)
+
+The pure metadata-admission gate now lives in `src/core/copilot-proof-metadata-admission.ts`. It evaluates redacted reports plus value-free review checklists only. It does not collect evidence, does not read credential stores, and does not change the blocked product-support status.
+
 ## PR acceptance checklist
 
-- This document is the only new spec artifact.
-- Existing docs/ROADMAP say only design is complete; actual platform proof remains pending.
-- No source/runtime/test files are changed.
+- Original design artifact remained documentation-only.
+- Follow-up metadata-admission code still says actual platform proof remains pending.
+- No runtime/product/probe files are changed by the metadata-admission gate.
 - `npm run build:docs` passes.
 - `git diff --check` passes.
 - Static scans find no product wiring, token-shaped text, or real-label examples in changed docs.
