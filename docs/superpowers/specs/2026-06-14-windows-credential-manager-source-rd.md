@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document started as a **docs-only R&D contract** for a future Windows Credential Manager source backend and now also records a **non-product Windows-CI-only synthetic API proof** plus a **feature-scoped Windows Node preflight**. It still does not implement a backend, does not add a new `SourceType`, does not add product runtime helpers, and does not claim Windows or Copilot product support.
+This document started as a **docs-only R&D contract** for a future Windows Credential Manager source backend and now also records a **non-product Windows-CI-only synthetic API proof**, a **feature-scoped Windows Node preflight**, and an **internal-only backend proof**. It still does not add a public `SourceType`, does not add plugin schema/runtime wiring, and does not claim Windows package/product or Copilot support.
 
 The goal is to define the minimum safety, API, serialization, rollback, and CI requirements before `mat` can add a Windows credential-store source. The synthetic proof only validates that GitHub's Windows runner can perform scoped `CredWriteW`/`CredReadW`/`CredDeleteW` round-trips against a random repo-specific target.
 
@@ -48,18 +48,30 @@ The second executable artifact is also intentionally outside product runtime:
 
 This preflight is evidence that future Windows Credential Manager backend work can use a targeted Windows Node lane. It is not evidence that the published package supports Windows or that any Windows credential source exists; the forced install is CI-only and exists precisely because package support remains darwin/linux.
 
+## Internal-only backend proof (2026-06-16)
+
+The third executable artifact is an internal backend proof, still outside public source/schema/runtime wiring:
+
+- Module: `src/core/windows-credential-manager.ts`
+- Tests: `tests/core/windows-credential-manager.test.ts`
+- Scope: internal TypeScript orchestration for `CRED_TYPE_GENERIC` read/write/exists/delete using a narrow `WindowsCredentialBridge`, fake-bridge rollback/error/redaction tests on all platforms, and real synthetic Windows Credential Manager integration tests on `windows-latest`
+- Bridge: quarantined `PowerShellPInvokeWindowsCredentialBridge` that calls direct `CredReadW`, `CredWriteW`, `CredDeleteW`, and `CredFree`; secret material is passed through stdin JSON only, never argv
+- Product boundary: no public `win-credential` source type, no plugin parser acceptance, no `sources.ts`/builtin wiring, no `package.json` `win32` support, no main CI Windows matrix expansion, and no Copilot/Amp support
+
+This proof turns the preflight lane into backend evidence for exact-target synthetic credentials. It is not yet a user-facing Windows credential source because there is still no public schema, no CLI definition wiring, and no package-level Windows support claim.
+
 What is not decided by public docs alone:
 
-- The exact Node/TypeScript integration path for `mat`.
+- The final public Node/TypeScript integration path for `mat` once package-level Windows support is considered.
 - How to represent Windows credential target/type fields in `Source` without committing to an unstable public schema too early.
-- The exact product-runtime cleanup and rollback behavior for Windows credentials beyond the non-product synthetic API proof.
+- The final product-runtime cleanup and rollback behavior once the backend is wired into public `Source` consumers.
 - Any GitHub Copilot Windows target/account schema.
 
-## Decision
+## Decision history and current boundary
 
-Do not implement a product backend in this PR.
+The original R&D/synthetic-proof PR did **not** implement a product backend and allowed only a standalone Windows-CI-only synthetic proof script/workflow that exercised the Win32 Credentials Management API against a random `mat-ci/<run-id>/<guid>` target.
 
-This PR may add only a standalone Windows-CI-only synthetic proof script/workflow that exercises the Win32 Credentials Management API against a random `mat-ci/<run-id>/<guid>` target. Use this document as the contract for a future, separately reviewed Windows implementation. Any provisional name such as `win-credential` is **non-normative** and must not be treated as public schema until an implementation PR commits to it.
+After the Windows Node preflight merged, the approved next step is an **internal-only backend proof**: `src/core/windows-credential-manager.ts` may implement direct Win32 Credential Manager operations behind a quarantined bridge and synthetic tests, but it still must not expose a public source schema or product runtime wiring. Any provisional name such as `win-credential` remains **non-normative** and must not be treated as public schema until a later implementation PR commits to it.
 
 ## Why `cmdkey` is not the product backend plan
 
@@ -195,18 +207,19 @@ Keep Windows source implementation blocked if any of these are true:
 
 ## Product non-goals
 
-- No `SourceType` change in this PR.
+- No public `SourceType` change in this PR.
 - No plugin schema change in this PR.
-- No Windows product runtime helper in this PR.
-- No product credential reads/writes/deletes in this PR; only the standalone synthetic CI proof may touch a random `mat-ci/<run-id>/<guid>` target.
-- No Copilot builtin, freshness adapter, profile swap, session, or command-run support in this PR.
+- No `sources.ts`, builtin CLI, freshness, detector, switcher, session, or command-run wiring in this PR.
+- No package-level Windows support claim (`package.json` `os` remains darwin/linux) and no main CI Windows matrix expansion.
+- No product credential reads/writes/deletes through user-facing commands; only synthetic test targets may be touched by the standalone proof or the internal backend tests.
+- No Copilot builtin, freshness adapter, profile swap, session, command-run, or target/account support in this PR.
 
 ## Follow-up order
 
-1. ✅ Non-product Windows-CI-only synthetic credential spike (`.github/workflows/windows-credential-manager-spike.yml`, `scripts/windows-credential-manager-synthetic.ps1`); product backend/support remains blocked.
+1. ✅ Non-product Windows-CI-only synthetic credential spike (`.github/workflows/windows-credential-manager-spike.yml`, `scripts/windows-credential-manager-synthetic.ps1`); product backend/support remained blocked.
 2. ✅ Feature-scoped Windows Node/package-support preflight (`.github/workflows/windows-node-preflight.yml`); targeted typecheck/tests only, no `win32` package support claim.
-3. Windows source implementation RALPLAN, including feature-scoped internal backend first vs package-wide support first.
-4. Windows source implementation PR with synthetic Windows npm/vitest CI tests.
-5. Copilot Windows target/account proof after backend exists.
+3. ✅ Internal Windows Credential Manager backend proof (`src/core/windows-credential-manager.ts`, `tests/core/windows-credential-manager.test.ts`); direct Win32 bridge + synthetic Windows tests only, no public source/schema/runtime wiring.
+4. Public Windows source schema/runtime wiring RALPLAN (`SourceType`/`sources.ts`/plugin parser/builtins) after internal backend proof is reviewed and merged.
+5. Copilot Windows target/account proof after backend exists and public wiring direction is settled.
 6. ✅ Ambient token policy (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
 7. Copilot prototype only after all platform, ambient-token implementation, and env-secret gates pass.
