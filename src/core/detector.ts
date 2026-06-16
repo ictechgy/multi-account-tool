@@ -17,6 +17,7 @@
 import { getAllCliDefs } from './cli-defs.js';
 import { isEnvSecretSource } from './env-secret-source.js';
 import { sourceExists } from './sources.js';
+import { isWindowsCredentialRuntimeUnsupported } from './windows-credential-source.js';
 import type { CliDef } from './types.js';
 
 export interface DetectionResult {
@@ -45,7 +46,9 @@ export async function detectAll(): Promise<DetectionResult[]> {
 }
 
 async function detect(cli: CliDef): Promise<DetectionResult> {
-  const unsupported = cli.sources.filter(isEnvSecretSource).map((src) => src.saveAs);
+  const unsupported = cli.sources
+    .filter((src) => isEnvSecretSource(src) || isWindowsCredentialRuntimeUnsupported(src))
+    .map((src) => src.saveAs);
   if (unsupported.length > 0) {
     return {
       cli,

@@ -19,6 +19,10 @@ import { normalizeIsoString, normalizeProfileIdentity, formatProfileIdentity } f
 import { listProfiles, profileExists, readMeta } from './profile-store.js';
 import { sourceExists } from './sources.js';
 import { doctorSessionSupportForCli } from './support.js';
+import {
+  isWindowsCredentialRuntimeUnsupported,
+  windowsCredentialSourceMetadata
+} from './windows-credential-source.js';
 import type { CliDef, Config, Source } from './types.js';
 import type { ProfileIdentitySummary } from './types.js';
 
@@ -183,6 +187,29 @@ async function inspectEnvSecretSource(src: Extract<Source, { type: 'env-secret' 
   };
 }
 
+async function inspectWindowsCredentialSource(src: Extract<Source, { type: 'win-credential' }>): Promise<DoctorSourceStatus> {
+  if (isWindowsCredentialRuntimeUnsupported(src)) {
+    const meta = windowsCredentialSourceMetadata(src);
+    return {
+      saveAs: redactMessage(meta.saveAs),
+      type: src.type,
+      status: 'not-checked',
+      detail: `${meta.reason}: requires win32; entry presence not checked`
+    };
+  }
+  try {
+    const exists = await sourceExists(src);
+    return {
+      saveAs: redactMessage(src.saveAs),
+      type: src.type,
+      status: exists ? 'present' : 'missing',
+      detail: 'Windows Credential Manager metadata-only check'
+    };
+  } catch (err) {
+    return { saveAs: redactMessage(src.saveAs), type: src.type, status: 'error', error: errorMessage(err) };
+  }
+}
+
 async function inspectSource(src: Source): Promise<DoctorSourceStatus> {
   switch (src.type) {
     case 'file':
@@ -193,6 +220,8 @@ async function inspectSource(src: Source): Promise<DoctorSourceStatus> {
       return inspectOsKeyringSource(src);
     case 'env-secret':
       return inspectEnvSecretSource(src);
+    case 'win-credential':
+      return inspectWindowsCredentialSource(src);
     default: {
       const neverSrc: never = src;
       return neverSrc;

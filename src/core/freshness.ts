@@ -28,6 +28,11 @@ import { UnknownCliError } from './errors.js';
 import { redactSecretLikeMessage } from './freshness-adapters/_shared.js';
 import { readProfileFile } from './profile-store.js';
 import { readSource } from './sources.js';
+import {
+  isWindowsCredentialSource,
+  isWindowsCredentialRuntimeUnsupported,
+  windowsCredentialSourceMetadata
+} from './windows-credential-source.js';
 
 /** 라이브 vs 저장본 비교 결과의 4-state 분류. */
 export type CompareKind = 'fresh' | 'rotated' | 'stale' | 'inflight' | 'unsupported';
@@ -334,6 +339,18 @@ export async function inspectLiveFreshness(
           kind: 'unsupported',
           confidence: 'high',
           detail: `${meta.reason}: ${meta.envName}/${meta.backendKind}`
+        }
+      });
+      continue;
+    }
+    if (isWindowsCredentialSource(src) && isWindowsCredentialRuntimeUnsupported(src)) {
+      const meta = windowsCredentialSourceMetadata(src);
+      sources.push({
+        saveAs: src.saveAs,
+        result: {
+          kind: 'unsupported',
+          confidence: 'high',
+          detail: `${meta.reason}: win32/${meta.credentialType}`
         }
       });
       continue;

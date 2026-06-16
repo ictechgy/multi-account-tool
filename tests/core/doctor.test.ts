@@ -271,6 +271,43 @@ describe('doctor — read-only safety report', () => {
     expect(serialized).not.toContain('linux-account');
   });
 
+  it('reports non-win32 win-credential sources as not-checked without probing or leaking bindings', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    try {
+      mocks.getAllCliDefs.mockReturnValue([
+        {
+          id: 'future-win',
+          name: 'Future Win',
+          sources: [{
+            type: 'win-credential',
+            targetName: 'mat/test/future-win-secret-target',
+            credentialType: 'generic',
+            account: 'future-account',
+            persist: 'session',
+            saveAs: 'future.json'
+          }]
+        }
+      ]);
+
+      const report = await runDoctor({ cwd: tmp.home, env: {}, now: new Date('2026-06-14T00:00:00Z') });
+      const serialized = JSON.stringify(report);
+
+      expect(report.clis[0].sources[0]).toMatchObject({
+        saveAs: 'future.json',
+        type: 'win-credential',
+        status: 'not-checked',
+        detail: expect.stringContaining('unsupported-win-credential-source')
+      });
+      expect(report.clis[0].issues.map((i) => i.code)).toContain('source.not-checked');
+      expect(mocks.sourceExists).not.toHaveBeenCalled();
+      expect(serialized).not.toContain('future-win-secret-target');
+      expect(serialized).not.toContain('future-account');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
   it('formats a concise human report', async () => {
     mocks.getAllCliDefs.mockReturnValue([
       { id: 'aider', name: 'Aider', sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }] }

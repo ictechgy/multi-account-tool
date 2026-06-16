@@ -500,19 +500,20 @@ mat plugin validate ~/.multi-account-tool/cli-defs/my-cli.json
 mat plugin validate --json   # validate every installed ~/.multi-account-tool/cli-defs/*.json
 ```
 
-`mat plugin validate` is a **static** JSON/schema/lint check. It does not read credential files, query Keychain/Secret Service secrets, or prove that an upstream CLI will prefer the intended credential source. A passing report means **static validation passed**, not that the plugin is security-certified. The JSON report is `schemaVersion: 1`; exit codes are `0` when there are no errors, `1` for validation/read/parse errors, and `2` for usage errors. Risky-but-compatible patterns (for example broad file paths or generic keychain services without `account`) are warnings.
+`mat plugin validate` is a **static** JSON/schema/lint check. It does not read credential files, query Keychain/Secret Service/Windows Credential Manager secrets, or prove that an upstream CLI will prefer the intended credential source. A passing report means **static validation passed**, not that the plugin is security-certified. The JSON report is `schemaVersion: 1`; exit codes are `0` when there are no errors, `1` for validation/read/parse errors, and `2` for usage errors. Risky-but-compatible patterns (for example broad file paths or generic keychain services without `account`) are warnings.
 
 mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) cannot be overridden — id collision is rejected.
 
 Field rules:
 - `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).
 - `name`: any non-empty string (display label).
-- `sources[].type`: `'file'`, `'keychain'` (macOS Keychain), or `'os-keyring'` (Linux Secret Service).
+- `sources[].type`: `'file'`, `'keychain'` (macOS Keychain), `'os-keyring'` (Linux Secret Service), `'env-secret'` (metadata-only; product runtime blocked), or `'win-credential'` (Windows Credential Manager generic credential primitive).
 - `sources[].saveAs`: ASCII filename, 1~64 chars (`[a-zA-Z0-9._-]`).
 - `sources[].path` (file): any non-empty string (your filesystem path, `~/` expanded).
 - `sources[].service` (keychain/os-keyring): any non-empty credential service name.
 - `sources[].account` (keychain/os-keyring, **optional**): scope `mat` to a specific service+account entry. Required for **generic / multi-account services** (e.g., Goose's `goose`/`secrets` or any CLI with multiple entries under the same service) — without it, `mat` may match the wrong account. Validation: non-empty string, no control chars. Omit for single-account services (default behaviour preserved).
 - `sources[].backend` (os-keyring, optional): `'auto'` or `'secret-service'`.
+- `sources[]` for `type: 'win-credential'`: exact keys only — `type`, `targetName`, `credentialType: 'generic'`, required `account`, required `persist` (`'session' | 'local-machine' | 'enterprise'`), and `saveAs`. Windows lookup identity is `targetName + credentialType`; `account` is a required UserName metadata guard, not a lookup selector. On non-Windows hosts, detector/freshness/doctor/support report this source as unsupported/blocked instead of treating it as ordinary missing. This does **not** claim package-level Windows support, built-in Windows CLI support, Copilot support, or a trusted `mat session` boundary.
 
 Plugins are **profile-swap definitions only**. They cannot define `session`, `sessionRun`, env policy, ambient credential scrub rules, or project override hard-stops, and user plugin CLIs are not trusted `mat session start/run` boundaries.
 

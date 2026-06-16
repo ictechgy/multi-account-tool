@@ -29,7 +29,7 @@
  * 출력(stdout 의 secret 포함)을 절대 넣지 않는다 — 구조적 메시지만 surface.
  */
 
-import { runCommand, type CmdResult } from './sources.js';
+import { runCommand, type CmdResult } from './run-command.js';
 import { OsKeyringAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import type { KeychainStored, OsKeyringSource } from './types.js';
 

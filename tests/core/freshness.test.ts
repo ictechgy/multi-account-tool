@@ -244,6 +244,46 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     expect(text).not.toContain('linux-account');
   });
 
+  it('non-win32 win-credential source 는 freshness 에서 unsupported 로 보고 target/account 를 노출하지 않는다', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    try {
+      const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(join(dir, 'future-win.json'), JSON.stringify({
+        id: 'future-win',
+        name: 'Future Win',
+        sources: [{
+          type: 'win-credential',
+          targetName: 'mat/test/future-win-secret-target',
+          credentialType: 'generic',
+          account: 'future-account',
+          persist: 'session',
+          saveAs: 'future.json'
+        }]
+      }));
+      resetCliDefCache();
+
+      const report = await inspectLiveFreshness('future-win', 'work');
+      expect(report.sources).toEqual([
+        expect.objectContaining({
+          saveAs: 'future.json',
+          result: expect.objectContaining({
+            kind: 'unsupported',
+            confidence: 'high',
+            detail: expect.stringContaining('unsupported-win-credential-source')
+          })
+        })
+      ]);
+      const text = JSON.stringify(report);
+      expect(text).not.toContain('future-win-secret-target');
+      expect(text).not.toContain('future-account');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+      resetCliDefCache();
+    }
+  });
+
   it('adapter 등록 시 fallback 대신 adapter.compare 호출', async () => {
     const adapter: SourceAdapter = {
       compare: vi.fn(() => ({ kind: 'rotated', subtype: 'value-only', confidence: 'high' }))

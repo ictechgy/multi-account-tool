@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
+  readWindowsCredentialSourceSerialized,
+  windowsCredentialSourceExists,
+  writeWindowsCredentialSourceSerialized
+} from '../../src/core/windows-credential-source.js';
+import {
   WindowsCredentialError,
   deleteWindowsCredential,
   makeSyntheticWindowsCredentialBinding,
@@ -15,10 +20,12 @@ import {
   writeWindowsCredentialSerialized,
   type WindowsCredentialBinding,
   type WindowsCredentialBridge,
+  type WindowsCredentialBridgeInspectResult,
   type WindowsCredentialBridgeReadResult,
   type WindowsCredentialBridgeWriteRequest,
   type WindowsCredentialStoredV1
 } from '../../src/core/windows-credential-manager.js';
+import type { WindowsCredentialSource } from '../../src/core/types.js';
 
 const CANARY_NEW = 'fixture-windows-credential-manager-new-20260616';
 const CANARY_OLD = 'fixture-windows-credential-manager-old-20260616';
@@ -31,7 +38,17 @@ const binding: WindowsCredentialBinding = {
   persist: 'session'
 };
 
+const source: WindowsCredentialSource = {
+  type: 'win-credential',
+  targetName: binding.targetName,
+  credentialType: 'generic',
+  account: binding.account ?? 'mat-unit-account',
+  persist: binding.persist ?? 'session',
+  saveAs: 'credentials.json'
+};
+
 class FakeBridge implements WindowsCredentialBridge {
+  readonly inspects: WindowsCredentialBinding[] = [];
   readonly reads: WindowsCredentialBinding[] = [];
   readonly writes: WindowsCredentialBridgeWriteRequest[] = [];
   readonly deletes: WindowsCredentialBinding[] = [];
@@ -39,8 +56,16 @@ class FakeBridge implements WindowsCredentialBridge {
   constructor(
     private readonly readQueue: Array<WindowsCredentialBridgeReadResult | Error> = [{ status: 'missing' }],
     private readonly writeQueue: Array<Error | 'ok'> = ['ok'],
-    private readonly deleteQueue: Array<Error | 'deleted' | 'missing'> = ['missing']
+    private readonly deleteQueue: Array<Error | 'deleted' | 'missing'> = ['missing'],
+    private readonly inspectQueue: Array<WindowsCredentialBridgeInspectResult | Error> = [{ status: 'missing' }]
   ) {}
+
+  async inspect(nextBinding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeInspectResult> {
+    this.inspects.push(nextBinding);
+    const next = this.inspectQueue.length > 0 ? this.inspectQueue.shift()! : { status: 'missing' as const };
+    if (next instanceof Error) throw next;
+    return next;
+  }
 
   async read(nextBinding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult> {
     this.reads.push(nextBinding);
@@ -131,6 +156,34 @@ describe('windows credential manager internal backend — fake bridge unit tests
     expect(await readWindowsCredentialSerialized(binding, { bridge })).toBeNull();
     expect(await windowsCredentialExists(binding, { bridge })).toBe(false);
     expect(await deleteWindowsCredential(binding, { bridge })).toBe('missing');
+  });
+
+  it('checks existence through metadata-only inspect without reading the secret', async () => {
+    const bridge = new FakeBridge(
+      [new Error(`${CANARY_RAW} ${CANARY_NEW}`)],
+      [],
+      [],
+      [{ status: 'present', account: 'mat-unit-account', persist: 'session' }]
+    );
+
+    expect(await windowsCredentialExists(binding, { bridge })).toBe(true);
+    expect(bridge.inspects.length).toBe(1);
+    expect(bridge.reads.length).toBe(0);
+  });
+
+  it('fails closed on account metadata mismatch before reading the secret', async () => {
+    const bridge = new FakeBridge(
+      [new Error(`${CANARY_RAW} ${CANARY_NEW}`)],
+      [],
+      [],
+      [{ status: 'present', account: 'other-account', persist: 'session' }]
+    );
+    const err = await captureError(windowsCredentialExists(binding, { bridge }));
+
+    expect(err.code).toBe('account-mismatch');
+    expect(bridge.inspects.length).toBe(1);
+    expect(bridge.reads.length).toBe(0);
+    expectNoLeak(serializedError(err), 'other-account', binding.account ?? '', binding.targetName);
   });
 
   it('rejects malformed backups before any read/write mutation', async () => {
@@ -224,6 +277,61 @@ describe('windows credential manager internal backend — fake bridge unit tests
     expect(validateWindowsCredentialBinding({ ...binding, persist: 'local-machine' }).persist).toBe('local-machine');
     expect(validateWindowsCredentialBinding({ ...binding, persist: 'enterprise' }).persist).toBe('enterprise');
   });
+
+  it('public win-credential source reads through inspect preflight and account post-check', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const bridge = new FakeBridge(
+        [{ status: 'present', secret: CANARY_NEW, account: 'mat-unit-account', persist: 'session' }],
+        [],
+        [],
+        [{ status: 'present', account: 'mat-unit-account', persist: 'session' }]
+      );
+      const raw = await readWindowsCredentialSourceSerialized(source, { bridge });
+      if (raw == null) throw new Error('expected serialized credential');
+      const parsed = JSON.parse(raw) as WindowsCredentialStoredV1;
+
+      expect(parsed.secret === CANARY_NEW).toBe(true);
+      expect(parsed.account).toBe('mat-unit-account');
+      expect(bridge.inspects.length).toBe(1);
+      expect(bridge.reads.length).toBe(1);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it('public win-credential source write/exists fail closed on account mismatch before secret read or write', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const bridge = new FakeBridge(
+        [new Error(`${CANARY_RAW} ${CANARY_OLD}`)],
+        ['ok'],
+        [],
+        [{ status: 'present', account: 'other-account', persist: 'session' }]
+      );
+      const err = await captureError(writeWindowsCredentialSourceSerialized(source, stored(binding, CANARY_NEW), { bridge }));
+
+      expect(err.code).toBe('account-mismatch');
+      expect(bridge.inspects.length).toBe(1);
+      expect(bridge.reads.length).toBe(0);
+      expect(bridge.writes.length).toBe(0);
+      expectNoLeak(serializedError(err), 'other-account', CANARY_NEW, CANARY_OLD, binding.targetName);
+
+      const existsBridge = new FakeBridge(
+        [new Error(`${CANARY_RAW} ${CANARY_OLD}`)],
+        [],
+        [],
+        [{ status: 'present', account: 'other-account', persist: 'session' }]
+      );
+      const existsErr = await captureError(windowsCredentialSourceExists(source, { bridge: existsBridge }));
+      expect(existsErr.code).toBe('account-mismatch');
+      expect(existsBridge.reads.length).toBe(0);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
 });
 
 describe('windows credential manager internal backend — product boundary', () => {
@@ -233,26 +341,24 @@ describe('windows credential manager internal backend — product boundary', () 
     return fs.readFile(join(repoRoot, rel), 'utf8');
   }
 
-  it('does not expose a public SourceType or plugin parser branch', async () => {
+  it('exposes only the narrow public source primitive and keeps builtin/package Windows support blocked', async () => {
     const [types, plugin] = await Promise.all([
       read('src/core/types.ts'),
       read('src/core/cli-defs-plugin.ts')
     ]);
 
-    expect(types).not.toContain('win-credential');
-    expect(plugin).not.toContain('win-credential');
-  });
-
-  it('does not wire the internal backend into sources or builtin CLI definitions', async () => {
-    const [sources, cliDefs, plugin] = await Promise.all([
-      read('src/core/sources.ts'),
+    const [cliDefs, pkg] = await Promise.all([
       read('src/core/cli-defs.ts'),
-      read('src/core/cli-defs-plugin.ts')
+      read('package.json')
     ]);
 
-    expect(sources).not.toContain('windows-credential-manager');
+    expect(types).toContain('win-credential');
+    expect(plugin).toContain('win-credential');
     expect(cliDefs).not.toContain('windows-credential-manager');
-    expect(plugin).not.toContain('windows-credential-manager');
+    expect(cliDefs).not.toContain('win-credential');
+    expect(pkg).toContain('"darwin"');
+    expect(pkg).toContain('"linux"');
+    expect(pkg).not.toContain('"win32"');
   });
 });
 

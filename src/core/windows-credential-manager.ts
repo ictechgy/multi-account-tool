@@ -1,13 +1,13 @@
 /**
  * Internal Windows Credential Manager backend proof.
  *
- * This module is intentionally not wired into SourceType, plugin parsing, builtins,
- * or package-level Windows support. It provides a quarantined backend primitive for
- * synthetic Windows CI and future public-source RALPLAN work.
+ * The public `win-credential` source wrapper lives in windows-credential-source.ts.
+ * This module stays the low-level backend bridge: no builtin CLI, Copilot/Amp, or
+ * package-level Windows support claim is made here.
  */
 
 import { randomUUID } from 'node:crypto';
-import { runCommand } from './sources.js';
+import { runCommand } from './run-command.js';
 import { hasUnsafeDisplayChar } from './display-safety.js';
 import { maskIdentifier, redactMessage } from './errors.js';
 
@@ -37,6 +37,7 @@ export type WindowsCredentialErrorCode =
   | 'api-unavailable'
   | 'invalid-input'
   | 'malformed-backup'
+  | 'account-mismatch'
   | 'write-failed'
   | 'delete-failed'
   | 'rollback-failed'
@@ -78,12 +79,27 @@ export interface WindowsCredentialBridgeReadMissing {
 
 export type WindowsCredentialBridgeReadResult = WindowsCredentialBridgeReadPresent | WindowsCredentialBridgeReadMissing;
 
+export interface WindowsCredentialBridgeInspectPresent {
+  status: 'present';
+  account?: string;
+  persist?: WindowsCredentialPersist;
+}
+
+export interface WindowsCredentialBridgeInspectMissing {
+  status: 'missing';
+}
+
+export type WindowsCredentialBridgeInspectResult =
+  | WindowsCredentialBridgeInspectPresent
+  | WindowsCredentialBridgeInspectMissing;
+
 export interface WindowsCredentialBridgeWriteRequest extends WindowsCredentialBinding {
   persist: WindowsCredentialPersist;
   secret: string;
 }
 
 export interface WindowsCredentialBridge {
+  inspect(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeInspectResult>;
   read(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult>;
   write(request: WindowsCredentialBridgeWriteRequest): Promise<void>;
   delete(binding: WindowsCredentialBinding): Promise<'deleted' | 'missing'>;
@@ -131,6 +147,24 @@ export async function readWindowsCredentialSerialized(
   return JSON.stringify(storedFromReadResult(safeBinding, result));
 }
 
+export async function readWindowsCredentialSerializedWithAccountGuard(
+  binding: WindowsCredentialBinding,
+  options: WindowsCredentialOperationOptions = {}
+): Promise<string | null> {
+  const safeBinding = validateWindowsCredentialBinding(binding);
+  const bridge = options.bridge ?? defaultWindowsCredentialBridge;
+  const metadata = await inspectViaBridge(bridge, safeBinding);
+  if (metadata.status === 'missing') return null;
+  assertAccountMetadataMatches(safeBinding, metadata, 'read-preflight');
+
+  const result = await readViaBridge(bridge, safeBinding);
+  if (result.status === 'missing') return null;
+  // Race guard: if the target changed between inspect/read, do not return a
+  // copied secret whose UserName metadata no longer matches the public guard.
+  assertAccountMetadataMatches(safeBinding, result, 'read-postcheck');
+  return JSON.stringify(storedFromReadResult(safeBinding, result));
+}
+
 export async function writeWindowsCredentialSerialized(
   binding: WindowsCredentialBinding,
   serialized: string,
@@ -172,8 +206,24 @@ export async function windowsCredentialExists(
 ): Promise<boolean> {
   const safeBinding = validateWindowsCredentialBinding(binding);
   const bridge = options.bridge ?? defaultWindowsCredentialBridge;
-  const result = await readViaBridge(bridge, safeBinding);
+  const result = await inspectViaBridge(bridge, safeBinding);
+  if (result.status === 'present') {
+    assertAccountMetadataMatches(safeBinding, result, 'inspect');
+  }
   return result.status === 'present';
+}
+
+export async function inspectWindowsCredential(
+  binding: WindowsCredentialBinding,
+  options: WindowsCredentialOperationOptions = {}
+): Promise<WindowsCredentialBridgeInspectResult> {
+  const safeBinding = validateWindowsCredentialBinding(binding);
+  const bridge = options.bridge ?? defaultWindowsCredentialBridge;
+  const result = await inspectViaBridge(bridge, safeBinding);
+  if (result.status === 'present') {
+    assertAccountMetadataMatches(safeBinding, result, 'inspect');
+  }
+  return result;
 }
 
 export async function deleteWindowsCredential(
@@ -294,6 +344,40 @@ async function readViaBridge(bridge: WindowsCredentialBridge, binding: WindowsCr
   }
 }
 
+async function inspectViaBridge(bridge: WindowsCredentialBridge, binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeInspectResult> {
+  try {
+    return await bridge.inspect(binding);
+  } catch (err) {
+    const converted = toWindowsCredentialError(err, 'bridge-failed', binding, 'inspect');
+    if (converted.code === 'missing') return { status: 'missing' };
+    throw converted;
+  }
+}
+
+export function assertWindowsCredentialAccountMetadataMatches(
+  binding: WindowsCredentialBinding,
+  metadata: { account?: string },
+  phase = 'inspect'
+): void {
+  const safeBinding = validateWindowsCredentialBinding(binding);
+  assertAccountMetadataMatches(safeBinding, metadata, phase);
+}
+
+function assertAccountMetadataMatches(
+  binding: WindowsCredentialBinding,
+  metadata: { account?: string },
+  phase: string
+): void {
+  if (metadata.account !== undefined) assertSafeAccount(metadata.account, binding);
+  if (binding.account === undefined) return;
+  if (metadata.account === binding.account) return;
+  throw new WindowsCredentialError(
+    'account-mismatch',
+    'windows credential account metadata does not match binding',
+    safeDetails(binding, phase)
+  );
+}
+
 async function writeViaBridge(bridge: WindowsCredentialBridge, request: WindowsCredentialBridgeWriteRequest): Promise<void> {
   await bridge.write(request);
 }
@@ -370,7 +454,7 @@ interface BridgeOutputOkMissing {
 interface BridgeOutputOkPresent {
   ok: true;
   status: 'present';
-  secret: string;
+  secret?: string;
   account?: string;
   persist?: number;
 }
@@ -392,6 +476,21 @@ interface BridgeOutputError {
 type BridgeOutput = BridgeOutputOkMissing | BridgeOutputOkPresent | BridgeOutputOkWritten | BridgeOutputError;
 
 class PowerShellPInvokeWindowsCredentialBridge implements WindowsCredentialBridge {
+  async inspect(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeInspectResult> {
+    const out = await invokePowerShellBridge({ operation: 'inspect', binding });
+    if (!out.ok) throw bridgeOutputError(out, binding, 'inspect');
+    if (out.status === 'missing') return { status: 'missing' };
+    if (out.status !== 'present') {
+      throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned invalid inspect status', safeDetails(binding, 'inspect'));
+    }
+    const persist = bridgePersist(out, binding, 'inspect');
+    return {
+      status: 'present',
+      ...(typeof out.account === 'string' && out.account.length > 0 ? { account: out.account } : {}),
+      ...(persist !== undefined ? { persist } : {})
+    };
+  }
+
   async read(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult> {
     const out = await invokePowerShellBridge({ operation: 'read', binding });
     if (!out.ok) throw bridgeOutputError(out, binding, 'read');
@@ -399,10 +498,7 @@ class PowerShellPInvokeWindowsCredentialBridge implements WindowsCredentialBridg
     if (out.status !== 'present' || typeof out.secret !== 'string') {
       throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned invalid read status', safeDetails(binding, 'read'));
     }
-    const persist = out.persist === undefined ? undefined : WIN32_TO_PERSIST.get(out.persist);
-    if (out.persist !== undefined && persist === undefined) {
-      throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned unsupported persist value', safeDetails(binding, 'read'));
-    }
+    const persist = bridgePersist(out, binding, 'read');
     return {
       status: 'present',
       secret: out.secret,
@@ -430,7 +526,7 @@ class PowerShellPInvokeWindowsCredentialBridge implements WindowsCredentialBridg
 const defaultWindowsCredentialBridge = new PowerShellPInvokeWindowsCredentialBridge();
 
 async function invokePowerShellBridge(request: {
-  operation: 'read' | 'write' | 'delete';
+  operation: 'inspect' | 'read' | 'write' | 'delete';
   binding: WindowsCredentialBinding;
   secret?: string;
 }): Promise<BridgeOutput> {
@@ -463,6 +559,14 @@ async function invokePowerShellBridge(request: {
   } catch {
     throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned invalid JSON', safeDetails(request.binding, request.operation));
   }
+}
+
+function bridgePersist(out: BridgeOutputOkPresent, binding: WindowsCredentialBinding, phase: string): WindowsCredentialPersist | undefined {
+  const persist = out.persist === undefined ? undefined : WIN32_TO_PERSIST.get(out.persist);
+  if (out.persist !== undefined && persist === undefined) {
+    throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned unsupported persist value', safeDetails(binding, phase));
+  }
+  return persist;
 }
 
 function safeWin32Name(value: unknown): string | undefined {
@@ -624,6 +728,33 @@ function Invoke-BridgeRead {
   }
 }
 
+function Invoke-BridgeInspect {
+  param([Parameter(Mandatory = $true)]$Request)
+  $credentialPtr = [IntPtr]::Zero
+  $ok = [MatWinCredBridge.NativeMethods]::CredRead($Request.targetName, [UInt32]1, [UInt32]0, [ref]$credentialPtr)
+  if (-not $ok) {
+    $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($errorCode -eq 1168) { return @{ ok = $true; status = 'missing' } }
+    return New-BridgeFailure -Phase 'inspect' -Api 'CredReadW' -Code $errorCode
+  }
+
+  try {
+    if ($credentialPtr -eq [IntPtr]::Zero) { return @{ ok = $false; kind = 'bridge-failed'; phase = 'inspect' } }
+    $credential = [System.Runtime.InteropServices.Marshal]::PtrToStructure(
+      $credentialPtr,
+      [type][MatWinCredBridge.Credential]
+    )
+    return @{
+      ok = $true
+      status = 'present'
+      account = $credential.UserName
+      persist = [int]$credential.Persist
+    }
+  } finally {
+    if ($credentialPtr -ne [IntPtr]::Zero) { [MatWinCredBridge.NativeMethods]::CredFree($credentialPtr) }
+  }
+}
+
 function Clear-UnmanagedBuffer {
   param([Parameter(Mandatory = $true)][IntPtr]$Pointer, [Parameter(Mandatory = $true)][int]$Size)
   if ($Pointer -eq [IntPtr]::Zero) { return }
@@ -686,6 +817,7 @@ try {
   $request = $inputJson | ConvertFrom-Json
   if ($request.credentialType -ne 'generic') { Write-BridgeJson @{ ok = $false; kind = 'invalid-input'; phase = 'validate' }; exit 0 }
   switch ($request.operation) {
+    'inspect' { Write-BridgeJson (Invoke-BridgeInspect -Request $request); exit 0 }
     'read' { Write-BridgeJson (Invoke-BridgeRead -Request $request); exit 0 }
     'write' { Write-BridgeJson (Invoke-BridgeWrite -Request $request); exit 0 }
     'delete' { Write-BridgeJson (Invoke-BridgeDelete -Request $request); exit 0 }

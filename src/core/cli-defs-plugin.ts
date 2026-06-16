@@ -21,12 +21,21 @@ import { hasUnsafeDisplayChar } from './display-safety.js';
 import { validatePublicEnvSecretSource } from './env-secret-source.js';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
 import { redactSecretLikeText } from './redaction.js';
-import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source } from './types.js';
+import { validateWindowsCredentialBinding } from './windows-credential-manager.js';
+import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source, WindowsCredentialSource } from './types.js';
 
 /** plugin 파일이 모이는 디렉토리: `~/.multi-account-tool/cli-defs/`. */
 const CLI_DEFS_DIR_NAME = 'cli-defs';
 const MAX_PLUGIN_NAME_LENGTH = 80;
 const MAX_PLUGIN_SERVICE_LENGTH = 128;
+const WINDOWS_CREDENTIAL_SOURCE_KEYS = new Set([
+  'type',
+  'targetName',
+  'credentialType',
+  'account',
+  'persist',
+  'saveAs'
+]);
 
 /** 사용자 plugin 디렉토리 절대 경로. */
 export function cliDefsDir(): string {
@@ -61,8 +70,14 @@ interface SourceParseResult {
 /** 단일 source 객체 검증 + 정규화. 실패 시 error 메시지 반환. */
 function parseSource(raw: unknown, idx: number): SourceParseResult {
   if (!isPlainObject(raw)) return { error: `sources[${idx}] 는 객체여야 합니다.` };
-  if (raw.type !== 'file' && raw.type !== 'keychain' && raw.type !== 'os-keyring' && raw.type !== 'env-secret') {
-    return { error: `sources[${idx}].type 는 'file', 'keychain', 'os-keyring' 또는 'env-secret' 이어야 합니다.` };
+  if (
+    raw.type !== 'file' &&
+    raw.type !== 'keychain' &&
+    raw.type !== 'os-keyring' &&
+    raw.type !== 'env-secret' &&
+    raw.type !== 'win-credential'
+  ) {
+    return { error: `sources[${idx}].type 는 'file', 'keychain', 'os-keyring', 'env-secret' 또는 'win-credential' 이어야 합니다.` };
   }
   if (typeof raw.saveAs !== 'string') return { error: `sources[${idx}].saveAs 는 문자열이어야 합니다.` };
   let safeSaveAs: string;
@@ -77,6 +92,9 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     } catch (err) {
       return { error: `sources[${idx}].type 'env-secret' schema is invalid or runtime-blocked: ${(err as Error).message}` };
     }
+  }
+  if (raw.type === 'win-credential') {
+    return parseWindowsCredentialSource(raw, idx, safeSaveAs);
   }
   if (raw.type === 'file') {
     if (typeof raw.path !== 'string' || raw.path.length === 0) {
@@ -132,6 +150,44 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   const src: OsKeyringSource = { type: 'os-keyring', service: raw.service, saveAs: safeSaveAs };
   if (account !== undefined) src.account = account;
   if (backend !== undefined) src.backend = backend;
+  return { source: src };
+}
+
+function parseWindowsCredentialSource(
+  raw: Record<string, unknown>,
+  idx: number,
+  safeSaveAs: string
+): SourceParseResult {
+  for (const key of Object.keys(raw)) {
+    if (!WINDOWS_CREDENTIAL_SOURCE_KEYS.has(key)) {
+      return { error: `sources[${idx}].type 'win-credential' schema forbids unknown fields.` };
+    }
+  }
+  if (typeof raw.targetName !== 'string' || raw.targetName.length === 0) {
+    return { error: `sources[${idx}].targetName 는 비어있지 않은 문자열이어야 합니다.` };
+  }
+  if (raw.credentialType !== 'generic') {
+    return { error: `sources[${idx}].credentialType 은 'generic' 이어야 합니다.` };
+  }
+  if (typeof raw.account !== 'string' || raw.account.length === 0) {
+    return { error: `sources[${idx}].account 는 비어있지 않은 문자열이어야 합니다.` };
+  }
+  if (raw.persist !== 'session' && raw.persist !== 'local-machine' && raw.persist !== 'enterprise') {
+    return { error: `sources[${idx}].persist 는 'session', 'local-machine' 또는 'enterprise' 이어야 합니다.` };
+  }
+  const src: WindowsCredentialSource = {
+    type: 'win-credential',
+    targetName: raw.targetName,
+    credentialType: 'generic',
+    account: raw.account,
+    persist: raw.persist,
+    saveAs: safeSaveAs
+  };
+  try {
+    validateWindowsCredentialBinding(src);
+  } catch (err) {
+    return { error: `sources[${idx}].type 'win-credential' schema is invalid: ${(err as Error).message}` };
+  }
   return { source: src };
 }
 
@@ -322,6 +378,9 @@ function lintPluginDefinition(raw: unknown, def: CliDef, context: PluginValidati
       continue;
     }
     if (source.type === 'env-secret') {
+      continue;
+    }
+    if (source.type === 'win-credential') {
       continue;
     }
     if (source.account == null && isGenericCredentialService(source.service)) {

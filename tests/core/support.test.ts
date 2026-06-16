@@ -129,6 +129,45 @@ describe('support registry — support/explain reports', () => {
     expect(serialized).not.toContain('linux-account');
   });
 
+  it('reports plugin win-credential sources as primitive-only blocked on non-win32 without raw target/account fields', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    try {
+      const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        join(dir, 'future-win.json'),
+        JSON.stringify({
+          id: 'future-win',
+          name: 'Future Win',
+          sources: [{
+            type: 'win-credential',
+            targetName: 'mat/test/future-win-secret-target',
+            credentialType: 'generic',
+            account: 'future-account',
+            persist: 'session',
+            saveAs: 'future.json'
+          }]
+        })
+      );
+      resetCliDefCache();
+
+      const report = buildCliSupportReport('future-win');
+      const serialized = JSON.stringify(report);
+
+      expect(report.cli).toMatchObject({ id: 'future-win', builtin: false, kind: 'plugin' });
+      expect(report.capabilities.swap.status).toBe('blocked');
+      expect(report.capabilities.freshness.status).toBe('blocked');
+      expect(report.sources).toEqual([{ type: 'win-credential', saveAs: 'future.json' }]);
+      expect(serialized).toMatch(/win-credential|Windows Credential Manager/);
+      expect(serialized).not.toContain('future-win-secret-target');
+      expect(serialized).not.toContain('future-account');
+    } finally {
+      resetCliDefCache();
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
   it('keeps known-blocked ids blocked even if a user plugin uses the same id', async () => {
     const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
     await fs.mkdir(dir, { recursive: true });
