@@ -132,6 +132,6 @@ Also run source allow-list scans and added-line token-shape scans before merge.
 ## Future unblock order
 
 1. Recheck official Amp docs before any product wiring PR.
-2. Separately RALPLAN env-secret product runtime wiring for `mat exec` / `mat session run`.
+2. ✅ Env-secret product runtime bridge is complete as a pre-command-surface gate; separately RALPLAN actual env-secret command-surface wiring for `mat exec` / `mat session run`.
 3. Wire the Amp hard-stop analyzer only in a future PR that also proves command-scoped env-secret injection, ambient conflict behavior, and no config/MCP/plugin bypasses.
 4. Decide whether local `amp login` can ever be supported. Until an upstream-documented storage/redirect/recapture contract exists, do not capture, recapture, or infer it.

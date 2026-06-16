@@ -95,4 +95,4 @@ Also run static scans for token-shaped added lines and product wiring mentions o
 - **Alternatives considered:** Hidden synthetic `mat exec` / `session run` path (too likely to imply product support); Amp matrix first (valid but leaves generic runtime proof gap).
 - **Why chosen:** This is the smallest reviewable increment that advances the roadmap without opening user-facing runtime support.
 - **Consequences:** Future product wiring still needs a new RALPLAN after CLI-specific config/fallback matrices pass.
-- **Follow-ups:** Amp config hard-stop matrix; Copilot account-selector/platform proof; eventual product command injection PR if all generic and CLI-specific gates pass.
+- **Follow-ups:** Amp config hard-stop matrix; Copilot account-selector/platform proof; env-secret product runtime bridge; eventual product command injection PR if all generic and CLI-specific gates pass.

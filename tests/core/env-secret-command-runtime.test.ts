@@ -276,6 +276,7 @@ describe('env-secret command runtime — synthetic approval gate', () => {
   it('keeps the command runtime helper synthetic-only and outside product source wiring', async () => {
     const root = fileURLToPath(new URL('../../', import.meta.url));
     const helperRel = 'src/core/env-secret-command-runtime.ts';
+    const bridgeRel = 'src/core/env-secret-product-runtime.ts';
     const helperText = await fs.readFile(join(root, helperRel), 'utf8');
     expect(helperText).not.toContain('createLssEnvBackend');
     expect(helperText).not.toContain('env-secret-linux-secret-service');
@@ -292,6 +293,10 @@ describe('env-secret command runtime — synthetic approval gate', () => {
       const mentionsRuntimeHelper = text.includes('prepareEnvSecretCommandEnv');
       if (rel === helperRel) {
         expect(mentionsRuntimeHelper).toBe(true);
+        continue;
+      }
+      if (rel === bridgeRel) {
+        expect(mentionsRuntimeModule || mentionsRuntimeHelper).toBe(true);
         continue;
       }
       expect({ rel, mentionsRuntimeModule, mentionsRuntimeHelper }).toEqual({
