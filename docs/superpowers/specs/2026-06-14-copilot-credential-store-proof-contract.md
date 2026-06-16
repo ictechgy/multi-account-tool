@@ -206,8 +206,9 @@ Copilot remains blocked if any of these are true:
 ## Next follow-ups
 
 1. ✅ Redacted proof-report validator (`src/core/copilot-credential-proof.ts`) — metadata gate only, not platform proof.
-2. Human-opt-in macOS/Linux probe design with a separate security review remains pending.
-3. ✅ Windows Credential Manager source R&D contract (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`); runtime/backend remains pending.
-4. ✅ Windows Credential Manager synthetic CI spike; implementation RALPLAN/backend remains pending.
-5. ✅ Ambient token policy for normal swap, `mat exec`, and future session flows (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
-6. Copilot prototype only after app-state, credential-store, Windows, ambient-token implementation, and env-secret gates are all resolved.
+2. ✅ Human-opt-in macOS/Linux probe design (`docs/superpowers/specs/2026-06-16-copilot-platform-proof-probe-design.md`) — pre-flight evidence admissibility only; actual platform proof remains pending.
+3. Human-reviewed macOS/Linux platform evidence collection remains pending and requires separate security/reviewer approval before any executable probe.
+4. ✅ Windows Credential Manager source R&D contract (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`); runtime/backend remains pending.
+5. ✅ Windows Credential Manager synthetic CI spike; implementation RALPLAN/backend remains pending.
+6. ✅ Ambient token policy for normal swap, `mat exec`, and future session flows (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
+7. Copilot prototype only after app-state, credential-store proof, Windows, ambient-token implementation, and env-secret gates are all resolved.
