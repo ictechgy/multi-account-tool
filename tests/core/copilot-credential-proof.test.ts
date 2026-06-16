@@ -281,6 +281,12 @@ describe('Copilot credential proof report validator', () => {
         }
       ],
       [
+        'exact proof accountUserNameGuard value',
+        (report, value) => {
+          (report.platforms[0].windowsCredentialBindingProof as unknown as Record<string, unknown>).accountUserNameGuard = value;
+        }
+      ],
+      [
         'nested proof account alias',
         (report, value) => {
           (report.platforms[0].windowsCredentialBindingProof as unknown as Record<string, unknown>).account = value;

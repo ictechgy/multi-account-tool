@@ -222,6 +222,7 @@ const FORBIDDEN_NORMALIZED_KEYS = new Set([
   'login',
   'displaylogin',
   'account',
+  'accountusernameguard',
   'organization',
   'org',
   'accountid',
