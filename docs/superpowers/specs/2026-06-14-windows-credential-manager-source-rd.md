@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document started as a **docs-only R&D contract** for a future Windows Credential Manager source backend and now also records a **non-product Windows-CI-only synthetic API proof**. It still does not implement a backend, does not add a new `SourceType`, does not add product runtime helpers, and does not claim Windows or Copilot product support.
+This document started as a **docs-only R&D contract** for a future Windows Credential Manager source backend and now also records a **non-product Windows-CI-only synthetic API proof** plus a **feature-scoped Windows Node preflight**. It still does not implement a backend, does not add a new `SourceType`, does not add product runtime helpers, and does not claim Windows or Copilot product support.
 
 The goal is to define the minimum safety, API, serialization, rollback, and CI requirements before `mat` can add a Windows credential-store source. The synthetic proof only validates that GitHub's Windows runner can perform scoped `CredWriteW`/`CredReadW`/`CredDeleteW` round-trips against a random repo-specific target.
 
@@ -35,6 +35,18 @@ The first executable artifact is intentionally outside product runtime:
 - Logging: phase/status plus safe target prefix/run id and Win32 error name/code only; no target GUID, secret value, credential blob, pointer, or raw credential output
 
 This proof covers only these API semantics: missing read, write/read equality by exact UTF-16LE byte length, overwrite/read equality, delete, final missing read, and cleanup. It is not a Windows source backend and it does not prove any Copilot target/account contract.
+
+## Feature-scoped Windows Node preflight (2026-06-16)
+
+The second executable artifact is also intentionally outside product runtime:
+
+- Workflow: `.github/workflows/windows-node-preflight.yml`
+- Runner: `windows-latest`
+- Scope: preflight-only forced Node dependency installation (`npm ci --force`, because the root package intentionally excludes `win32`), TypeScript typecheck, a curated Windows-safe core test subset for proof/env-secret/Amp boundary code, and any future `tests/core/windows-credential-manager*.test.ts` files when present
+- Exclusions: no full `npm test`, no `tests/core/sources.test.ts` POSIX mode/`/usr/bin` assumptions, no `tests/core/cli-defs.test.ts` POSIX slash invariant, and no `tests/core/cli-defs-plugin.test.ts` on-disk plugin state assumptions until audited
+- Product boundary: no `package.json` `win32` support, no main CI matrix expansion, no `SourceType`, no plugin schema/runtime, and no Copilot/Amp support
+
+This preflight is evidence that future Windows Credential Manager backend work can use a targeted Windows Node lane. It is not evidence that the published package supports Windows or that any Windows credential source exists; the forced install is CI-only and exists precisely because package support remains darwin/linux.
 
 What is not decided by public docs alone:
 
@@ -192,8 +204,9 @@ Keep Windows source implementation blocked if any of these are true:
 ## Follow-up order
 
 1. ✅ Non-product Windows-CI-only synthetic credential spike (`.github/workflows/windows-credential-manager-spike.yml`, `scripts/windows-credential-manager-synthetic.ps1`); product backend/support remains blocked.
-2. Windows source implementation RALPLAN.
-3. Windows source implementation PR with synthetic CI tests.
-4. Copilot Windows target/account proof after backend exists.
-5. ✅ Ambient token policy (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
-6. Copilot prototype only after all platform, ambient-token implementation, and env-secret gates pass.
+2. ✅ Feature-scoped Windows Node/package-support preflight (`.github/workflows/windows-node-preflight.yml`); targeted typecheck/tests only, no `win32` package support claim.
+3. Windows source implementation RALPLAN, including feature-scoped internal backend first vs package-wide support first.
+4. Windows source implementation PR with synthetic Windows npm/vitest CI tests.
+5. Copilot Windows target/account proof after backend exists.
+6. ✅ Ambient token policy (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
+7. Copilot prototype only after all platform, ambient-token implementation, and env-secret gates pass.
