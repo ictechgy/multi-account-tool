@@ -211,7 +211,58 @@ describe('validateCliDefRaw (순수 validator)', () => {
     expect(r.error).toContain('keychain');
     expect(r.error).toContain('os-keyring');
     expect(r.error).toContain('env-secret');
+    expect(r.error).toContain('win-credential');
     expect(r.error).not.toContain('linux-secret-service');
+  });
+
+  describe('win-credential source 파싱', () => {
+    const validWinSource = {
+      type: 'win-credential',
+      targetName: 'mat/plugin/sample',
+      credentialType: 'generic',
+      account: 'sample-account',
+      persist: 'local-machine',
+      saveAs: 'credentials.json'
+    };
+
+    it('정확한 public schema 를 수용하고 secret/backend 필드는 만들지 않는다', () => {
+      const r = validateCliDefRaw({
+        id: 'win-plugin',
+        name: 'Win Plugin',
+        sources: [validWinSource]
+      });
+
+      expect(r.error).toBeUndefined();
+      expect(r.def?.sources[0]).toEqual(validWinSource);
+      expect(JSON.stringify(r.def)).not.toContain('secret');
+    });
+
+    it.each([
+      [{ ...validWinSource, targetName: '' }, 'targetName'],
+      [{ ...validWinSource, credentialType: 'domain-password' }, 'credentialType'],
+      [{ ...validWinSource, account: '' }, 'account'],
+      [{ ...validWinSource, account: 'bad\x00account' }, 'unsafe'],
+      [{ ...validWinSource, persist: 'machine' }, 'persist'],
+      [{ ...validWinSource, secret: 'sk-abcdefghijklmnopqrstuvwxyz0123456789' }, 'unknown fields'],
+      [{ ...validWinSource, password: 'sk-abcdefghijklmnopqrstuvwxyz0123456789' }, 'unknown fields'],
+      [{ ...validWinSource, service: 'not-used' }, 'unknown fields']
+    ])('win-credential 거부 케이스 → error 에 "%s" 포함하고 값은 누설하지 않음', (source, expectedKeyword) => {
+      const r = validateCliDefRaw({ id: 'bad-win', name: 'Bad Win', sources: [source] });
+      expect(r.def).toBeUndefined();
+      expect(r.error).toContain(expectedKeyword as string);
+      expect(r.error).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
+    });
+
+    it('static linter 는 win-credential 을 generic service/account 경고 대상으로 오분류하지 않는다', () => {
+      const r = validatePluginDefinition({
+        id: 'win-plugin',
+        name: 'Win Plugin',
+        sources: [validWinSource]
+      });
+
+      expect(r.def?.sources[0].type).toBe('win-credential');
+      expect(r.diagnostics).toEqual([]);
+    });
   });
 
   it('보안 회귀 가드: raw 에 session/sessionRun/warning 이 있어도 결과 def 에 없음 (plugin 은 세션 격리 미수용)', () => {

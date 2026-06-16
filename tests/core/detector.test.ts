@@ -116,4 +116,40 @@ describe('detectAll', () => {
       resetCliDefCache();
     }
   });
+
+  it('non-win32 win-credential source 는 missing 으로 오분류하지 않고 unsupported 로 제외한다', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    mockSourceExists.mockResolvedValue(false);
+    const cli = {
+      id: 'future-win',
+      name: 'Future Win',
+      sources: [{
+        type: 'win-credential' as const,
+        targetName: 'mat/test/future-win',
+        credentialType: 'generic' as const,
+        account: 'future-account',
+        persist: 'session' as const,
+        saveAs: 'future.json'
+      }]
+    };
+    BUILTIN_CLI_DEFS.push(cli);
+    resetCliDefCache();
+    try {
+      const results = await detectAll();
+      const win = results.find((r) => r.cli.id === 'future-win');
+      expect(win).toMatchObject({
+        hasLiveCredentials: false,
+        hasAnyLiveCredential: false,
+        present: [],
+        missing: [],
+        unsupported: ['future.json']
+      });
+      expect(mockSourceExists).not.toHaveBeenCalledWith(cli.sources[0]);
+    } finally {
+      BUILTIN_CLI_DEFS.pop();
+      resetCliDefCache();
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
 });

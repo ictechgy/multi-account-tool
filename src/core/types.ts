@@ -3,8 +3,9 @@
  * - file: 파일시스템 경로
  * - keychain: macOS Keychain의 generic password 항목
  * - os-keyring: Linux Secret Service (secret-tool) 기반 자격증명 항목
+ * - win-credential: Windows Credential Manager generic credential 항목
  */
-export type SourceType = 'file' | 'keychain' | 'os-keyring' | 'env-secret';
+export type SourceType = 'file' | 'keychain' | 'os-keyring' | 'env-secret' | 'win-credential';
 
 /**
  * 파일 기반 자격증명 source.
@@ -109,7 +110,32 @@ export interface EnvSecretSource {
   accountKey: string;
 }
 
-export type Source = FileSource | KeychainSource | OsKeyringSource | EnvSecretSource;
+/**
+ * Windows Credential Manager 기반 자격증명 source.
+ *
+ * 공개 primitive 는 Windows Generic Credential 의 lookup identity 를
+ * `targetName + credentialType` 으로 고정한다. `account` 는 lookup selector 가
+ * 아니라 UserName metadata guard 이며, 기존 target 의 account 가 다르면 secret
+ * copy/write 전에 fail-closed 한다. `persist` 는 새 write 의 공개 보존 정책이다.
+ *
+ * 패키지/빌트인 Windows 지원 선언과는 분리된 plugin/source primitive 이므로
+ * support/doctor/detector 는 non-win32 에서 ordinary missing 으로 오분류하지 않는다.
+ */
+export interface WindowsCredentialSource {
+  type: 'win-credential';
+  /** Windows Credential Manager TargetName. */
+  targetName: string;
+  /** 공개 primitive 는 Generic Credential 만 허용한다. */
+  credentialType: 'generic';
+  /** 필수 UserName metadata guard. Lookup selector 가 아니다. */
+  account: string;
+  /** 새 credential write 시 사용할 Windows Persist 정책. */
+  persist: 'session' | 'local-machine' | 'enterprise';
+  /** 프로필 디렉토리 내 저장될 파일명. */
+  saveAs: string;
+}
+
+export type Source = FileSource | KeychainSource | OsKeyringSource | EnvSecretSource | WindowsCredentialSource;
 
 /**
  * 세션 시작 시 base 하위 디렉토리를 세션 root 로 재귀 복사할 allow-list 항목.

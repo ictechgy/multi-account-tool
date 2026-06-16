@@ -11,6 +11,7 @@ import { isEnvSecretSource } from './env-secret-source.js';
 import { UnknownCliError, redactMessage } from './errors.js';
 import { BUILTIN_FRESHNESS_ADAPTER_IDS } from './freshness-adapters/index.js';
 import { identityCapabilitiesForCli } from './profile-identity.js';
+import { isWindowsCredentialSource } from './windows-credential-source.js';
 import type { CliDef, Source } from './types.js';
 import type { ProfileIdentityCapability } from './profile-identity.js';
 
@@ -346,6 +347,21 @@ function deriveSwap(def: CliDef): SupportCapability {
       ['env-secret product storage and restore semantics are not enabled.']
     );
   }
+  if (def.sources.some(isWindowsCredentialSource)) {
+    if (process.platform !== 'win32') {
+      return cap(
+        'blocked',
+        'Profile swap is blocked because win-credential sources require a Windows runtime.',
+        ['win-credential is a Windows Credential Manager primitive; non-win32 hosts must not treat it as missing.']
+      );
+    }
+    return cap(
+      'partial',
+      'Profile swap can use the win-credential source primitive on Windows, but full package/builtin Windows support is not claimed.',
+      ['This PR enables the source primitive/preflight path only; builtins and package-level win32 support remain blocked.'],
+      ['User plugins must supply exact target/account metadata and handle upstream Windows credential contracts.']
+    );
+  }
   return cap('supported', `Profile swap is supported for ${def.sources.length} configured source(s).`);
 }
 
@@ -355,6 +371,20 @@ function deriveFreshness(def: CliDef): SupportCapability {
       'blocked',
       'Freshness is metadata-only blocked for env-secret sources.',
       ['env-secret values must not be read or compared through freshness.']
+    );
+  }
+  if (def.sources.some(isWindowsCredentialSource)) {
+    if (process.platform !== 'win32') {
+      return cap(
+        'blocked',
+        'Freshness is blocked because win-credential sources require a Windows runtime.',
+        ['non-win32 hosts report win-credential as unsupported instead of reading or probing it.']
+      );
+    }
+    return cap(
+      'partial',
+      'Fallback byte-diff freshness can read win-credential sources on Windows, but no adapter-backed identity contract is registered.',
+      ['The win-credential primitive preserves account metadata guards but does not prove upstream CLI identity semantics.']
     );
   }
   if (ADAPTER_BACKED_FRESHNESS.has(def.id)) {
@@ -413,6 +443,7 @@ function defaultNextSteps(cliId: string, caps: CliSupportReport['capabilities'])
 function buildFromCliDef(def: CliDef, kind: 'builtin' | 'plugin'): CliSupportReport {
   const metadata = kind === 'builtin' ? REGISTRY[def.id] : pluginMetadata();
   const hasEnvSecret = def.sources.some(isEnvSecretSource);
+  const hasWindowsCredential = def.sources.some(isWindowsCredentialSource);
   const start = mergeCapability(deriveSessionStart(def), metadata.capabilities?.sessionStart);
   const baseCaps = {
     swap: deriveSwap(def),
@@ -427,6 +458,10 @@ function buildFromCliDef(def: CliDef, kind: 'builtin' | 'plugin'): CliSupportRep
     sessionRun: mergeCapability(baseCaps.sessionRun, metadata.capabilities?.sessionRun)
   };
   if (hasEnvSecret) {
+    capabilities.swap = baseCaps.swap;
+    capabilities.freshness = baseCaps.freshness;
+  }
+  if (hasWindowsCredential) {
     capabilities.swap = baseCaps.swap;
     capabilities.freshness = baseCaps.freshness;
   }
