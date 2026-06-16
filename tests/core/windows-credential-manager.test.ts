@@ -168,6 +168,33 @@ describe('windows credential manager internal backend — fake bridge unit tests
     expectNoLeak(serializedError(err), CANARY_NEW, CANARY_OLD, CANARY_RAW, binding.targetName);
   });
 
+  it('preserves backed-up account and persist metadata during rollback', async () => {
+    const requestedBinding: WindowsCredentialBinding = {
+      ...binding,
+      account: 'mat-requested-account',
+      persist: 'local-machine'
+    };
+    const bridge = new FakeBridge(
+      [{ status: 'present', secret: CANARY_OLD, account: 'mat-original-account', persist: 'enterprise' }],
+      [new Error(`${CANARY_RAW} ${CANARY_NEW}`), 'ok']
+    );
+    const err = await captureError(writeWindowsCredentialSerialized(
+      requestedBinding,
+      stored(requestedBinding, CANARY_NEW),
+      { bridge }
+    ));
+
+    expect(err.code).toBe('write-failed');
+    expect(bridge.writes.length).toBe(2);
+    expect(bridge.writes[0]?.secret === CANARY_NEW).toBe(true);
+    expect(bridge.writes[0]?.account).toBe('mat-requested-account');
+    expect(bridge.writes[0]?.persist).toBe('local-machine');
+    expect(bridge.writes[1]?.secret === CANARY_OLD).toBe(true);
+    expect(bridge.writes[1]?.account).toBe('mat-original-account');
+    expect(bridge.writes[1]?.persist).toBe('enterprise');
+    expectNoLeak(serializedError(err), CANARY_NEW, CANARY_OLD, CANARY_RAW, binding.targetName);
+  });
+
   it('reports rollback failure without leaking new, old, or raw bridge output', async () => {
     const bridge = new FakeBridge(
       [{ status: 'present', secret: CANARY_OLD, account: 'mat-unit-account', persist: 'session' }],

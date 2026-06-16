@@ -149,7 +149,7 @@ export async function writeWindowsCredentialSerialized(
     const writeErr = toWindowsCredentialError(err, 'write-failed', safeBinding, 'write');
     if (!backup) throw writeErr;
     try {
-      await writeViaBridge(bridge, writeRequestFromStored(safeBinding, backup));
+      await writeViaBridge(bridge, writeRequestFromStored(safeBinding, backup, 'stored-first'));
     } catch (rollback) {
       const rollbackErr = toWindowsCredentialError(rollback, 'rollback-failed', safeBinding, 'rollback');
       throw new WindowsCredentialError(
@@ -263,11 +263,16 @@ function storedFromReadResult(
 
 function writeRequestFromStored(
   binding: WindowsCredentialBinding,
-  stored: WindowsCredentialStoredV1
+  stored: WindowsCredentialStoredV1,
+  metadataPreference: 'binding-first' | 'stored-first' = 'binding-first'
 ): WindowsCredentialBridgeWriteRequest {
-  const account = binding.account ?? stored.account ?? DEFAULT_ACCOUNT;
+  const account = metadataPreference === 'stored-first'
+    ? stored.account ?? binding.account ?? DEFAULT_ACCOUNT
+    : binding.account ?? stored.account ?? DEFAULT_ACCOUNT;
   assertSafeAccount(account, binding);
-  const persist = binding.persist ?? stored.persist ?? 'session';
+  const persist = metadataPreference === 'stored-first'
+    ? stored.persist ?? binding.persist ?? 'session'
+    : binding.persist ?? stored.persist ?? 'session';
   assertSafePersist(persist, binding);
   assertSecretSize(stored.secret, binding);
   return {
