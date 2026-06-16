@@ -1,10 +1,8 @@
 import {
   WindowsCredentialError,
-  assertWindowsCredentialAccountMetadataMatches,
-  inspectWindowsCredential,
   readWindowsCredentialSerializedWithAccountGuard,
   validateWindowsCredentialBinding,
-  writeWindowsCredentialSerialized,
+  writeWindowsCredentialSerializedWithAccountGuard,
   windowsCredentialExists,
   type WindowsCredentialBinding,
   type WindowsCredentialOperationOptions
@@ -80,11 +78,7 @@ export async function writeWindowsCredentialSourceSerialized(
 ): Promise<void> {
   if (process.platform !== 'win32') throw unsupportedWindowsCredentialSource(src, 'write-source');
   const binding = windowsCredentialBindingFromSource(src);
-  const metadata = await inspectWindowsCredential(binding, options);
-  if (metadata.status === 'present') {
-    assertWindowsCredentialAccountMetadataMatches(binding, metadata, 'write-preflight');
-  }
-  await writeWindowsCredentialSerialized(binding, serialized, options);
+  await writeWindowsCredentialSerializedWithAccountGuard(binding, serialized, options);
 }
 
 export async function windowsCredentialSourceExists(

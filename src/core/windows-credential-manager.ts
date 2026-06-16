@@ -101,7 +101,9 @@ export interface WindowsCredentialBridgeWriteRequest extends WindowsCredentialBi
 export interface WindowsCredentialBridge {
   inspect(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeInspectResult>;
   read(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult>;
+  readGuarded(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult>;
   write(request: WindowsCredentialBridgeWriteRequest): Promise<void>;
+  writeGuarded(request: WindowsCredentialBridgeWriteRequest): Promise<void>;
   delete(binding: WindowsCredentialBinding): Promise<'deleted' | 'missing'>;
 }
 
@@ -153,16 +155,48 @@ export async function readWindowsCredentialSerializedWithAccountGuard(
 ): Promise<string | null> {
   const safeBinding = validateWindowsCredentialBinding(binding);
   const bridge = options.bridge ?? defaultWindowsCredentialBridge;
-  const metadata = await inspectViaBridge(bridge, safeBinding);
-  if (metadata.status === 'missing') return null;
-  assertAccountMetadataMatches(safeBinding, metadata, 'read-preflight');
-
-  const result = await readViaBridge(bridge, safeBinding);
+  const result = await readGuardedViaBridge(bridge, safeBinding);
   if (result.status === 'missing') return null;
-  // Race guard: if the target changed between inspect/read, do not return a
-  // copied secret whose UserName metadata no longer matches the public guard.
+  // Defense-in-depth for injected/test bridges: the default bridge enforces
+  // this before CredentialBlob copy, but custom bridges still get checked before
+  // the serialized secret is returned.
   assertAccountMetadataMatches(safeBinding, result, 'read-postcheck');
   return JSON.stringify(storedFromReadResult(safeBinding, result));
+}
+
+export async function writeWindowsCredentialSerializedWithAccountGuard(
+  binding: WindowsCredentialBinding,
+  serialized: string,
+  options: WindowsCredentialOperationOptions = {}
+): Promise<void> {
+  const safeBinding = validateWindowsCredentialBinding(binding);
+  const stored = parseStoredBackup(serialized, safeBinding);
+  const bridge = options.bridge ?? defaultWindowsCredentialBridge;
+
+  const backupRead = await readGuardedViaBridge(bridge, safeBinding);
+  const backup = backupRead.status === 'present' ? storedFromReadResult(safeBinding, backupRead) : null;
+
+  try {
+    await writeGuardedViaBridge(bridge, writeRequestFromStored(safeBinding, stored));
+  } catch (err) {
+    const writeErr = toWindowsCredentialError(err, 'write-failed', safeBinding, 'write');
+    if (!backup) throw writeErr;
+    try {
+      await writeGuardedViaBridge(bridge, writeRequestFromStored(safeBinding, backup, 'stored-first'));
+    } catch (rollback) {
+      const rollbackErr = toWindowsCredentialError(rollback, 'rollback-failed', safeBinding, 'rollback');
+      throw new WindowsCredentialError(
+        'rollback-failed',
+        'windows credential write failed and rollback failed',
+        {
+          ...safeDetails(safeBinding, 'rollback'),
+          causeCode: writeErr.code,
+          rollbackCode: rollbackErr.code
+        }
+      );
+    }
+    throw writeErr;
+  }
 }
 
 export async function writeWindowsCredentialSerialized(
@@ -344,6 +378,16 @@ async function readViaBridge(bridge: WindowsCredentialBridge, binding: WindowsCr
   }
 }
 
+async function readGuardedViaBridge(bridge: WindowsCredentialBridge, binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult> {
+  try {
+    return await bridge.readGuarded(binding);
+  } catch (err) {
+    const converted = toWindowsCredentialError(err, 'bridge-failed', binding, 'read');
+    if (converted.code === 'missing') return { status: 'missing' };
+    throw converted;
+  }
+}
+
 async function inspectViaBridge(bridge: WindowsCredentialBridge, binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeInspectResult> {
   try {
     return await bridge.inspect(binding);
@@ -380,6 +424,10 @@ function assertAccountMetadataMatches(
 
 async function writeViaBridge(bridge: WindowsCredentialBridge, request: WindowsCredentialBridgeWriteRequest): Promise<void> {
   await bridge.write(request);
+}
+
+async function writeGuardedViaBridge(bridge: WindowsCredentialBridge, request: WindowsCredentialBridgeWriteRequest): Promise<void> {
+  await bridge.writeGuarded(request);
 }
 
 function malformedBackup(binding: WindowsCredentialBinding, reason: string): WindowsCredentialError {
@@ -507,8 +555,32 @@ class PowerShellPInvokeWindowsCredentialBridge implements WindowsCredentialBridg
     };
   }
 
+  async readGuarded(binding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult> {
+    const out = await invokePowerShellBridge({ operation: 'read-guarded', binding });
+    if (!out.ok) throw bridgeOutputError(out, binding, 'read');
+    if (out.status === 'missing') return { status: 'missing' };
+    if (out.status !== 'present' || typeof out.secret !== 'string') {
+      throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned invalid read status', safeDetails(binding, 'read'));
+    }
+    const persist = bridgePersist(out, binding, 'read');
+    return {
+      status: 'present',
+      secret: out.secret,
+      ...(typeof out.account === 'string' && out.account.length > 0 ? { account: out.account } : {}),
+      ...(persist !== undefined ? { persist } : {})
+    };
+  }
+
   async write(request: WindowsCredentialBridgeWriteRequest): Promise<void> {
     const out = await invokePowerShellBridge({ operation: 'write', binding: request, secret: request.secret });
+    if (!out.ok) throw bridgeOutputError(out, request, 'write');
+    if (out.status !== 'written') {
+      throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned invalid write status', safeDetails(request, 'write'));
+    }
+  }
+
+  async writeGuarded(request: WindowsCredentialBridgeWriteRequest): Promise<void> {
+    const out = await invokePowerShellBridge({ operation: 'write-guarded', binding: request, secret: request.secret });
     if (!out.ok) throw bridgeOutputError(out, request, 'write');
     if (out.status !== 'written') {
       throw new WindowsCredentialError('bridge-failed', 'windows credential bridge returned invalid write status', safeDetails(request, 'write'));
@@ -526,7 +598,7 @@ class PowerShellPInvokeWindowsCredentialBridge implements WindowsCredentialBridg
 const defaultWindowsCredentialBridge = new PowerShellPInvokeWindowsCredentialBridge();
 
 async function invokePowerShellBridge(request: {
-  operation: 'inspect' | 'read' | 'write' | 'delete';
+  operation: 'inspect' | 'read' | 'read-guarded' | 'write' | 'write-guarded' | 'delete';
   binding: WindowsCredentialBinding;
   secret?: string;
 }): Promise<BridgeOutput> {
@@ -537,7 +609,10 @@ async function invokePowerShellBridge(request: {
     operation: request.operation,
     targetName: request.binding.targetName,
     credentialType: request.binding.credentialType,
-    account: request.operation === 'write' ? (request.binding.account ?? DEFAULT_ACCOUNT) : request.binding.account,
+    account: request.operation === 'write' || request.operation === 'write-guarded'
+      ? (request.binding.account ?? DEFAULT_ACCOUNT)
+      : request.binding.account,
+    enforceAccount: request.operation === 'read-guarded' || request.operation === 'write-guarded',
     persist: PERSIST_TO_WIN32[request.binding.persist ?? 'session'],
     ...(request.secret !== undefined ? { secret: request.secret } : {})
   });
@@ -640,6 +715,51 @@ function New-BridgeFailure {
   }
 }
 
+function Test-BridgeAccountMismatch {
+  param(
+    [Parameter(Mandatory = $true)]$Request,
+    [AllowNull()][string]$ActualAccount,
+    [Parameter(Mandatory = $true)][string]$Phase
+  )
+  $hasEnforce = $Request.PSObject.Properties.Name -contains 'enforceAccount'
+  if (-not $hasEnforce -or $Request.enforceAccount -ne $true) { return $null }
+  $hasExpected = $Request.PSObject.Properties.Name -contains 'account'
+  if (-not $hasExpected -or $null -eq $Request.account -or $Request.account -eq '') { return $null }
+  if ($ActualAccount -ne $Request.account) {
+    return @{
+      ok = $false
+      kind = 'account-mismatch'
+      phase = $Phase
+    }
+  }
+  return $null
+}
+
+function Test-BridgeExistingAccountBeforeWrite {
+  param([Parameter(Mandatory = $true)]$Request)
+  $hasEnforce = $Request.PSObject.Properties.Name -contains 'enforceAccount'
+  if (-not $hasEnforce -or $Request.enforceAccount -ne $true) { return $null }
+
+  $credentialPtr = [IntPtr]::Zero
+  $ok = [MatWinCredBridge.NativeMethods]::CredRead($Request.targetName, [UInt32]1, [UInt32]0, [ref]$credentialPtr)
+  if (-not $ok) {
+    $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($errorCode -eq 1168) { return $null }
+    return New-BridgeFailure -Phase 'write-preflight' -Api 'CredReadW' -Code $errorCode
+  }
+
+  try {
+    if ($credentialPtr -eq [IntPtr]::Zero) { return @{ ok = $false; kind = 'bridge-failed'; phase = 'write-preflight' } }
+    $credential = [System.Runtime.InteropServices.Marshal]::PtrToStructure(
+      $credentialPtr,
+      [type][MatWinCredBridge.Credential]
+    )
+    return Test-BridgeAccountMismatch -Request $Request -ActualAccount $credential.UserName -Phase 'write-preflight'
+  } finally {
+    if ($credentialPtr -ne [IntPtr]::Zero) { [MatWinCredBridge.NativeMethods]::CredFree($credentialPtr) }
+  }
+}
+
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -707,6 +827,8 @@ function Invoke-BridgeRead {
       $credentialPtr,
       [type][MatWinCredBridge.Credential]
     )
+    $accountMismatch = Test-BridgeAccountMismatch -Request $Request -ActualAccount $credential.UserName -Phase 'read-preflight'
+    if ($null -ne $accountMismatch) { return $accountMismatch }
     $blobSize = [int]$credential.CredentialBlobSize
     if ($blobSize -lt 0 -or ($blobSize % 2) -ne 0) { return @{ ok = $false; kind = 'bridge-failed'; phase = 'read' } }
     if ($blobSize -gt 0 -and $credential.CredentialBlob -eq [IntPtr]::Zero) { return @{ ok = $false; kind = 'bridge-failed'; phase = 'read' } }
@@ -767,6 +889,8 @@ function Clear-UnmanagedBuffer {
 
 function Invoke-BridgeWrite {
   param([Parameter(Mandatory = $true)]$Request)
+  $accountMismatch = Test-BridgeExistingAccountBeforeWrite -Request $Request
+  if ($null -ne $accountMismatch) { return $accountMismatch }
   if ($null -eq $Request.secret -or -not ($Request.secret -is [string])) {
     return @{ ok = $false; kind = 'invalid-input'; phase = 'write' }
   }
@@ -819,7 +943,9 @@ try {
   switch ($request.operation) {
     'inspect' { Write-BridgeJson (Invoke-BridgeInspect -Request $request); exit 0 }
     'read' { Write-BridgeJson (Invoke-BridgeRead -Request $request); exit 0 }
+    'read-guarded' { Write-BridgeJson (Invoke-BridgeRead -Request $request); exit 0 }
     'write' { Write-BridgeJson (Invoke-BridgeWrite -Request $request); exit 0 }
+    'write-guarded' { Write-BridgeJson (Invoke-BridgeWrite -Request $request); exit 0 }
     'delete' { Write-BridgeJson (Invoke-BridgeDelete -Request $request); exit 0 }
     default { Write-BridgeJson @{ ok = $false; kind = 'invalid-input'; phase = 'validate' }; exit 0 }
   }

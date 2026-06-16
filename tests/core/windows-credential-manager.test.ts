@@ -50,7 +50,9 @@ const source: WindowsCredentialSource = {
 class FakeBridge implements WindowsCredentialBridge {
   readonly inspects: WindowsCredentialBinding[] = [];
   readonly reads: WindowsCredentialBinding[] = [];
+  readonly guardedReads: WindowsCredentialBinding[] = [];
   readonly writes: WindowsCredentialBridgeWriteRequest[] = [];
+  readonly guardedWrites: WindowsCredentialBridgeWriteRequest[] = [];
   readonly deletes: WindowsCredentialBinding[] = [];
 
   constructor(
@@ -74,8 +76,24 @@ class FakeBridge implements WindowsCredentialBridge {
     return next;
   }
 
+  async readGuarded(nextBinding: WindowsCredentialBinding): Promise<WindowsCredentialBridgeReadResult> {
+    this.guardedReads.push(nextBinding);
+    const next = this.readQueue.length > 0 ? this.readQueue.shift()! : { status: 'missing' as const };
+    if (next instanceof Error) throw next;
+    if (next.status === 'present' && nextBinding.account !== undefined && next.account !== nextBinding.account) {
+      throw new WindowsCredentialError('account-mismatch', 'windows credential account metadata does not match binding');
+    }
+    return next;
+  }
+
   async write(request: WindowsCredentialBridgeWriteRequest): Promise<void> {
     this.writes.push(request);
+    const next = this.writeQueue.length > 0 ? this.writeQueue.shift()! : 'ok';
+    if (next instanceof Error) throw next;
+  }
+
+  async writeGuarded(request: WindowsCredentialBridgeWriteRequest): Promise<void> {
+    this.guardedWrites.push(request);
     const next = this.writeQueue.length > 0 ? this.writeQueue.shift()! : 'ok';
     if (next instanceof Error) throw next;
   }
@@ -278,15 +296,14 @@ describe('windows credential manager internal backend — fake bridge unit tests
     expect(validateWindowsCredentialBinding({ ...binding, persist: 'enterprise' }).persist).toBe('enterprise');
   });
 
-  it('public win-credential source reads through inspect preflight and account post-check', async () => {
+  it('public win-credential source reads through guarded account check', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
       const bridge = new FakeBridge(
         [{ status: 'present', secret: CANARY_NEW, account: 'mat-unit-account', persist: 'session' }],
         [],
-        [],
-        [{ status: 'present', account: 'mat-unit-account', persist: 'session' }]
+        []
       );
       const raw = await readWindowsCredentialSourceSerialized(source, { bridge });
       if (raw == null) throw new Error('expected serialized credential');
@@ -294,8 +311,9 @@ describe('windows credential manager internal backend — fake bridge unit tests
 
       expect(parsed.secret === CANARY_NEW).toBe(true);
       expect(parsed.account).toBe('mat-unit-account');
-      expect(bridge.inspects.length).toBe(1);
-      expect(bridge.reads.length).toBe(1);
+      expect(bridge.inspects.length).toBe(0);
+      expect(bridge.guardedReads.length).toBe(1);
+      expect(bridge.reads.length).toBe(0);
     } finally {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     }
@@ -306,17 +324,18 @@ describe('windows credential manager internal backend — fake bridge unit tests
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
       const bridge = new FakeBridge(
-        [new Error(`${CANARY_RAW} ${CANARY_OLD}`)],
+        [{ status: 'present', secret: CANARY_OLD, account: 'other-account', persist: 'session' }],
         ['ok'],
-        [],
-        [{ status: 'present', account: 'other-account', persist: 'session' }]
+        []
       );
       const err = await captureError(writeWindowsCredentialSourceSerialized(source, stored(binding, CANARY_NEW), { bridge }));
 
       expect(err.code).toBe('account-mismatch');
-      expect(bridge.inspects.length).toBe(1);
+      expect(bridge.inspects.length).toBe(0);
+      expect(bridge.guardedReads.length).toBe(1);
       expect(bridge.reads.length).toBe(0);
       expect(bridge.writes.length).toBe(0);
+      expect(bridge.guardedWrites.length).toBe(0);
       expectNoLeak(serializedError(err), 'other-account', CANARY_NEW, CANARY_OLD, binding.targetName);
 
       const existsBridge = new FakeBridge(

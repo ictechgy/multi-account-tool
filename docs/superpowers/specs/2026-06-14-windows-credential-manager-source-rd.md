@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document started as a **docs-only R&D contract** for a future Windows Credential Manager source backend and now also records a **non-product Windows-CI-only synthetic API proof**, a **feature-scoped Windows Node preflight**, and an **internal-only backend proof**. It still does not add a public `SourceType`, does not add plugin schema/runtime wiring, and does not claim Windows package/product or Copilot support.
+This document started as a **docs-only R&D contract** for a future Windows Credential Manager source backend and now also records the follow-up implementation trail: a **non-product Windows-CI-only synthetic API proof**, a **feature-scoped Windows Node preflight**, an **internal-only backend proof**, and the later narrow public `win-credential` source primitive. It still does not claim Windows package/product, built-in CLI, session, Copilot, or Amp support.
 
 The goal is to define the minimum safety, API, serialization, rollback, and CI requirements before `mat` can add a Windows credential-store source. The synthetic proof only validates that GitHub's Windows runner can perform scoped `CredWriteW`/`CredReadW`/`CredDeleteW` round-trips against a random repo-specific target.
 
@@ -50,13 +50,13 @@ This preflight is evidence that future Windows Credential Manager backend work c
 
 ## Internal-only backend proof (2026-06-16)
 
-The third executable artifact is an internal backend proof, still outside public source/schema/runtime wiring:
+The third executable artifact was an internal backend proof, initially outside public source/schema/runtime wiring:
 
 - Module: `src/core/windows-credential-manager.ts`
 - Tests: `tests/core/windows-credential-manager.test.ts`
 - Scope: internal TypeScript orchestration for `CRED_TYPE_GENERIC` read/write/exists/delete using a narrow `WindowsCredentialBridge`, fake-bridge rollback/error/redaction tests on all platforms, and real synthetic Windows Credential Manager integration tests on `windows-latest`
 - Bridge: quarantined `PowerShellPInvokeWindowsCredentialBridge` that calls direct `CredReadW`, `CredWriteW`, `CredDeleteW`, and `CredFree`; secret material is passed through stdin JSON only, never argv
-- Product boundary: no public `win-credential` source type, no plugin parser acceptance, no `sources.ts`/builtin wiring, no `package.json` `win32` support, no main CI Windows matrix expansion, and no Copilot/Amp support
+- Original product boundary for that artifact: no public `win-credential` source type, no plugin parser acceptance, no `sources.ts`/builtin wiring, no `package.json` `win32` support, no main CI Windows matrix expansion, and no Copilot/Amp support. The subsequent public-primitive PR intentionally changes only the source/parser/runtime primitive part of this boundary.
 
 The follow-up public primitive now wires the backend into a narrow `win-credential` source. This is still not package-level Windows support: built-in CLIs, Copilot/Amp, `package.json` `win32`, and the main CI Windows matrix remain blocked.
 
@@ -209,12 +209,11 @@ Keep Windows source implementation blocked if any of these are true:
 
 ## Product non-goals
 
-- No public `SourceType` change in this PR.
-- No plugin schema change in this PR.
-- No `sources.ts`, builtin CLI, freshness, detector, switcher, session, or command-run wiring in this PR.
+- No built-in CLI uses `win-credential` yet.
 - No package-level Windows support claim (`package.json` `os` remains darwin/linux) and no main CI Windows matrix expansion.
-- No product credential reads/writes/deletes through user-facing commands; only synthetic test targets may be touched by the standalone proof or the internal backend tests.
-- No Copilot builtin, freshness adapter, profile swap, session, command-run, or target/account support in this PR.
+- No Copilot/Amp builtin, freshness adapter, profile swap, session, command-run, or target/account support is claimed by the public primitive alone.
+- No trusted `mat session start/run` boundary for user plugin CLIs.
+- A passing plugin validation report remains static schema/lint evidence, not proof that an upstream CLI will use the intended Windows credential target/account.
 
 ## Follow-up order
 
