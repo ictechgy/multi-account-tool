@@ -136,12 +136,13 @@ Stop the proof path immediately if any of these occur:
 This design leaves these gates pending:
 
 1. ✅ Add a reviewed manual metadata-admission checklist gate before any executable probe (`docs/superpowers/specs/2026-06-16-copilot-proof-metadata-admission-gate.md`).
-2. If executable, run a dedicated security review before adding any script.
-3. Collect and review macOS evidence without committing raw local output.
-4. Collect and review Linux evidence without committing raw local output.
-5. Keep Windows product support blocked until Windows source backend and human-reviewed Copilot TargetName/account-guard evidence are proven; metadata-report validation alone is insufficient.
-6. Implement ambient-token/env-secret runtime controls before any product flow.
-7. Add Copilot product support only after platform proof, app-state write-back policy, Windows/backend gates, and ambient-token/env-secret gates pass.
+2. ✅ Add a human evidence review-package gate (`docs/superpowers/specs/2026-06-16-copilot-human-evidence-package.md`) that binds manifest/checklist/pass-platform metadata without proving platform behavior.
+3. If executable, run a dedicated security review before adding any script.
+4. Collect and review macOS evidence without committing raw local output.
+5. Collect and review Linux evidence without committing raw local output.
+6. Keep Windows product support blocked until Windows source backend and human-reviewed Copilot TargetName/account-guard evidence are proven; metadata-report validation alone is insufficient.
+7. Implement ambient-token/env-secret runtime controls before any product flow.
+8. Add Copilot product support only after platform proof, app-state write-back policy, Windows/backend gates, and ambient-token/env-secret gates pass.
 
 ## Non-goals
 
@@ -155,7 +156,7 @@ This design leaves these gates pending:
 
 ## Follow-up implementation note (2026-06-16)
 
-The pure metadata-admission gate now lives in `src/core/copilot-proof-metadata-admission.ts`. It evaluates redacted reports plus value-free review checklists only. It does not collect evidence, does not read credential stores, and does not change the blocked product-support status.
+The pure metadata-admission gate now lives in `src/core/copilot-proof-metadata-admission.ts`. The follow-up review-package gate lives in `src/core/copilot-human-evidence-package.ts`. Both evaluate redacted metadata only. They do not collect evidence, do not read credential stores, and do not change the blocked product-support status.
 
 ## PR acceptance checklist
 

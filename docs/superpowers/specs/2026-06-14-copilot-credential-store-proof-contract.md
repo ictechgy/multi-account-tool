@@ -223,9 +223,10 @@ Copilot remains blocked if any of these are true:
 1. ✅ Redacted proof-report validator (`src/core/copilot-credential-proof.ts`) — metadata gate only, not platform proof.
 2. ✅ Human-opt-in macOS/Linux probe design (`docs/superpowers/specs/2026-06-16-copilot-platform-proof-probe-design.md`) — pre-flight evidence admissibility only; actual platform proof remains pending.
 3. ✅ Copilot proof metadata admission gate (`docs/superpowers/specs/2026-06-16-copilot-proof-metadata-admission-gate.md`) — pure review/checklist gate only; actual platform proof remains pending.
-4. Human-reviewed macOS/Linux platform evidence collection remains pending and requires separate security/reviewer approval before any executable probe.
-5. ✅ Windows Credential Manager source R&D contract (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`) and public `win-credential` primitive; package/builtin Windows support remains blocked.
-6. ✅ Windows metadata-report gate in `src/core/copilot-credential-proof.ts` — value-free TargetName/account-guard report shape only, not platform proof.
-7. Human-reviewed Windows Copilot TargetName/account-guard evidence remains pending and requires separate security/reviewer approval before any product flow.
-8. ✅ Ambient token policy for normal swap, `mat exec`, and future session flows (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
-9. Copilot prototype only after app-state, credential-store proof, Windows evidence, ambient-token implementation, and env-secret gates are all resolved.
+4. ✅ Copilot human evidence review-package gate (`src/core/copilot-human-evidence-package.ts`) — manifest/checklist/pass-platform packaging only; not platform proof.
+5. Human-reviewed macOS/Linux platform evidence collection remains pending and requires separate security/reviewer approval before any executable probe.
+6. ✅ Windows Credential Manager source R&D contract (`docs/superpowers/specs/2026-06-14-windows-credential-manager-source-rd.md`) and public `win-credential` primitive; package/builtin Windows support remains blocked.
+7. ✅ Windows metadata-report gate in `src/core/copilot-credential-proof.ts` — value-free TargetName/account-guard report shape only, not platform proof.
+8. Human-reviewed Windows Copilot TargetName/account-guard evidence remains pending and requires separate security/reviewer approval before any product flow.
+9. ✅ Ambient token policy for normal swap, `mat exec`, and future session flows (`docs/superpowers/specs/2026-06-14-copilot-ambient-token-policy.md`); runtime/env-secret implementation remains pending.
+10. Copilot prototype only after app-state, credential-store proof, Windows evidence, ambient-token implementation, and env-secret gates are all resolved.

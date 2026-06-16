@@ -123,8 +123,9 @@ Required local checks for this slice:
 
 ## Follow-ups
 
-1. Human-reviewed macOS evidence package remains pending and requires explicit local opt-in/authorization.
-2. Human-reviewed Linux evidence package remains pending and requires explicit local opt-in/authorization.
-3. Any executable local probe remains pending and requires separate RALPLAN/security review.
-4. Human-reviewed Windows Copilot TargetName/account-guard evidence remains pending.
-5. Copilot product support remains blocked until platform proof, app-state write-back policy, Windows evidence/backend gates, ambient-token runtime, and env-secret runtime gates are all resolved.
+1. ✅ Human evidence review-package manifest gate added in `src/core/copilot-human-evidence-package.ts`; it is metadata packaging only, not platform proof.
+2. Human-reviewed macOS evidence package remains pending and requires explicit local opt-in/authorization.
+3. Human-reviewed Linux evidence package remains pending and requires explicit local opt-in/authorization.
+4. Any executable local probe remains pending and requires separate RALPLAN/security review.
+5. Human-reviewed Windows Copilot TargetName/account-guard evidence remains pending.
+6. Copilot product support remains blocked until platform proof, app-state write-back policy, Windows evidence/backend gates, ambient-token runtime, and env-secret runtime gates are all resolved.
