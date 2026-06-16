@@ -170,6 +170,42 @@ describe('Copilot proof metadata admission gate', () => {
     expectNoEcho(serialized, 'enabled', 'platform-proof-complete');
   });
 
+  it('rejects support claims and forbidden evidence when the report is supplied as a JSON string', () => {
+    const rawOutput = 'synthetic JSON-string raw output that must not echo';
+    const report = JSON.stringify({
+      ...baseReport(),
+      productSupport: 'enabled',
+      rawOutput
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toContain('product-support-claim');
+    expect(result.issues.map((issue) => issue.code)).toContain('unsafe-evidence');
+    expect(serialized).toContain('$.productSupport');
+    expect(serialized).toContain('$.rawOutput');
+    expectNoEcho(serialized, 'enabled', rawOutput);
+  });
+
+  it('rejects unsafe values placed at checklist keys whose names are otherwise safe metadata collisions', () => {
+    const token = ['sk', '-', 'F'.repeat(16)].join('');
+    const checklist = {
+      ...baseChecklist(),
+      rawLocalOutputDiscarded: token
+    };
+
+    const result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toContain('unsafe-evidence');
+    expect(result.issues.map((issue) => issue.code)).toContain('invalid-checklist');
+    expect(serialized).toContain('$.rawLocalOutputDiscarded');
+    expectNoEcho(serialized, token);
+  });
+
   it('blocks non-empty report notes and rejects unsafe notes without echoing values', () => {
     const noted = { ...baseReport(), notes: ['synthetic note that is not admissible evidence'] };
     const blocked = evaluateCopilotProofMetadataAdmission(noted, baseChecklist());

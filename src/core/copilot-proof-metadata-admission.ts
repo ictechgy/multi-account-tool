@@ -201,12 +201,12 @@ function admissionIssue(
   };
 }
 
-function parsedReportForMetadata(report: unknown): unknown {
+function reportForAdmissionScans(report: unknown): unknown {
   if (typeof report !== 'string') return report;
   try {
     return JSON.parse(report) as unknown;
   } catch {
-    return undefined;
+    return report;
   }
 }
 
@@ -214,12 +214,16 @@ function isSafeChecklistMetadataPath(path: string): boolean {
   return path === '$.rawLocalOutputDiscarded' || path === '$.ambientTokenPolicyReviewed';
 }
 
+function isSafeChecklistMetadataKeyFinding(finding: { kind: string; path: string }): boolean {
+  return finding.kind === 'forbidden-key' && isSafeChecklistMetadataPath(finding.path);
+}
+
 function collectUnsafeAdmissionIssues(
   value: unknown,
   source: CopilotProofMetadataAdmissionIssueSource
 ): BucketedIssue[] {
   return collectCopilotCredentialProofUnsafeEvidence(value)
-    .filter((finding) => source !== 'checklist' || !isSafeChecklistMetadataPath(finding.path))
+    .filter((finding) => source !== 'checklist' || !isSafeChecklistMetadataKeyFinding(finding))
     .map((finding) =>
       admissionIssue(
         'rejected',
@@ -441,7 +445,7 @@ function validateChecklistShape(checklist: unknown): {
 }
 
 function reportNotesIssues(report: unknown): BucketedIssue[] {
-  const parsed = parsedReportForMetadata(report);
+  const parsed = reportForAdmissionScans(report);
   if (!isPlainObject(parsed)) return [];
   const notes = parsed.notes;
   if (Array.isArray(notes) && notes.length > 0) {
@@ -516,11 +520,12 @@ export function evaluateCopilotProofMetadataAdmission(
   const validation = validateCopilotCredentialProofReport(report);
   const checklistShape = validateChecklistShape(checklist);
   const passPlatforms = passPlatformsFor(validation);
+  const reportScanTarget = reportForAdmissionScans(report);
 
   const issues: BucketedIssue[] = [
-    ...collectUnsafeAdmissionIssues(report, 'report'),
+    ...collectUnsafeAdmissionIssues(reportScanTarget, 'report'),
     ...collectUnsafeAdmissionIssues(checklist, 'checklist'),
-    ...collectProductClaimIssues(report, 'report'),
+    ...collectProductClaimIssues(reportScanTarget, 'report'),
     ...collectProductClaimIssues(checklist, 'checklist'),
     ...checklistShape.issues,
     ...reportNotesIssues(report),
