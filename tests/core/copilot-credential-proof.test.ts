@@ -260,6 +260,46 @@ describe('Copilot credential proof report validator', () => {
     expectNoObservedValue(serialized, targetValue, accountValue, userNameValue);
   });
 
+  it('classifies value-bearing Windows target/account aliases as forbidden evidence individually', () => {
+    const cases: Array<[string, (report: CopilotCredentialProofReport, value: string) => void]> = [
+      [
+        'platform targetName',
+        (report, value) => {
+          (report.platforms[0] as unknown as Record<string, unknown>).targetName = value;
+        }
+      ],
+      [
+        'platform account',
+        (report, value) => {
+          (report.platforms[0] as unknown as Record<string, unknown>).account = value;
+        }
+      ],
+      [
+        'exact proof targetName value',
+        (report, value) => {
+          (report.platforms[0].windowsCredentialBindingProof as unknown as Record<string, unknown>).targetName = value;
+        }
+      ],
+      [
+        'nested proof account alias',
+        (report, value) => {
+          (report.platforms[0].windowsCredentialBindingProof as unknown as Record<string, unknown>).account = value;
+        }
+      ]
+    ];
+
+    for (const [label, mutate] of cases) {
+      const forbiddenValue = `synthetic ${label} value that must not echo`;
+      const report = cloneWindowsPassReport((entry) => mutate(entry, forbiddenValue));
+      const result = validateCopilotCredentialProofReport(report);
+      const serialized = JSON.stringify(result);
+
+      expect(result.ok, label).toBe(false);
+      expect(codesFor(report), label).toContain('forbidden-evidence-key');
+      expectNoObservedValue(serialized, forbiddenValue);
+    }
+  });
+
   it('rejects value-bearing Windows proof parts at the exact proof paths without echoing values', () => {
     const targetValue = 'synthetic exact target value that must not echo';
     const accountValue = 'synthetic exact account guard that must not echo';
@@ -273,6 +313,7 @@ describe('Copilot credential proof report validator', () => {
     const serialized = JSON.stringify(result);
     expect(result.ok).toBe(false);
     expect(codesFor(report)).toContain('invalid-windows-binding-proof');
+    expect(codesFor(report)).toContain('forbidden-evidence-key');
     expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.targetName');
     expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.accountUserNameGuard');
     expectNoObservedValue(serialized, targetValue, accountValue);

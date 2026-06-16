@@ -202,7 +202,10 @@ const FORBIDDEN_NORMALIZED_KEYS = new Set([
   'secrettooloutput',
   'rawoutput',
   'rawcredentialstoreoutput',
+  'rawtargetname',
   'credentialblob',
+  'target',
+  'targetname',
   'token',
   'accesstoken',
   'refreshtoken',
@@ -218,6 +221,7 @@ const FORBIDDEN_NORMALIZED_KEYS = new Set([
   'sha256digest',
   'login',
   'displaylogin',
+  'account',
   'organization',
   'org',
   'accountid',
@@ -283,6 +287,14 @@ function isForbiddenEvidenceKey(key: string): boolean {
   );
 }
 
+function isValueFreeWindowsBindingProofContainer(path: string, key: string, child: unknown): boolean {
+  return (
+    /^\$\.platforms\[\d+\]\.windowsCredentialBindingProof$/.test(path) &&
+    (key === 'targetName' || key === 'accountUserNameGuard') &&
+    isPlainObject(child)
+  );
+}
+
 function safePathSegment(key: string): string {
   if (tokenShapePresent(key) || realLabelPresent(key)) return '<redacted-key>';
   if (/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(key)) return key;
@@ -327,7 +339,11 @@ export function collectCopilotCredentialProofUnsafeEvidence(
     const childPath = childPathForKey(path, key);
     if (tokenShapePresent(key)) findings.push({ kind: 'token-shaped-value', path: childPath });
     if (realLabelPresent(key)) findings.push({ kind: 'real-label-value', path: childPath });
-    if (isForbiddenEvidenceKey(key) && isNonEmptyEvidenceValue(child)) {
+    if (
+      !isValueFreeWindowsBindingProofContainer(path, key, child) &&
+      isForbiddenEvidenceKey(key) &&
+      isNonEmptyEvidenceValue(child)
+    ) {
       findings.push({ kind: 'forbidden-key', path: childPath });
     }
     findings.push(...collectCopilotCredentialProofUnsafeEvidence(child, childPath));
