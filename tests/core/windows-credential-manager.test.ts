@@ -379,6 +379,13 @@ describe('windows credential manager internal backend — product boundary', () 
     expect(pkg).toContain('"linux"');
     expect(pkg).not.toContain('"win32"');
   });
+
+  it('uses case-sensitive account comparison inside the PowerShell guarded bridge', async () => {
+    const manager = await read('src/core/windows-credential-manager.ts');
+
+    expect(manager).toContain('$ActualAccount -cne $Request.account');
+    expect(manager).not.toContain('$ActualAccount -ne $Request.account');
+  });
 });
 
 const itWindows = process.platform === 'win32' ? it : it.skip;

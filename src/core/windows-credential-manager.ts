@@ -725,7 +725,7 @@ function Test-BridgeAccountMismatch {
   if (-not $hasEnforce -or $Request.enforceAccount -ne $true) { return $null }
   $hasExpected = $Request.PSObject.Properties.Name -contains 'account'
   if (-not $hasExpected -or $null -eq $Request.account -or $Request.account -eq '') { return $null }
-  if ($ActualAccount -ne $Request.account) {
+  if ($ActualAccount -cne $Request.account) {
     return @{
       ok = $false
       kind = 'account-mismatch'
