@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "subject": "github-copilot-cli",
+  "evidenceKind": "human-reviewed-local-probe",
+  "observedAt": "2026-06-16T00:00:00.000Z",
+  "platforms": [
+    {
+      "platform": "windows-credential-manager",
+      "serviceName": "copilot-cli",
+      "serviceNameSource": "synthetic-fixture",
+      "perAccountSelector": {
+        "status": "verified",
+        "fieldName": "redactedSelectorField",
+        "valuePolicy": "synthetic-only"
+      },
+      "entryCardinality": "one-per-account",
+      "secretValuesObservedByMat": false,
+      "rawCredentialStoreOutputCommitted": false,
+      "appStateCrossCheck": "matches-redacted-binding",
+      "ambientTokenPolicy": "policy-documented-implementation-pending",
+      "windowsCredentialBindingProof": {
+        "targetName": {
+          "status": "verified",
+          "valuePolicy": "synthetic-only"
+        },
+        "credentialType": "generic",
+        "accountUserNameGuard": {
+          "status": "verified",
+          "valuePolicy": "synthetic-only"
+        }
+      },
+      "conclusion": "pass"
+    }
+  ],
+  "notes": [
+    "Synthetic fixture only; Windows metadata-pass is not platform proof or product support."
+  ]
+}

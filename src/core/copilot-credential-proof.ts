@@ -27,6 +27,8 @@ export type CopilotCredentialProofClaimedConclusion = 'pass' | 'fail' | 'blocked
 export type CopilotCredentialProofMetadataConclusion = 'metadata-pass' | 'metadata-fail' | 'metadata-blocked';
 export type CopilotCredentialProofLevel = 'metadata-report-only';
 export type CopilotCredentialProofProductSupport = 'blocked';
+export type CopilotWindowsCredentialProofStatus = CopilotCredentialProofSelectorStatus;
+export type CopilotWindowsCredentialType = 'generic';
 
 export type CopilotCredentialProofIssueCode =
   | 'invalid-json'
@@ -50,11 +52,14 @@ export type CopilotCredentialProofIssueCode =
   | 'invalid-raw-output-flag'
   | 'invalid-app-state-cross-check'
   | 'invalid-ambient-token-policy'
+  | 'invalid-windows-binding-proof'
+  | 'invalid-windows-binding-status'
+  | 'invalid-windows-binding-value-policy'
+  | 'invalid-windows-credential-type'
   | 'invalid-conclusion'
   | 'inconsistent-pass'
   | 'inconsistent-fail'
   | 'inconsistent-blocked'
-  | 'windows-pass-blocked'
   | 'unknown-key'
   | 'forbidden-evidence-key'
   | 'token-shaped-value'
@@ -72,6 +77,17 @@ export interface CopilotCredentialProofSelector {
   valuePolicy?: string;
 }
 
+export interface CopilotWindowsCredentialBindingProofPart {
+  status: CopilotWindowsCredentialProofStatus;
+  valuePolicy?: string;
+}
+
+export interface CopilotWindowsCredentialBindingProof {
+  targetName: CopilotWindowsCredentialBindingProofPart;
+  credentialType: CopilotWindowsCredentialType;
+  accountUserNameGuard: CopilotWindowsCredentialBindingProofPart;
+}
+
 export interface CopilotCredentialProofPlatformReport {
   platform: CopilotCredentialProofPlatform;
   serviceName: string;
@@ -82,6 +98,7 @@ export interface CopilotCredentialProofPlatformReport {
   rawCredentialStoreOutputCommitted: boolean;
   appStateCrossCheck: CopilotCredentialProofAppStateCrossCheck;
   ambientTokenPolicy: CopilotCredentialProofAmbientTokenPolicy;
+  windowsCredentialBindingProof?: CopilotWindowsCredentialBindingProof;
   conclusion: CopilotCredentialProofClaimedConclusion;
 }
 
@@ -171,9 +188,12 @@ const PLATFORM_REPORT_KEYS = new Set([
   'rawCredentialStoreOutputCommitted',
   'appStateCrossCheck',
   'ambientTokenPolicy',
+  'windowsCredentialBindingProof',
   'conclusion'
 ]);
 const SELECTOR_KEYS = new Set(['status', 'fieldName', 'valuePolicy']);
+const WINDOWS_BINDING_PROOF_KEYS = new Set(['targetName', 'credentialType', 'accountUserNameGuard']);
+const WINDOWS_BINDING_PROOF_PART_KEYS = new Set(['status', 'valuePolicy']);
 const SAFE_METADATA_NORMALIZED_KEYS = new Set(
   [...ROOT_KEYS, ...PLATFORM_REPORT_KEYS, ...SELECTOR_KEYS].map((key) => normalizeKey(key))
 );
@@ -424,9 +444,135 @@ function validateSelector(
   };
 }
 
-function passCriteriaMet(platform: CopilotCredentialProofPlatformReport): boolean {
+function validateWindowsBindingProofPart(
+  raw: unknown,
+  path: string,
+  passClaimed: boolean,
+  issues: CopilotCredentialProofIssue[]
+): CopilotWindowsCredentialBindingProofPart | undefined {
+  if (!isPlainObject(raw)) {
+    issues.push(issue('invalid-windows-binding-proof', path, 'Windows credential binding proof parts must be value-free objects.'));
+    return undefined;
+  }
+
+  validateAllowedKeys(raw, WINDOWS_BINDING_PROOF_PART_KEYS, path, issues);
+
+  const status = enumValue(
+    raw.status,
+    SELECTOR_STATUSES,
+    `${path}.status`,
+    'invalid-windows-binding-status',
+    issues
+  );
+  const valuePolicy = nonEmptyString(raw.valuePolicy);
+  if (valuePolicy && !ALLOWED_VALUE_POLICIES.has(valuePolicy)) {
+    issues.push(
+      issue(
+        'invalid-windows-binding-value-policy',
+        `${path}.valuePolicy`,
+        'Windows credential binding value policy is not allowed in this metadata gate.'
+      )
+    );
+  }
+  if (passClaimed && !valuePolicy) {
+    issues.push(
+      issue(
+        'invalid-windows-binding-value-policy',
+        `${path}.valuePolicy`,
+        'Windows pass claims require a value-free target/account value policy.'
+      )
+    );
+  }
+
+  if (!status) return undefined;
+  return {
+    status,
+    ...(valuePolicy ? { valuePolicy } : {})
+  };
+}
+
+function validateWindowsCredentialBindingProof(
+  raw: unknown,
+  path: string,
+  platform: CopilotCredentialProofPlatform | undefined,
+  claimedConclusion: CopilotCredentialProofClaimedConclusion | undefined,
+  issues: CopilotCredentialProofIssue[]
+): CopilotWindowsCredentialBindingProof | undefined {
+  const windowsPassClaimed = platform === 'windows-credential-manager' && claimedConclusion === 'pass';
+  if (raw === undefined) {
+    if (windowsPassClaimed) {
+      issues.push(
+        issue(
+          'invalid-windows-binding-proof',
+          path,
+          'Windows pass claims require value-free Windows Credential Manager binding proof metadata.'
+        )
+      );
+    }
+    return undefined;
+  }
+
+  if (platform !== undefined && platform !== 'windows-credential-manager') {
+    issues.push(
+      issue(
+        'invalid-windows-binding-proof',
+        path,
+        'Windows Credential Manager binding proof metadata is allowed only on windows-credential-manager reports.'
+      )
+    );
+  }
+
+  if (!isPlainObject(raw)) {
+    issues.push(issue('invalid-windows-binding-proof', path, 'windowsCredentialBindingProof must be a value-free object.'));
+    return undefined;
+  }
+
+  validateAllowedKeys(raw, WINDOWS_BINDING_PROOF_KEYS, path, issues);
+
+  const targetName = validateWindowsBindingProofPart(
+    raw.targetName,
+    `${path}.targetName`,
+    windowsPassClaimed,
+    issues
+  );
+  const accountUserNameGuard = validateWindowsBindingProofPart(
+    raw.accountUserNameGuard,
+    `${path}.accountUserNameGuard`,
+    windowsPassClaimed,
+    issues
+  );
+  const credentialType = raw.credentialType === 'generic' ? 'generic' : undefined;
+  if (!credentialType) {
+    issues.push(
+      issue(
+        'invalid-windows-credential-type',
+        `${path}.credentialType`,
+        'Windows credential binding proof requires credentialType generic.'
+      )
+    );
+  }
+
+  if (!targetName || !accountUserNameGuard || !credentialType) return undefined;
+  return {
+    targetName,
+    credentialType,
+    accountUserNameGuard
+  };
+}
+
+function windowsBindingProofCriteriaMet(proof: CopilotWindowsCredentialBindingProof | undefined): boolean {
   return (
-    platform.platform !== 'windows-credential-manager' &&
+    proof !== undefined &&
+    proof.targetName.status === 'verified' &&
+    Boolean(proof.targetName.valuePolicy) &&
+    proof.credentialType === 'generic' &&
+    proof.accountUserNameGuard.status === 'verified' &&
+    Boolean(proof.accountUserNameGuard.valuePolicy)
+  );
+}
+
+function passCriteriaMet(platform: CopilotCredentialProofPlatformReport): boolean {
+  const baseCriteriaMet = (
     platform.conclusion === 'pass' &&
     platform.serviceName === SERVICE_NAME &&
     platform.serviceNameSource.trim().length > 0 &&
@@ -439,12 +585,14 @@ function passCriteriaMet(platform: CopilotCredentialProofPlatformReport): boolea
     platform.appStateCrossCheck === 'matches-redacted-binding' &&
     platform.ambientTokenPolicy !== 'not-yet-covered'
   );
+  if (!baseCriteriaMet) return false;
+  if (platform.platform === 'windows-credential-manager') {
+    return windowsBindingProofCriteriaMet(platform.windowsCredentialBindingProof);
+  }
+  return platform.windowsCredentialBindingProof === undefined;
 }
 
 function validatePassConsistency(platform: CopilotCredentialProofPlatformReport, issues: CopilotCredentialProofIssue[], path: string): void {
-  if (platform.platform === 'windows-credential-manager') {
-    issues.push(issue('windows-pass-blocked', `${path}.conclusion`, 'Windows pass is blocked until backend and Copilot target/account schema are proven.'));
-  }
   if (platform.serviceNameSource.trim().length === 0) {
     issues.push(issue('invalid-service-name-source', `${path}.serviceNameSource`, 'Pass claims require a service name source.'));
   }
@@ -459,6 +607,64 @@ function validatePassConsistency(platform: CopilotCredentialProofPlatformReport,
   }
   if (platform.ambientTokenPolicy === 'not-yet-covered') {
     issues.push(issue('inconsistent-pass', `${path}.ambientTokenPolicy`, 'Pass claims require ambient-token policy coverage.'));
+  }
+  if (platform.platform === 'windows-credential-manager') {
+    const proof = platform.windowsCredentialBindingProof;
+    if (!proof) {
+      issues.push(
+        issue(
+          'invalid-windows-binding-proof',
+          `${path}.windowsCredentialBindingProof`,
+          'Windows pass claims require value-free Windows Credential Manager binding proof metadata.'
+        )
+      );
+      return;
+    }
+    if (proof.targetName.status !== 'verified') {
+      issues.push(
+        issue(
+          'inconsistent-pass',
+          `${path}.windowsCredentialBindingProof.targetName.status`,
+          'Windows pass claims require verified targetName metadata.'
+        )
+      );
+    }
+    if (!proof.targetName.valuePolicy) {
+      issues.push(
+        issue(
+          'invalid-windows-binding-value-policy',
+          `${path}.windowsCredentialBindingProof.targetName.valuePolicy`,
+          'Windows pass claims require targetName value policy.'
+        )
+      );
+    }
+    if (proof.credentialType !== 'generic') {
+      issues.push(
+        issue(
+          'invalid-windows-credential-type',
+          `${path}.windowsCredentialBindingProof.credentialType`,
+          'Windows pass claims require generic credential type.'
+        )
+      );
+    }
+    if (proof.accountUserNameGuard.status !== 'verified') {
+      issues.push(
+        issue(
+          'inconsistent-pass',
+          `${path}.windowsCredentialBindingProof.accountUserNameGuard.status`,
+          'Windows pass claims require verified account/UserName guard metadata.'
+        )
+      );
+    }
+    if (!proof.accountUserNameGuard.valuePolicy) {
+      issues.push(
+        issue(
+          'invalid-windows-binding-value-policy',
+          `${path}.windowsCredentialBindingProof.accountUserNameGuard.valuePolicy`,
+          'Windows pass claims require account/UserName guard value policy.'
+        )
+      );
+    }
   }
 }
 
@@ -489,7 +695,7 @@ function metadataConclusionFor(
   normalized?: CopilotCredentialProofPlatformReport
 ): CopilotCredentialProofMetadataConclusion {
   if (issues.length > 0) return 'metadata-fail';
-  if (platform === 'windows-credential-manager' || claimedConclusion === 'blocked') return 'metadata-blocked';
+  if (claimedConclusion === 'blocked') return 'metadata-blocked';
   if (claimedConclusion === 'pass' && normalized && passCriteriaMet(normalized)) return 'metadata-pass';
   return 'metadata-fail';
 }
@@ -555,6 +761,13 @@ function validatePlatform(raw: unknown, index: number): CopilotCredentialProofPl
     'invalid-ambient-token-policy',
     issues
   );
+  const windowsCredentialBindingProof = validateWindowsCredentialBindingProof(
+    raw.windowsCredentialBindingProof,
+    `${path}.windowsCredentialBindingProof`,
+    platform,
+    claimedConclusion,
+    issues
+  );
 
   let normalized: CopilotCredentialProofPlatformReport | undefined;
   if (
@@ -576,6 +789,7 @@ function validatePlatform(raw: unknown, index: number): CopilotCredentialProofPl
       rawCredentialStoreOutputCommitted: false,
       appStateCrossCheck,
       ambientTokenPolicy,
+      ...(windowsCredentialBindingProof ? { windowsCredentialBindingProof } : {}),
       conclusion: claimedConclusion
     };
     if (claimedConclusion === 'pass') {

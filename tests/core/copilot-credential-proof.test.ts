@@ -20,8 +20,18 @@ function baseReport(): CopilotCredentialProofReport {
   return JSON.parse(fixture('valid-macos-linux-windows-blocked.json')) as CopilotCredentialProofReport;
 }
 
+function windowsPassReport(): CopilotCredentialProofReport {
+  return JSON.parse(fixture('valid-windows-metadata-pass.json')) as CopilotCredentialProofReport;
+}
+
 function cloneReport(update: (report: CopilotCredentialProofReport) => void): CopilotCredentialProofReport {
   const report = baseReport();
+  update(report);
+  return report;
+}
+
+function cloneWindowsPassReport(update: (report: CopilotCredentialProofReport) => void): CopilotCredentialProofReport {
+  const report = windowsPassReport();
   update(report);
   return report;
 }
@@ -76,17 +86,59 @@ describe('Copilot credential proof report validator', () => {
     });
   });
 
-  it('rejects Windows pass claims even when generic pass fields are present', () => {
+  it('accepts Windows metadata-pass only with value-free target/account binding proof while keeping product support blocked', () => {
+    const result = validateCopilotCredentialProofReport(fixture('valid-windows-metadata-pass.json'));
+
+    expect(result).toEqual({
+      ok: true,
+      structurallyValid: true,
+      proofLevel: 'metadata-report-only',
+      productSupport: 'blocked',
+      issues: [],
+      platforms: [
+        {
+          platform: 'windows-credential-manager',
+          claimedConclusion: 'pass',
+          metadataConclusion: 'metadata-pass',
+          issues: []
+        }
+      ]
+    });
+  });
+
+  it('rejects Windows pass claims without complete value-free binding proof', () => {
+    const missingProof = cloneWindowsPassReport((entry) => {
+      delete entry.platforms[0].windowsCredentialBindingProof;
+    });
+    expectInvalid(missingProof, 'invalid-windows-binding-proof');
+
+    const unverifiedTarget = cloneWindowsPassReport((entry) => {
+      entry.platforms[0].windowsCredentialBindingProof!.targetName.status = 'unverified';
+    });
+    expectInvalid(unverifiedTarget, 'inconsistent-pass');
+
+    const ambiguousAccountGuard = cloneWindowsPassReport((entry) => {
+      entry.platforms[0].windowsCredentialBindingProof!.accountUserNameGuard.status = 'ambiguous';
+    });
+    expectInvalid(ambiguousAccountGuard, 'inconsistent-pass');
+
+    const nonGeneric = cloneWindowsPassReport((entry) => {
+      entry.platforms[0].windowsCredentialBindingProof!.credentialType = 'domain-password' as never;
+    });
+    expectInvalid(nonGeneric, 'invalid-windows-credential-type');
+
+    const valuePolicyMissing = cloneWindowsPassReport((entry) => {
+      delete entry.platforms[0].windowsCredentialBindingProof!.targetName.valuePolicy;
+    });
+    expectInvalid(valuePolicyMissing, 'invalid-windows-binding-value-policy');
+  });
+
+  it('rejects Windows binding proof metadata on non-Windows platform reports', () => {
     const report = cloneReport((entry) => {
-      const windows = entry.platforms[2];
-      windows.perAccountSelector = { status: 'verified', fieldName: 'account', valuePolicy: 'synthetic-only' };
-      windows.entryCardinality = 'one-per-account';
-      windows.appStateCrossCheck = 'matches-redacted-binding';
-      windows.ambientTokenPolicy = 'controlled-by-implementation';
-      windows.conclusion = 'pass';
+      entry.platforms[0].windowsCredentialBindingProof = windowsPassReport().platforms[0].windowsCredentialBindingProof;
     });
 
-    expectInvalid(report, 'windows-pass-blocked');
+    expectInvalid(report, 'invalid-windows-binding-proof');
   });
 
   it('rejects service-only or hash-policy selector pass claims', () => {
@@ -184,6 +236,75 @@ describe('Copilot credential proof report validator', () => {
     expect(serialized).toContain('$.platforms[0].raw_output');
     expect(serialized).toContain('$.platforms[1].access_token');
     expectNoObservedValue(serialized, rawTranscript, 'synthetic-token-value');
+  });
+
+  it('rejects value-bearing Windows target/account aliases outside the exact value-free proof object', () => {
+    const targetValue = 'synthetic target value that must not echo';
+    const accountValue = 'synthetic account value that must not echo';
+    const userNameValue = 'synthetic username value that must not echo';
+    const report = cloneWindowsPassReport((entry) => {
+      const target = entry.platforms[0] as unknown as Record<string, unknown>;
+      target.targetName = targetValue;
+      target.account = accountValue;
+      target.userName = userNameValue;
+    });
+
+    const result = validateCopilotCredentialProofReport(report);
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(false);
+    expect(codesFor(report)).toContain('unknown-key');
+    expect(codesFor(report)).toContain('forbidden-evidence-key');
+    expect(serialized).toContain('$.platforms[0].targetName');
+    expect(serialized).toContain('$.platforms[0].account');
+    expect(serialized).toContain('$.platforms[0].userName');
+    expectNoObservedValue(serialized, targetValue, accountValue, userNameValue);
+  });
+
+  it('rejects value-bearing Windows proof parts at the exact proof paths without echoing values', () => {
+    const targetValue = 'synthetic exact target value that must not echo';
+    const accountValue = 'synthetic exact account guard that must not echo';
+    const report = cloneWindowsPassReport((entry) => {
+      const proof = entry.platforms[0].windowsCredentialBindingProof as unknown as Record<string, unknown>;
+      proof.targetName = targetValue;
+      proof.accountUserNameGuard = accountValue;
+    });
+
+    const result = validateCopilotCredentialProofReport(report);
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(false);
+    expect(codesFor(report)).toContain('invalid-windows-binding-proof');
+    expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.targetName');
+    expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.accountUserNameGuard');
+    expectNoObservedValue(serialized, targetValue, accountValue);
+  });
+
+  it('rejects value-bearing aliases nested near Windows binding proof without echoing values', () => {
+    const rawTarget = 'synthetic raw target value that must not echo';
+    const hashValue = 'synthetic account hash that must not echo';
+    const report = cloneWindowsPassReport((entry) => {
+      const proof = entry.platforms[0].windowsCredentialBindingProof as unknown as Record<string, unknown>;
+      proof.rawTargetName = rawTarget;
+      proof.accountHash = hashValue;
+      proof.account = 'synthetic nested account that must not echo';
+      proof.userName = 'synthetic nested username that must not echo';
+    });
+
+    const result = validateCopilotCredentialProofReport(report);
+    const serialized = JSON.stringify(result);
+    expect(result.ok).toBe(false);
+    expect(codesFor(report)).toContain('unknown-key');
+    expect(codesFor(report)).toContain('forbidden-evidence-key');
+    expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.rawTargetName');
+    expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.accountHash');
+    expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.account');
+    expect(serialized).toContain('$.platforms[0].windowsCredentialBindingProof.userName');
+    expectNoObservedValue(
+      serialized,
+      rawTarget,
+      hashValue,
+      'synthetic nested account that must not echo',
+      'synthetic nested username that must not echo'
+    );
   });
 
   it('rejects unknown extra fields including raw output, hash, identity, and organization aliases', () => {
