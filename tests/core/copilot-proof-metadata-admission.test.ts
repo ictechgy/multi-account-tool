@@ -55,6 +55,14 @@ function expectNoEcho(text: string, ...values: string[]): void {
   }
 }
 
+function nestedObject(depth: number): Record<string, unknown> {
+  let value: Record<string, unknown> = { leaf: true };
+  for (let index = 0; index < depth; index += 1) {
+    value = { child: value };
+  }
+  return value;
+}
+
 describe('Copilot proof metadata admission gate', () => {
   it('admits synthetic macOS/Linux metadata only as metadata while product support stays blocked', () => {
     const result = evaluateCopilotProofMetadataAdmission(baseReport(), baseChecklist());
@@ -250,6 +258,60 @@ describe('Copilot proof metadata admission gate', () => {
     expect(result.issues.map((issue) => issue.code)).toContain('unsupported-collection-mode');
     expect(result.issues.map((issue) => issue.code)).toContain('missing-review-precondition');
     expectNoEcho(serialized, token);
+  });
+
+  it('blocks cyclic report metadata before recursive validator or unsafe scans run', () => {
+    const report = baseReport() as unknown as Record<string, unknown>;
+    report.self = report;
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.validation.ok).toBe(false);
+    expect(result?.validation.platforms).toEqual([]);
+    expect(result?.issues.map((issue) => issue.code)).toContain('validator-failed');
+  });
+
+  it('blocks checklist accessors before checklist validation can dereference them', () => {
+    const checklist = { ...baseChecklist() } as Record<string, unknown>;
+    Object.defineProperty(checklist, 'secondReviewerSignedOff', {
+      enumerable: true,
+      get() {
+        throw new Error('getter must not run');
+      }
+    });
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.targetPlatforms).toEqual([]);
+    expect(result?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'invalid-checklist',
+          source: 'checklist'
+        })
+      ])
+    );
+  });
+
+  it('blocks excessive report depth before recursive scans run', () => {
+    const report = { ...baseReport(), nested: nestedObject(70) };
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+
+    expect(result.ok).toBe(false);
+    expect(result.admission).toBe('blocked');
+    expect(result.validation.platforms).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toContain('validator-failed');
   });
 
   it('keeps the admission gate source pure and disconnected from local credential access', () => {

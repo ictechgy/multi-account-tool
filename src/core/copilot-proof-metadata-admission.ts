@@ -81,6 +81,11 @@ interface BucketedIssue extends CopilotProofMetadataAdmissionIssue {
   bucket: IssueBucket;
 }
 
+interface ShapeScanIssue {
+  path: string;
+  message: string;
+}
+
 const PROOF_LEVEL: CopilotCredentialProofLevel = 'metadata-report-only';
 const PRODUCT_SUPPORT: CopilotCredentialProofProductSupport = 'blocked';
 
@@ -120,6 +125,8 @@ const REQUIRED_TRUE_CHECKLIST_KEYS = [
   'ambientTokenPolicyReviewed',
   'secondReviewerSignedOff'
 ] as const;
+
+const MAX_ADMISSION_SCAN_DEPTH = 64;
 
 const PRODUCT_SUPPORT_CLAIM_KEYS = new Set([
   'productsupport',
@@ -183,6 +190,11 @@ function childPathForKey(path: string, key: string): string {
   return `${path}.${safePathSegment(key)}`;
 }
 
+function shapePathForKey(path: string, key: string, parentIsArray: boolean): string {
+  if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
+  return `${path}.<unknown-key>`;
+}
+
 function admissionIssue(
   bucket: IssueBucket,
   code: CopilotProofMetadataAdmissionIssueCode,
@@ -208,6 +220,90 @@ function reportForAdmissionScans(report: unknown): unknown {
   } catch {
     return report;
   }
+}
+
+function collectShapeScanIssues(
+  value: unknown,
+  path = '$',
+  seen: WeakSet<object> = new WeakSet(),
+  depth = 0
+): ShapeScanIssue[] {
+  if (typeof value === 'function') {
+    return [{ path, message: 'Metadata values must be JSON-like data, not functions.' }];
+  }
+  if (value === null || typeof value !== 'object') return [];
+  if (depth > MAX_ADMISSION_SCAN_DEPTH) {
+    return [{ path, message: 'Metadata exceeds the maximum supported depth.' }];
+  }
+  if (seen.has(value)) {
+    return [{ path, message: 'Metadata must be an acyclic tree without shared object references.' }];
+  }
+
+  const isArray = Array.isArray(value);
+  let plainObject = false;
+  try {
+    plainObject = isPlainObject(value);
+  } catch {
+    return [{ path, message: 'Metadata object shape could not be inspected safely.' }];
+  }
+  if (!isArray && !plainObject) {
+    return [{ path, message: 'Metadata must contain only plain objects, arrays, and primitive values.' }];
+  }
+
+  seen.add(value);
+  const issues: ShapeScanIssue[] = [];
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    return [{ path, message: 'Metadata object descriptors could not be inspected safely.' }];
+  }
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') {
+      issues.push({ path: `${path}.<unknown-key>`, message: 'Metadata must use string keys only.' });
+      continue;
+    }
+    if (isArray && key === 'length') continue;
+    const descriptor = descriptors[key];
+    const childPath = shapePathForKey(path, key, isArray);
+    if (!descriptor || descriptor.get || descriptor.set) {
+      issues.push({ path: childPath, message: 'Metadata must not contain accessors.' });
+      continue;
+    }
+    if (!descriptor.enumerable) {
+      issues.push({ path: childPath, message: 'Metadata must not contain hidden non-enumerable fields.' });
+      continue;
+    }
+    issues.push(...collectShapeScanIssues(descriptor.value, childPath, seen, depth + 1));
+  }
+  return issues;
+}
+
+function reportShapeIssues(report: unknown): BucketedIssue[] {
+  return collectShapeScanIssues(report).map((entry) =>
+    admissionIssue('blocked', 'validator-failed', 'validator', entry.path, entry.message, 'invalid-root')
+  );
+}
+
+function checklistShapeIssues(checklist: unknown): BucketedIssue[] {
+  return collectShapeScanIssues(checklist).map((entry) =>
+    admissionIssue('blocked', 'invalid-checklist', 'checklist', entry.path, entry.message)
+  );
+}
+
+function invalidValidationForShape(issues: readonly BucketedIssue[]): CopilotCredentialProofValidationResult {
+  return {
+    ok: false,
+    structurallyValid: false,
+    proofLevel: PROOF_LEVEL,
+    productSupport: PRODUCT_SUPPORT,
+    issues: issues.map((entry) => ({
+      code: entry.validatorCode ?? 'invalid-root',
+      path: entry.path,
+      message: entry.message
+    })),
+    platforms: []
+  };
 }
 
 function isSafeChecklistMetadataPath(path: string): boolean {
@@ -238,12 +334,17 @@ function collectUnsafeAdmissionIssues(
 function collectProductClaimIssues(
   value: unknown,
   source: CopilotProofMetadataAdmissionIssueSource,
-  path = '$'
+  path = '$',
+  seen: WeakSet<object> = new WeakSet()
 ): BucketedIssue[] {
   if (Array.isArray(value)) {
-    return value.flatMap((entry, index) => collectProductClaimIssues(entry, source, `${path}[${index}]`));
+    if (seen.has(value)) return [];
+    seen.add(value);
+    return value.flatMap((entry, index) => collectProductClaimIssues(entry, source, `${path}[${index}]`, seen));
   }
   if (!isPlainObject(value)) return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
 
   const issues: BucketedIssue[] = [];
   for (const [key, child] of Object.entries(value)) {
@@ -259,7 +360,7 @@ function collectProductClaimIssues(
         )
       );
     }
-    issues.push(...collectProductClaimIssues(child, source, childPath));
+    issues.push(...collectProductClaimIssues(child, source, childPath, seen));
   }
   return issues;
 }
@@ -517,19 +618,25 @@ export function evaluateCopilotProofMetadataAdmission(
   report: unknown,
   checklist: unknown
 ): CopilotProofMetadataAdmissionResult {
-  const validation = validateCopilotCredentialProofReport(report);
-  const checklistShape = validateChecklistShape(checklist);
-  const passPlatforms = passPlatformsFor(validation);
   const reportScanTarget = reportForAdmissionScans(report);
+  const reportShape = reportShapeIssues(reportScanTarget);
+  const checklistShapePreflight = checklistShapeIssues(checklist);
+  const validation = reportShape.length > 0 ? invalidValidationForShape(reportShape) : validateCopilotCredentialProofReport(report);
+  const checklistShape =
+    checklistShapePreflight.length > 0
+      ? { targetPlatforms: [] as CopilotCredentialProofPlatform[], issues: checklistShapePreflight }
+      : validateChecklistShape(checklist);
+  const passPlatforms = passPlatformsFor(validation);
 
   const issues: BucketedIssue[] = [
-    ...collectUnsafeAdmissionIssues(reportScanTarget, 'report'),
-    ...collectUnsafeAdmissionIssues(checklist, 'checklist'),
-    ...collectProductClaimIssues(reportScanTarget, 'report'),
-    ...collectProductClaimIssues(checklist, 'checklist'),
+    ...reportShape,
+    ...(reportShape.length > 0 ? [] : collectUnsafeAdmissionIssues(reportScanTarget, 'report')),
+    ...(checklistShapePreflight.length > 0 ? [] : collectUnsafeAdmissionIssues(checklist, 'checklist')),
+    ...(reportShape.length > 0 ? [] : collectProductClaimIssues(reportScanTarget, 'report')),
+    ...(checklistShapePreflight.length > 0 ? [] : collectProductClaimIssues(checklist, 'checklist')),
     ...checklistShape.issues,
-    ...reportNotesIssues(report),
-    ...validatorIssues(validation),
+    ...(reportShape.length > 0 ? [] : reportNotesIssues(report)),
+    ...(reportShape.length > 0 ? [] : validatorIssues(validation)),
     ...platformScopeIssues(passPlatforms, checklistShape.targetPlatforms)
   ];
 
