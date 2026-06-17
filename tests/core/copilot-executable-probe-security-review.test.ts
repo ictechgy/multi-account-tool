@@ -321,6 +321,65 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, token, 'real.user@example.com');
   });
 
+  it('rejects nested unsafe evidence under symbol-keyed object values', () => {
+    const token = ['gh', 'p', '_', 'Y'.repeat(24)].join('');
+    const symbolKey = Symbol('nested-real.user@example.com');
+    const symbolBacked = baseProposal() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(symbolBacked, symbolKey, {
+      enumerable: true,
+      value: { diagnostic: token, productSupport: true }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(symbolBacked);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token, 'nested-real.user@example.com');
+  });
+
+  it('rejects non-enumerable unsafe evidence and claims that normal scanners would skip', () => {
+    const token = ['sk', '-', 'H'.repeat(16)].join('');
+    const hidden = baseProposal() as unknown as Record<string, unknown>;
+    Object.defineProperty(hidden, 'diagnostic', {
+      enumerable: false,
+      value: token
+    });
+    Object.defineProperty(hidden, 'productSupport', {
+      enumerable: false,
+      value: true
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(hidden);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('rejects nested unsafe evidence under non-enumerable object values', () => {
+    const token = ['gh', 'p', '_', 'H'.repeat(24)].join('');
+    const hidden = baseProposal() as unknown as Record<string, unknown>;
+    Object.defineProperty(hidden, 'hiddenBox', {
+      enumerable: false,
+      value: { diagnostic: token, productSupport: true }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(hidden);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
   it('preserves rejected root boundary flags even when proposal shape is invalid', () => {
     const cyclic = {
       ...baseProposal(),
@@ -343,6 +402,216 @@ describe('Copilot executable probe security review gate', () => {
         'platform-proof-claim'
       ])
     );
+  });
+
+  it('blocks sparse arrays and rejects unsafe array side-properties before normal array iteration can skip them', () => {
+    const sparseTargets: unknown[] = [];
+    sparseTargets[1] = 'darwin-keychain';
+    const sparse = { ...baseProposal(), targetPlatforms: sparseTargets };
+
+    const sparseResult = evaluateCopilotExecutableProbeSecurityReview(sparse);
+
+    expect(sparseResult.status).toBe('blocked');
+    expect(sparseResult.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.targetPlatforms[0]' })])
+    );
+
+    const token = ['gh', 'p', '_', 'A'.repeat(24)].join('');
+    const sidePropertyTargets = ['darwin-keychain', 'linux-secret-service'];
+    Object.defineProperty(sidePropertyTargets, 'diagnostic', {
+      enumerable: true,
+      value: { nested: token, productSupport: true }
+    });
+
+    const sidePropertyResult = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      targetPlatforms: sidePropertyTargets
+    });
+    const serialized = JSON.stringify(sidePropertyResult);
+
+    expect(sidePropertyResult.status).toBe('rejected');
+    expect(issueCodes(sidePropertyResult)).toContain('invalid-proposal');
+    expect(issueCodes(sidePropertyResult)).toContain('unsafe-evidence');
+    expect(issueCodes(sidePropertyResult)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('rejects own descriptor evidence on non-plain nested objects while still blocking empty non-plain shapes', () => {
+    const nonPlainResult = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      reviewPolicy: new Date('2026-01-01T00:00:00.000Z')
+    });
+
+    expect(nonPlainResult.status).toBe('blocked');
+    expect(nonPlainResult.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.reviewPolicy' })])
+    );
+
+    const nonPlainToken = ['gh', 'p', '_', 'N'.repeat(24)].join('');
+    class NonPlainEvidence {
+      diagnostic = nonPlainToken;
+      productSupport = true;
+    }
+    const evidenceResult = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      reviewPolicy: new NonPlainEvidence()
+    });
+    const serialized = JSON.stringify(evidenceResult);
+
+    expect(evidenceResult.status).toBe('rejected');
+    expect(issueCodes(evidenceResult)).toContain('invalid-proposal');
+    expect(issueCodes(evidenceResult)).toContain('unsafe-evidence');
+    expect(issueCodes(evidenceResult)).toContain('product-support-claim');
+    expectNoEcho(serialized, nonPlainToken);
+  });
+
+  it('rejects own descriptor evidence on function values without invoking them', () => {
+    const token = ['gh', 'p', '_', 'F'.repeat(24)].join('');
+    const functionValue = () => {
+      throw new Error('function must not run');
+    };
+    Object.defineProperty(functionValue, 'diagnostic', {
+      enumerable: true,
+      value: token
+    });
+    Object.defineProperty(functionValue, 'productSupport', {
+      enumerable: true,
+      value: true
+    });
+    Object.defineProperty(functionValue, 'payload', {
+      enumerable: true,
+      value: { diagnostic: token, platformProof: true }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      reviewPolicy: functionValue
+    });
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expect(issueCodes(result)).toContain('platform-proof-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('rejects own descriptor evidence on non-plain root proposals', () => {
+    const token = ['gh', 'p', '_', 'R'.repeat(24)].join('');
+    class RootProposal {
+      diagnostic = token;
+      productSupportClaimed = true;
+    }
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(new RootProposal());
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('blocks descriptor inspection failures without throwing', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('descriptor trap must not escape');
+        }
+      }
+    );
+
+    let hostileResult: ReturnType<typeof evaluateCopilotExecutableProbeSecurityReview> | undefined;
+    expect(() => {
+      hostileResult = evaluateCopilotExecutableProbeSecurityReview({ ...baseProposal(), reviewPolicy: hostile });
+    }).not.toThrow();
+    expect(hostileResult?.status).toBe('blocked');
+    expect(hostileResult?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.reviewPolicy' })])
+    );
+  });
+
+  it('uses the shape preflight descriptor snapshot for rejected scans without retrapping proxies', () => {
+    const token = ['gh', 'p', '_', 'P'.repeat(24)].join('');
+    const target = { ...baseProposal(), productSupportClaimed: true } as Record<string, unknown>;
+    Object.defineProperty(target, 'diagnostic', {
+      enumerable: false,
+      configurable: true,
+      value: token
+    });
+    let ownKeysCalls = 0;
+    let getPrototypeOfCalls = 0;
+    const proxy = new Proxy(target, {
+      ownKeys(inner) {
+        ownKeysCalls += 1;
+        if (ownKeysCalls > 1) {
+          throw new Error('descriptor traps must not be called after shape preflight');
+        }
+        return Reflect.ownKeys(inner);
+      },
+      getOwnPropertyDescriptor(inner, key) {
+        return Reflect.getOwnPropertyDescriptor(inner, key);
+      },
+      getPrototypeOf(inner) {
+        getPrototypeOfCalls += 1;
+        if (getPrototypeOfCalls > 1) {
+          throw new Error('plain-object checks must use the shape preflight cache');
+        }
+        return Reflect.getPrototypeOf(inner);
+      }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(proxy);
+    const serialized = JSON.stringify(result);
+
+    expect(ownKeysCalls).toBe(1);
+    expect(getPrototypeOfCalls).toBe(1);
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('validates clean-shape proxy proposals from descriptor snapshots without invoking getters', () => {
+    const target = { ...baseProposal(), productSupportClaimed: true } as Record<string, unknown>;
+    let ownKeysCalls = 0;
+    let getPrototypeOfCalls = 0;
+    let getCalls = 0;
+    const proxy = new Proxy(target, {
+      ownKeys(inner) {
+        ownKeysCalls += 1;
+        if (ownKeysCalls > 1) {
+          throw new Error('descriptor traps must not be called after shape preflight');
+        }
+        return Reflect.ownKeys(inner);
+      },
+      getOwnPropertyDescriptor(inner, key) {
+        return Reflect.getOwnPropertyDescriptor(inner, key);
+      },
+      getPrototypeOf(inner) {
+        getPrototypeOfCalls += 1;
+        if (getPrototypeOfCalls > 1) {
+          throw new Error('plain-object checks must use the shape preflight cache');
+        }
+        return Reflect.getPrototypeOf(inner);
+      },
+      get() {
+        getCalls += 1;
+        throw new Error('semantic validation must not invoke proxy getters');
+      }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(proxy);
+
+    expect(ownKeysCalls).toBe(1);
+    expect(getPrototypeOfCalls).toBe(1);
+    expect(getCalls).toBe(0);
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('product-support-claim');
   });
 
   it('rejects accessor-backed claims without invoking the accessor', () => {

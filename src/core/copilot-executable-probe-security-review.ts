@@ -123,6 +123,7 @@ export interface CopilotExecutableProbeSecurityReviewResult {
 }
 
 type JsonObject = Record<string, unknown>;
+type DescriptorRecord = Record<PropertyKey, PropertyDescriptor | undefined>;
 type IssueBucket = 'rejected' | 'deferred' | 'blocked';
 
 interface BucketedIssue extends CopilotExecutableProbeSecurityReviewIssue {
@@ -217,11 +218,16 @@ const DESCRIPTOR_SAFE_UNSAFE_NORMALIZED_KEYS: ReadonlySet<string> = new Set(
   [...ALL_SCHEMA_KEYS].filter((key) => key !== 'rawLocalOutputPolicy').map((key) => normalizeCopilotMetadataKey(key))
 );
 const MAX_PROPOSAL_SCAN_DEPTH = 64;
+const MAX_PROPOSAL_ARRAY_LENGTH = 256;
 
 function isPlainObject(value: unknown): value is JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+  try {
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+  } catch {
+    return false;
+  }
 }
 
 function childPath(path: string, key: string): string {
@@ -264,51 +270,137 @@ function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: t
   return { known: true, value: descriptor.value };
 }
 
-function descriptorHasTrueValue(value: object, key: string): boolean {
-  const child = descriptorValue(Object.getOwnPropertyDescriptor(value, key));
+function descriptorFromMap(descriptors: DescriptorRecord, key: PropertyKey): PropertyDescriptor | undefined {
+  return descriptors[key];
+}
+
+function descriptorHasTrueValue(value: object, key: string, descriptorsByObject: WeakMap<object, DescriptorRecord>): boolean {
+  const child = descriptorValue(descriptorsByObject.get(value)?.[key]);
   return child.known && child.value === true;
 }
 
 function descriptorSafeChildPath(path: string, key: string, parentIsArray: boolean): string {
-  if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
+  if (parentIsArray && isCanonicalArrayIndexKey(key)) return `${path}[${key}]`;
   if (isCopilotTokenShapePresent(key) || isCopilotRealLabelPresent(key)) return `${path}.<redacted-key>`;
   return childPath(path, key);
+}
+
+function isCanonicalArrayIndexKey(key: string): boolean {
+  if (!/^(0|[1-9]\d*)$/.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index <= 4294967294 && String(index) === key;
+}
+
+function collectDescriptorChildShapeIssues(
+  descriptor: PropertyDescriptor | undefined,
+  childPathForIssue: string,
+  seen: WeakSet<object>,
+  depth: number,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>,
+  plainObjectsByObject: WeakMap<object, boolean>
+): BucketedIssue[] {
+  const child = descriptorValue(descriptor);
+  if (!child.known || child.value === null || (typeof child.value !== 'object' && typeof child.value !== 'function')) {
+    return [];
+  }
+  return collectShapeIssues(child.value, childPathForIssue, seen, depth + 1, descriptorsByObject, plainObjectsByObject);
 }
 
 function collectShapeIssues(
   value: unknown,
   path = '$',
   seen: WeakSet<object> = new WeakSet(),
-  depth = 0
+  depth = 0,
+  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap(),
+  plainObjectsByObject: WeakMap<object, boolean> = new WeakMap()
 ): BucketedIssue[] {
-  if (value === null || typeof value !== 'object') return [];
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return [];
   if (depth > MAX_PROPOSAL_SCAN_DEPTH) {
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata exceeds the maximum supported depth.')];
   }
-  if (seen.has(value)) {
+  const objectValue = value as object;
+  if (seen.has(objectValue)) {
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must be acyclic.')];
   }
-  seen.add(value);
 
+  seen.add(objectValue);
   const issues: BucketedIssue[] = [];
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== 'string') {
-      issues.push(issue('blocked', 'invalid-proposal', `${path}.<unknown-key>`, 'Proposal metadata must use string keys only.'));
-      continue;
+  let descriptors: DescriptorRecord;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value) as DescriptorRecord;
+  } catch {
+    seen.delete(objectValue);
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata descriptors could not be inspected safely.')];
+  }
+  descriptorsByObject.set(objectValue, descriptors);
+
+  if (typeof value === 'function') {
+    plainObjectsByObject.set(objectValue, false);
+    issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.'));
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptorFromMap(descriptors, key);
+      const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, false) : `${path}.<redacted-key>`;
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPathForIssue, seen, depth, descriptorsByObject, plainObjectsByObject));
     }
-    if (Array.isArray(value) && key === 'length') continue;
-    const descriptor = descriptors[key];
-    if (!descriptor || descriptor.get || descriptor.set) {
-      issues.push(issue('blocked', 'invalid-proposal', childPath(path, key), 'Proposal metadata must not contain accessors.'));
-      continue;
-    }
-    const child = descriptor.value;
-    const nextPath = Array.isArray(value) && /^\d+$/.test(key) ? `${path}[${key}]` : childPath(path, key);
-    issues.push(...collectShapeIssues(child, nextPath, seen, depth + 1));
+    seen.delete(objectValue);
+    return issues;
   }
 
-  seen.delete(value);
+  const isArray = Array.isArray(value);
+  const isPlain = !isArray && isPlainObject(value);
+  plainObjectsByObject.set(objectValue, isPlain);
+  if (!isArray && !isPlain) {
+    issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.'));
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptorFromMap(descriptors, key);
+      const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, false) : `${path}.<redacted-key>`;
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPathForIssue, seen, depth, descriptorsByObject, plainObjectsByObject));
+    }
+    seen.delete(objectValue);
+    return issues;
+  }
+  if (isArray) {
+    const lengthDescriptor = descriptors.length;
+    const length = typeof lengthDescriptor?.value === 'number' ? lengthDescriptor.value : undefined;
+    if (length === undefined) {
+      issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal arrays must expose a numeric length.'));
+    } else if (!Number.isSafeInteger(length) || length < 0 || length > MAX_PROPOSAL_ARRAY_LENGTH) {
+      issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal arrays must stay within the supported size.'));
+    } else {
+      for (let index = 0; index < length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(descriptors, String(index))) {
+          issues.push(issue('blocked', 'invalid-proposal', `${path}[${index}]`, 'Proposal arrays must be dense JSON-like arrays.'));
+        }
+      }
+    }
+  }
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptorFromMap(descriptors, key);
+    const nextPath = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<redacted-key>`;
+    if (typeof key !== 'string') {
+      issues.push(issue('blocked', 'invalid-proposal', `${path}.<unknown-key>`, 'Proposal metadata must use string keys only.'));
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, nextPath, seen, depth, descriptorsByObject, plainObjectsByObject));
+      continue;
+    }
+    if (isArray && key === 'length') continue;
+    if (isArray && !isCanonicalArrayIndexKey(key)) {
+      issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal arrays must not contain non-index fields.'));
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, nextPath, seen, depth, descriptorsByObject, plainObjectsByObject));
+      continue;
+    }
+    if (!descriptor || descriptor.get || descriptor.set) {
+      issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain accessors.'));
+      continue;
+    }
+    if (!descriptor.enumerable) {
+      issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain hidden non-enumerable fields.'));
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, nextPath, seen, depth, descriptorsByObject, plainObjectsByObject));
+      continue;
+    }
+    issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1, descriptorsByObject, plainObjectsByObject));
+  }
+
+  seen.delete(objectValue);
   return issues;
 }
 
@@ -346,7 +438,8 @@ function collectDescriptorSafeRejectedIssues(
   value: unknown,
   path = '$',
   seen: WeakSet<object> = new WeakSet(),
-  depth = 0
+  depth = 0,
+  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap()
 ): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
   if (typeof value === 'string') {
@@ -354,19 +447,25 @@ function collectDescriptorSafeRejectedIssues(
     if (isCopilotRealLabelPresent(value)) issues.push(unsafeDescriptorIssue(path));
     return issues;
   }
-  if (value === null || typeof value !== 'object' || depth > MAX_PROPOSAL_SCAN_DEPTH || seen.has(value)) {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function') ||
+    depth > MAX_PROPOSAL_SCAN_DEPTH ||
+    seen.has(value as object)
+  ) {
     return issues;
   }
 
   const isArray = Array.isArray(value);
-  if (!isArray && !isPlainObject(value)) return issues;
+  const objectValue = value as object;
+  const descriptors = descriptorsByObject.get(objectValue);
+  if (!descriptors) return issues;
 
-  seen.add(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
+  seen.add(objectValue);
   for (const key of Reflect.ownKeys(descriptors)) {
     if (isArray && key === 'length') continue;
 
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const descriptor = descriptorFromMap(descriptors, key);
     const child = descriptorValue(descriptor);
     const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<redacted-key>`;
     const present = descriptorHasPresentValue(descriptor);
@@ -404,30 +503,68 @@ function collectDescriptorSafeRejectedIssues(
     }
 
     if (child.known) {
-      issues.push(...collectDescriptorSafeRejectedIssues(child.value, childPathForIssue, seen, depth + 1));
+      issues.push(...collectDescriptorSafeRejectedIssues(child.value, childPathForIssue, seen, depth + 1, descriptorsByObject));
     }
   }
-  seen.delete(value);
+  seen.delete(objectValue);
   return issues;
 }
 
-function collectDescriptorSafeRootBoundaryIssues(proposal: JsonObject): BucketedIssue[] {
+function collectDescriptorSafeRootBoundaryIssues(
+  proposal: object,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>
+): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
-  if (descriptorHasTrueValue(proposal, 'runnableProbeAdded')) {
+  if (descriptorHasTrueValue(proposal, 'runnableProbeAdded', descriptorsByObject)) {
     issues.push(issue('rejected', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probes are not admissible in this gate.'));
   }
-  if (descriptorHasTrueValue(proposal, 'credentialStoreAccessedByMat')) {
+  if (descriptorHasTrueValue(proposal, 'credentialStoreAccessedByMat', descriptorsByObject)) {
     issues.push(
       issue('rejected', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Mat must not access credential stores in this gate.')
     );
   }
-  if (descriptorHasTrueValue(proposal, 'productSupportClaimed')) {
+  if (descriptorHasTrueValue(proposal, 'productSupportClaimed', descriptorsByObject)) {
     issues.push(issue('rejected', 'product-support-claim', '$.productSupportClaimed', 'Product support claims are not admissible.'));
   }
-  if (descriptorHasTrueValue(proposal, 'platformProofClaimedComplete')) {
+  if (descriptorHasTrueValue(proposal, 'platformProofClaimedComplete', descriptorsByObject)) {
     issues.push(issue('rejected', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform proof completion claims are not admissible.'));
   }
   return issues;
+}
+
+function materializeDescriptorSnapshot(
+  value: unknown,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>,
+  seen: WeakMap<object, unknown> = new WeakMap()
+): unknown {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value;
+
+  const objectValue = value as object;
+  if (seen.has(objectValue)) return seen.get(objectValue);
+  const descriptors = descriptorsByObject.get(objectValue);
+  if (!descriptors) return undefined;
+
+  if (Array.isArray(value)) {
+    const lengthDescriptor = descriptorValue(descriptors.length);
+    const length = lengthDescriptor.known ? lengthDescriptor.value : 0;
+    const arrayLength = typeof length === 'number' && Number.isSafeInteger(length) && length >= 0 ? length : 0;
+    const output: unknown[] = new Array(arrayLength);
+    seen.set(objectValue, output);
+    for (let index = 0; index < arrayLength; index += 1) {
+      const child = descriptorValue(descriptors[String(index)]);
+      if (child.known) output[index] = materializeDescriptorSnapshot(child.value, descriptorsByObject, seen);
+    }
+    return output;
+  }
+
+  const output: JsonObject = {};
+  seen.set(objectValue, output);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') continue;
+    const child = descriptorValue(descriptors[key]);
+    if (child.known) output[key] = materializeDescriptorSnapshot(child.value, descriptorsByObject, seen);
+  }
+  return output;
 }
 
 function collectClaimIssues(value: unknown, path = '$', seen: WeakSet<object> = new WeakSet()): BucketedIssue[] {
@@ -592,72 +729,84 @@ function statusFor(issues: readonly BucketedIssue[]): CopilotExecutableProbeSecu
 export function evaluateCopilotExecutableProbeSecurityReview(
   proposal: unknown
 ): CopilotExecutableProbeSecurityReviewResult {
-  const shapeIssues = collectShapeIssues(proposal);
+  const descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap();
+  const plainObjectsByObject: WeakMap<object, boolean> = new WeakMap();
+  const shapeIssues = collectShapeIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject, plainObjectsByObject);
   const issues: BucketedIssue[] = [...shapeIssues];
   let targetPlatforms: CopilotExecutableProbePlatform[] = [];
+  const descriptorInspectableRoot = proposal !== null && (typeof proposal === 'object' || typeof proposal === 'function');
+  const rootIsPlainObject = descriptorInspectableRoot && plainObjectsByObject.get(proposal as object) === true;
 
-  if (!isPlainObject(proposal)) {
+  if (!rootIsPlainObject) {
     issues.push(issue('blocked', 'invalid-proposal', '$', 'Proposal must be a value-free object.'));
+    if (shapeIssues.length > 0 && descriptorInspectableRoot) {
+      issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
+      issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal as object, descriptorsByObject));
+    }
   } else if (shapeIssues.length > 0) {
-    issues.push(...collectDescriptorSafeRejectedIssues(proposal));
-    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal));
+    issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
+    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal as JsonObject, descriptorsByObject));
   } else {
-    issues.push(...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal));
-    issues.push(...collectUnknownKeyIssues(proposal, ROOT_KEYS, '$'));
-    if (proposal.schemaVersion !== 1) {
+    const proposalObject = materializeDescriptorSnapshot(proposal, descriptorsByObject) as JsonObject;
+    issues.push(...collectUnsafeIssues(proposalObject), ...collectClaimIssues(proposalObject));
+    issues.push(...collectUnknownKeyIssues(proposalObject, ROOT_KEYS, '$'));
+    if (proposalObject.schemaVersion !== 1) {
       issues.push(issue('blocked', 'invalid-proposal', '$.schemaVersion', 'Proposal schemaVersion must be 1.'));
     }
-    if (proposal.subject !== SUBJECT) {
+    if (proposalObject.subject !== SUBJECT) {
       issues.push(issue('blocked', 'invalid-proposal', '$.subject', 'Proposal subject must be github-copilot-cli.'));
     }
-    if (proposal.reviewKind !== REVIEW_KIND) {
+    if (proposalObject.reviewKind !== REVIEW_KIND) {
       issues.push(issue('blocked', 'invalid-proposal', '$.reviewKind', 'Proposal reviewKind is not supported.'));
     }
 
-    const platformResult = targetPlatformIssues(proposal.targetPlatforms);
+    const platformResult = targetPlatformIssues(proposalObject.targetPlatforms);
     targetPlatforms = platformResult.platforms;
     issues.push(...platformResult.issues);
 
-    if (typeof proposal.collectionIntent !== 'string' || !COLLECTION_INTENTS.has(proposal.collectionIntent as CopilotExecutableProbeCollectionIntent)) {
+    if (
+      typeof proposalObject.collectionIntent !== 'string' ||
+      !COLLECTION_INTENTS.has(proposalObject.collectionIntent as CopilotExecutableProbeCollectionIntent)
+    ) {
       issues.push(issue('deferred', 'unsupported-collection-intent', '$.collectionIntent', 'Unsupported collection intent requires separate review.'));
-    } else if (proposal.collectionIntent !== 'future-executable-local-probe') {
+    } else if (proposalObject.collectionIntent !== 'future-executable-local-probe') {
       issues.push(issue('deferred', 'unsupported-collection-intent', '$.collectionIntent', 'Future collection modes are deferred.'));
     }
 
-    if (proposal.implementationInThisChange === true) {
+    if (proposalObject.implementationInThisChange === true) {
       issues.push(issue('deferred', 'implementation-requested', '$.implementationInThisChange', 'Implementation must be a separate follow-up.'));
-    } else if (proposal.implementationInThisChange !== false) {
+    } else if (proposalObject.implementationInThisChange !== false) {
       issues.push(issue('blocked', 'implementation-requested', '$.implementationInThisChange', 'Implementation boundary must be explicit.'));
     }
-    if (proposal.runnableProbeAdded === true) {
+    if (proposalObject.runnableProbeAdded === true) {
       issues.push(issue('rejected', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probes are not admissible in this gate.'));
-    } else if (proposal.runnableProbeAdded !== false) {
+    } else if (proposalObject.runnableProbeAdded !== false) {
       issues.push(issue('blocked', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probe boundary must be explicit.'));
     }
-    if (proposal.credentialStoreAccessedByMat === true) {
+    if (proposalObject.credentialStoreAccessedByMat === true) {
       issues.push(issue('rejected', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Mat must not access credential stores in this gate.'));
-    } else if (proposal.credentialStoreAccessedByMat !== false) {
+    } else if (proposalObject.credentialStoreAccessedByMat !== false) {
       issues.push(issue('blocked', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Credential-store access boundary must be explicit.'));
     }
-    if (proposal.productSupportClaimed === true) {
+    if (proposalObject.productSupportClaimed === true) {
       issues.push(issue('rejected', 'product-support-claim', '$.productSupportClaimed', 'Product support claims are not admissible.'));
-    } else if (proposal.productSupportClaimed !== false) {
+    } else if (proposalObject.productSupportClaimed !== false) {
       issues.push(issue('blocked', 'product-support-claim', '$.productSupportClaimed', 'Product support boundary must be explicit.'));
     }
-    if (proposal.platformProofClaimedComplete === true) {
+    if (proposalObject.platformProofClaimedComplete === true) {
       issues.push(issue('rejected', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform proof completion claims are not admissible.'));
-    } else if (proposal.platformProofClaimedComplete !== false) {
+    } else if (proposalObject.platformProofClaimedComplete !== false) {
       issues.push(issue('blocked', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform-proof boundary must be explicit.'));
     }
 
-    issues.push(...booleanMustBe(proposal.separateAuthorizationRequired, true, '$.separateAuthorizationRequired', 'missing-review-precondition'));
-    issues.push(...booleanMustBe(proposal.localUserOptInRequired, true, '$.localUserOptInRequired', 'missing-review-precondition'));
-    issues.push(...booleanMustBe(proposal.secondReviewerRequired, true, '$.secondReviewerRequired', 'missing-review-precondition'));
-    issues.push(...commandPolicyIssues(proposal.commandPolicy));
-    issues.push(...environmentPolicyIssues(proposal.environmentPolicy));
-    issues.push(...outputPolicyIssues(proposal.outputPolicy));
-    issues.push(...cleanupPolicyIssues(proposal.cleanupPolicy));
-    issues.push(...reviewPolicyIssues(proposal.reviewPolicy));
+    issues.push(...booleanMustBe(proposalObject.separateAuthorizationRequired, true, '$.separateAuthorizationRequired', 'missing-review-precondition'));
+    issues.push(...booleanMustBe(proposalObject.localUserOptInRequired, true, '$.localUserOptInRequired', 'missing-review-precondition'));
+    issues.push(...booleanMustBe(proposalObject.secondReviewerRequired, true, '$.secondReviewerRequired', 'missing-review-precondition'));
+    issues.push(...commandPolicyIssues(proposalObject.commandPolicy));
+    issues.push(...environmentPolicyIssues(proposalObject.environmentPolicy));
+    issues.push(...outputPolicyIssues(proposalObject.outputPolicy));
+    issues.push(...cleanupPolicyIssues(proposalObject.cleanupPolicy));
+    issues.push(...reviewPolicyIssues(proposalObject.reviewPolicy));
   }
 
   const status = statusFor(issues);
