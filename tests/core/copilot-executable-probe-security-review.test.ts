@@ -321,6 +321,28 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, token, 'real.user@example.com');
   });
 
+  it('rejects non-enumerable unsafe evidence and claims that normal scanners would skip', () => {
+    const token = ['sk', '-', 'H'.repeat(16)].join('');
+    const hidden = baseProposal() as unknown as Record<string, unknown>;
+    Object.defineProperty(hidden, 'diagnostic', {
+      enumerable: false,
+      value: token
+    });
+    Object.defineProperty(hidden, 'productSupport', {
+      enumerable: false,
+      value: true
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(hidden);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
   it('preserves rejected root boundary flags even when proposal shape is invalid', () => {
     const cyclic = {
       ...baseProposal(),
@@ -342,6 +364,67 @@ describe('Copilot executable probe security review gate', () => {
         'product-support-claim',
         'platform-proof-claim'
       ])
+    );
+  });
+
+  it('blocks sparse arrays and rejects unsafe array side-properties before normal array iteration can skip them', () => {
+    const sparseTargets: unknown[] = [];
+    sparseTargets[1] = 'darwin-keychain';
+    const sparse = { ...baseProposal(), targetPlatforms: sparseTargets };
+
+    const sparseResult = evaluateCopilotExecutableProbeSecurityReview(sparse);
+
+    expect(sparseResult.status).toBe('blocked');
+    expect(sparseResult.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.targetPlatforms[0]' })])
+    );
+
+    const token = ['gh', 'p', '_', 'A'.repeat(24)].join('');
+    const sidePropertyTargets = ['darwin-keychain', 'linux-secret-service'];
+    Object.defineProperty(sidePropertyTargets, 'diagnostic', {
+      enumerable: true,
+      value: token
+    });
+
+    const sidePropertyResult = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      targetPlatforms: sidePropertyTargets
+    });
+    const serialized = JSON.stringify(sidePropertyResult);
+
+    expect(sidePropertyResult.status).toBe('rejected');
+    expect(issueCodes(sidePropertyResult)).toContain('invalid-proposal');
+    expect(issueCodes(sidePropertyResult)).toContain('unsafe-evidence');
+    expectNoEcho(serialized, token);
+  });
+
+  it('blocks non-plain nested objects and descriptor inspection failures without throwing', () => {
+    const nonPlainResult = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      reviewPolicy: new Date('2026-01-01T00:00:00.000Z')
+    });
+
+    expect(nonPlainResult.status).toBe('blocked');
+    expect(nonPlainResult.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.reviewPolicy' })])
+    );
+
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('descriptor trap must not escape');
+        }
+      }
+    );
+
+    let hostileResult: ReturnType<typeof evaluateCopilotExecutableProbeSecurityReview> | undefined;
+    expect(() => {
+      hostileResult = evaluateCopilotExecutableProbeSecurityReview({ ...baseProposal(), reviewPolicy: hostile });
+    }).not.toThrow();
+    expect(hostileResult?.status).toBe('blocked');
+    expect(hostileResult?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.reviewPolicy' })])
     );
   });
 

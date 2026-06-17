@@ -123,6 +123,7 @@ export interface CopilotExecutableProbeSecurityReviewResult {
 }
 
 type JsonObject = Record<string, unknown>;
+type DescriptorRecord = Record<PropertyKey, PropertyDescriptor | undefined>;
 type IssueBucket = 'rejected' | 'deferred' | 'blocked';
 
 interface BucketedIssue extends CopilotExecutableProbeSecurityReviewIssue {
@@ -217,11 +218,16 @@ const DESCRIPTOR_SAFE_UNSAFE_NORMALIZED_KEYS: ReadonlySet<string> = new Set(
   [...ALL_SCHEMA_KEYS].filter((key) => key !== 'rawLocalOutputPolicy').map((key) => normalizeCopilotMetadataKey(key))
 );
 const MAX_PROPOSAL_SCAN_DEPTH = 64;
+const MAX_PROPOSAL_ARRAY_LENGTH = 256;
 
 function isPlainObject(value: unknown): value is JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+  try {
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+  } catch {
+    return false;
+  }
 }
 
 function childPath(path: string, key: string): string {
@@ -264,15 +270,29 @@ function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: t
   return { known: true, value: descriptor.value };
 }
 
+function descriptorFromMap(descriptors: DescriptorRecord, key: PropertyKey): PropertyDescriptor | undefined {
+  return descriptors[key];
+}
+
 function descriptorHasTrueValue(value: object, key: string): boolean {
-  const child = descriptorValue(Object.getOwnPropertyDescriptor(value, key));
-  return child.known && child.value === true;
+  try {
+    const child = descriptorValue(Object.getOwnPropertyDescriptor(value, key));
+    return child.known && child.value === true;
+  } catch {
+    return false;
+  }
 }
 
 function descriptorSafeChildPath(path: string, key: string, parentIsArray: boolean): string {
-  if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
+  if (parentIsArray && isCanonicalArrayIndexKey(key)) return `${path}[${key}]`;
   if (isCopilotTokenShapePresent(key) || isCopilotRealLabelPresent(key)) return `${path}.<redacted-key>`;
   return childPath(path, key);
+}
+
+function isCanonicalArrayIndexKey(key: string): boolean {
+  if (!/^(0|[1-9]\d*)$/.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index <= 4294967294 && String(index) === key;
 }
 
 function collectShapeIssues(
@@ -281,6 +301,9 @@ function collectShapeIssues(
   seen: WeakSet<object> = new WeakSet(),
   depth = 0
 ): BucketedIssue[] {
+  if (typeof value === 'function') {
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.')];
+  }
   if (value === null || typeof value !== 'object') return [];
   if (depth > MAX_PROPOSAL_SCAN_DEPTH) {
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata exceeds the maximum supported depth.')];
@@ -288,24 +311,57 @@ function collectShapeIssues(
   if (seen.has(value)) {
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must be acyclic.')];
   }
-  seen.add(value);
 
+  const isArray = Array.isArray(value);
+  if (!isArray && !isPlainObject(value)) {
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.')];
+  }
+
+  seen.add(value);
   const issues: BucketedIssue[] = [];
-  const descriptors = Object.getOwnPropertyDescriptors(value);
+  let descriptors: DescriptorRecord;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value) as DescriptorRecord;
+  } catch {
+    seen.delete(value);
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata descriptors could not be inspected safely.')];
+  }
+  if (isArray) {
+    const lengthDescriptor = descriptors.length;
+    const length = typeof lengthDescriptor?.value === 'number' ? lengthDescriptor.value : undefined;
+    if (length === undefined) {
+      issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal arrays must expose a numeric length.'));
+    } else if (!Number.isSafeInteger(length) || length < 0 || length > MAX_PROPOSAL_ARRAY_LENGTH) {
+      issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal arrays must stay within the supported size.'));
+    } else {
+      for (let index = 0; index < length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(descriptors, String(index))) {
+          issues.push(issue('blocked', 'invalid-proposal', `${path}[${index}]`, 'Proposal arrays must be dense JSON-like arrays.'));
+        }
+      }
+    }
+  }
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== 'string') {
       issues.push(issue('blocked', 'invalid-proposal', `${path}.<unknown-key>`, 'Proposal metadata must use string keys only.'));
       continue;
     }
-    if (Array.isArray(value) && key === 'length') continue;
-    const descriptor = descriptors[key];
-    if (!descriptor || descriptor.get || descriptor.set) {
-      issues.push(issue('blocked', 'invalid-proposal', childPath(path, key), 'Proposal metadata must not contain accessors.'));
+    if (isArray && key === 'length') continue;
+    if (isArray && !isCanonicalArrayIndexKey(key)) {
+      issues.push(issue('blocked', 'invalid-proposal', descriptorSafeChildPath(path, key, isArray), 'Proposal arrays must not contain non-index fields.'));
       continue;
     }
-    const child = descriptor.value;
-    const nextPath = Array.isArray(value) && /^\d+$/.test(key) ? `${path}[${key}]` : childPath(path, key);
-    issues.push(...collectShapeIssues(child, nextPath, seen, depth + 1));
+    const descriptor = descriptorFromMap(descriptors, key);
+    const nextPath = descriptorSafeChildPath(path, key, isArray);
+    if (!descriptor || descriptor.get || descriptor.set) {
+      issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain accessors.'));
+      continue;
+    }
+    if (!descriptor.enumerable) {
+      issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain hidden non-enumerable fields.'));
+      continue;
+    }
+    issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1));
   }
 
   seen.delete(value);
@@ -362,11 +418,17 @@ function collectDescriptorSafeRejectedIssues(
   if (!isArray && !isPlainObject(value)) return issues;
 
   seen.add(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
+  let descriptors: DescriptorRecord;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value) as DescriptorRecord;
+  } catch {
+    seen.delete(value);
+    return issues;
+  }
   for (const key of Reflect.ownKeys(descriptors)) {
     if (isArray && key === 'length') continue;
 
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const descriptor = descriptorFromMap(descriptors, key);
     const child = descriptorValue(descriptor);
     const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<redacted-key>`;
     const present = descriptorHasPresentValue(descriptor);
