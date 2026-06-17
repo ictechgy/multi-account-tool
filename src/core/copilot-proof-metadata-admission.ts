@@ -431,7 +431,7 @@ function collectDescriptorSafeRejectedIssues(
   for (const key of Reflect.ownKeys(descriptors)) {
     if (isArray && key === 'length') continue;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, isArray) : `${path}.<unknown-key>`;
+    const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, isArray) : `${path}.<redacted-key>`;
     const child = descriptorValue(descriptor);
 
     if (typeof key === 'string' && isCopilotTokenShapePresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));

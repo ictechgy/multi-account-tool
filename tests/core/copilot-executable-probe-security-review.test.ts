@@ -317,7 +317,32 @@ describe('Copilot executable probe security review gate', () => {
     expect(result.status).toBe('rejected');
     expect(issueCodes(result)).toContain('invalid-proposal');
     expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsafe-evidence', path: '$.<redacted-key>' })]));
     expectNoEcho(serialized, token, 'real.user@example.com');
+  });
+
+  it('preserves rejected root boundary flags even when proposal shape is invalid', () => {
+    const cyclic = {
+      ...baseProposal(),
+      runnableProbeAdded: true,
+      credentialStoreAccessedByMat: true,
+      productSupportClaimed: true,
+      platformProofClaimedComplete: true
+    } as Record<string, unknown>;
+    cyclic.self = cyclic;
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(cyclic);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toEqual(
+      expect.arrayContaining([
+        'invalid-proposal',
+        'executable-probe-present',
+        'credential-store-accessed-by-mat',
+        'product-support-claim',
+        'platform-proof-claim'
+      ])
+    );
   });
 
   it('rejects accessor-backed claims without invoking the accessor', () => {

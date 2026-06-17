@@ -264,6 +264,11 @@ function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: t
   return { known: true, value: descriptor.value };
 }
 
+function descriptorHasTrueValue(value: object, key: string): boolean {
+  const child = descriptorValue(Object.getOwnPropertyDescriptor(value, key));
+  return child.known && child.value === true;
+}
+
 function descriptorSafeChildPath(path: string, key: string, parentIsArray: boolean): string {
   if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
   if (isCopilotTokenShapePresent(key) || isCopilotRealLabelPresent(key)) return `${path}.<redacted-key>`;
@@ -363,7 +368,7 @@ function collectDescriptorSafeRejectedIssues(
 
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     const child = descriptorValue(descriptor);
-    const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<unknown-key>`;
+    const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<redacted-key>`;
     const present = descriptorHasPresentValue(descriptor);
 
     if (typeof key === 'string' && isCopilotTokenShapePresent(key)) issues.push(unsafeDescriptorIssue(childPathForIssue));
@@ -403,6 +408,25 @@ function collectDescriptorSafeRejectedIssues(
     }
   }
   seen.delete(value);
+  return issues;
+}
+
+function collectDescriptorSafeRootBoundaryIssues(proposal: JsonObject): BucketedIssue[] {
+  const issues: BucketedIssue[] = [];
+  if (descriptorHasTrueValue(proposal, 'runnableProbeAdded')) {
+    issues.push(issue('rejected', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probes are not admissible in this gate.'));
+  }
+  if (descriptorHasTrueValue(proposal, 'credentialStoreAccessedByMat')) {
+    issues.push(
+      issue('rejected', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Mat must not access credential stores in this gate.')
+    );
+  }
+  if (descriptorHasTrueValue(proposal, 'productSupportClaimed')) {
+    issues.push(issue('rejected', 'product-support-claim', '$.productSupportClaimed', 'Product support claims are not admissible.'));
+  }
+  if (descriptorHasTrueValue(proposal, 'platformProofClaimedComplete')) {
+    issues.push(issue('rejected', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform proof completion claims are not admissible.'));
+  }
   return issues;
 }
 
@@ -576,6 +600,7 @@ export function evaluateCopilotExecutableProbeSecurityReview(
     issues.push(issue('blocked', 'invalid-proposal', '$', 'Proposal must be a value-free object.'));
   } else if (shapeIssues.length > 0) {
     issues.push(...collectDescriptorSafeRejectedIssues(proposal));
+    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal));
   } else {
     issues.push(...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal));
     issues.push(...collectUnknownKeyIssues(proposal, ROOT_KEYS, '$'));

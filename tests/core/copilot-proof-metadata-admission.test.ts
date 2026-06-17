@@ -327,6 +327,7 @@ describe('Copilot proof metadata admission gate', () => {
     expect(result.admission).toBe('rejected');
     expect(result.issues.map((issue) => issue.code)).toContain('validator-failed');
     expect(result.issues.map((issue) => issue.code)).toContain('unsafe-evidence');
+    expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsafe-evidence', path: '$.<redacted-key>' })]));
     expectNoEcho(serialized, token, 'real.user@example.com');
   });
 
