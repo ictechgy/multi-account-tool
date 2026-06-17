@@ -351,6 +351,28 @@ describe('Copilot proof metadata admission gate', () => {
     );
   });
 
+  it('rejects unsafe non-index array fields that downstream array iterators would skip', () => {
+    const token = ['gh', 'p', '_', 'I'.repeat(24)].join('');
+    const platforms = [...baseReport().platforms] as unknown[];
+    Object.defineProperty(platforms, '01', {
+      enumerable: true,
+      value: { diagnostic: token, productSupport: 'enabled' }
+    });
+    const report = { ...baseReport(), platforms };
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.ok).toBe(false);
+    expect(result.admission).toBe('rejected');
+    expect(result.validation.platforms).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['validator-failed', 'unsafe-evidence', 'product-support-claim'])
+    );
+    expect(serialized).toContain('$.platforms.<redacted-key>');
+    expectNoEcho(serialized, token, 'enabled');
+  });
+
   it('blocks checklist accessors before checklist validation can dereference them', () => {
     const checklist = { ...baseChecklist() } as Record<string, unknown>;
     Object.defineProperty(checklist, 'secondReviewerSignedOff', {
@@ -424,6 +446,62 @@ describe('Copilot proof metadata admission gate', () => {
         })
       ])
     );
+  });
+
+  it('keeps descriptor-safe rejected scans from throwing on hostile object values', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('prototype trap must not escape admission');
+        }
+      }
+    );
+    const checklist = { ...baseChecklist(), rawOutput: hostile } as Record<string, unknown>;
+    Object.defineProperty(checklist, 'secondReviewerSignedOff', {
+      enumerable: true,
+      get() {
+        throw new Error('getter must not run');
+      }
+    });
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.targetPlatforms).toEqual([]);
+    expect(result?.issues.map((issue) => issue.code)).toContain('invalid-checklist');
+  });
+
+  it('keeps Windows binding proof container checks from throwing on hostile descriptor values', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('prototype trap must not escape admission');
+        }
+      }
+    );
+    const report = windowsPassReport() as unknown as Record<string, unknown>;
+    const platform = (report.platforms as Array<Record<string, unknown>>)[0];
+    const bindingProof = platform.windowsCredentialBindingProof as Record<string, unknown>;
+    bindingProof.targetName = hostile;
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(report, {
+        ...baseChecklist(),
+        targetPlatforms: ['windows-credential-manager']
+      });
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.validation.platforms).toEqual([]);
+    expect(result?.issues.map((issue) => issue.code)).toContain('validator-failed');
   });
 
   it('blocks excessive report depth before recursive scans run', () => {

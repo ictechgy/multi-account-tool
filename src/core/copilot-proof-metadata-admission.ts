@@ -246,8 +246,14 @@ function childPathForKey(path: string, key: string): string {
 }
 
 function shapePathForKey(path: string, key: string, parentIsArray: boolean): string {
-  if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
+  if (parentIsArray && isCanonicalArrayIndexKey(key)) return `${path}[${key}]`;
   return childPathForKey(path, key);
+}
+
+function isCanonicalArrayIndexKey(key: string): boolean {
+  if (!/^(0|[1-9]\d*)$/.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index <= 4294967294 && String(index) === key;
 }
 
 function admissionIssue(
@@ -332,7 +338,7 @@ function collectShapeScanIssues(
       continue;
     }
     if (isArray && key === 'length') continue;
-    if (isArray && !/^\d+$/.test(key)) {
+    if (isArray && !isCanonicalArrayIndexKey(key)) {
       issues.push({ path: childPathForKey(path, key), message: 'Metadata arrays must not contain non-index fields.' });
       continue;
     }
@@ -421,11 +427,15 @@ function isForbiddenEvidenceKey(key: string): boolean {
 }
 
 function isValueFreeWindowsBindingProofContainer(path: string, key: string, child: unknown): boolean {
-  return (
-    /^\$\.platforms\[\d+\]\.windowsCredentialBindingProof$/.test(path) &&
-    (key === 'targetName' || key === 'accountUserNameGuard') &&
-    isPlainObject(child)
-  );
+  try {
+    return (
+      /^\$\.platforms\[\d+\]\.windowsCredentialBindingProof$/.test(path) &&
+      (key === 'targetName' || key === 'accountUserNameGuard') &&
+      isPlainObject(child)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function unsafeAdmissionIssue(source: CopilotProofMetadataAdmissionIssueSource, path: string): BucketedIssue {
@@ -441,7 +451,11 @@ function unsafeAdmissionIssue(source: CopilotProofMetadataAdmissionIssueSource, 
 function descriptorHasNonEmptyEvidenceValue(descriptor: PropertyDescriptor | undefined): boolean {
   if (!descriptor) return false;
   if (descriptor.get || descriptor.set) return true;
-  return isNonEmptyEvidenceValue(descriptor.value);
+  try {
+    return isNonEmptyEvidenceValue(descriptor.value);
+  } catch {
+    return false;
+  }
 }
 
 function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: true; value: unknown } | { known: false } {
@@ -450,8 +464,7 @@ function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: t
 }
 
 function descriptorSafePathForKey(path: string, key: string, parentIsArray: boolean): string {
-  if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
-  return childPathForKey(path, key);
+  return shapePathForKey(path, key, parentIsArray);
 }
 
 function collectDescriptorSafeRejectedIssues(
