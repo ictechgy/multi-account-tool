@@ -10,6 +10,10 @@ import {
   collectCopilotCredentialProofUnsafeEvidence,
   type CopilotCredentialProofPlatform
 } from './copilot-credential-proof.js';
+import {
+  isCopilotPlatformProofClaimKey,
+  isCopilotProductSupportClaimKey
+} from './copilot-metadata-boundary-taxonomy.js';
 
 export type CopilotExecutableProbeSecurityReviewStatus =
   | 'eligible-for-implementation-review'
@@ -193,21 +197,6 @@ const REVIEW_POLICY_KEYS = new Set([
   'humanRedactionRequired'
 ]);
 
-const PRODUCT_CLAIM_KEYS = new Set([
-  'productsupport',
-  'supportstatus',
-  'builtin',
-  'copilotbuiltin',
-  'runtimewiring',
-  'productwiring',
-  'platformsupport'
-]);
-const PLATFORM_PROOF_CLAIM_KEYS = new Set([
-  'prooflevel',
-  'platformproof',
-  'platformproofcomplete',
-  'proofcomplete'
-]);
 const SAFE_UNSAFE_SCANNER_POLICY_PATHS = new Set([
   '$.outputPolicy.rawLocalOutputPolicy',
   '$.outputPolicy.forbidHashesAndFingerprints'
@@ -226,10 +215,6 @@ function isPlainObject(value: unknown): value is JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
-}
-
-function normalizeKey(key: string): string {
-  return key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
 }
 
 function childPath(path: string, key: string): string {
@@ -324,13 +309,12 @@ function collectClaimIssues(value: unknown, path = '$', seen: WeakSet<object> = 
 
   const issues: BucketedIssue[] = [];
   for (const [key, child] of Object.entries(value)) {
-    const normalized = normalizeKey(key);
     const candidatePath = childPath(path, key);
     const present = child !== false && child !== null && child !== undefined && !(typeof child === 'string' && child.trim() === '');
-    if (present && PRODUCT_CLAIM_KEYS.has(normalized)) {
+    if (present && candidatePath !== '$.productSupportClaimed' && isCopilotProductSupportClaimKey(key)) {
       issues.push(issue('rejected', 'product-support-claim', candidatePath, 'Product support claims are not admissible.'));
     }
-    if (present && PLATFORM_PROOF_CLAIM_KEYS.has(normalized)) {
+    if (present && candidatePath !== '$.platformProofClaimedComplete' && isCopilotPlatformProofClaimKey(key)) {
       issues.push(issue('rejected', 'platform-proof-claim', candidatePath, 'Completed platform-proof claims are not admissible.'));
     }
     issues.push(...collectClaimIssues(child, candidatePath, seen));

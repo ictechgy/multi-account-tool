@@ -15,6 +15,11 @@ import {
   type CopilotCredentialProofLevel,
   type CopilotCredentialProofValidationResult
 } from './copilot-credential-proof.js';
+import {
+  isCopilotForbiddenEvidenceKey,
+  isCopilotProductOrProofClaimKey,
+  normalizeCopilotMetadataKey
+} from './copilot-metadata-boundary-taxonomy.js';
 
 export type CopilotProofReviewCollectionMode =
   | 'human-reviewed-manual'
@@ -147,56 +152,6 @@ const REPORT_SELECTOR_KEYS = new Set(['status', 'fieldName', 'valuePolicy']);
 const SAFE_REPORT_METADATA_NORMALIZED_KEYS = new Set(
   [...REPORT_ROOT_KEYS, ...REPORT_PLATFORM_KEYS, ...REPORT_SELECTOR_KEYS].map((key) => normalizeKey(key))
 );
-const FORBIDDEN_EVIDENCE_NORMALIZED_KEYS = new Set([
-  'securityoutput',
-  'secrettooloutput',
-  'rawoutput',
-  'rawcredentialstoreoutput',
-  'rawtargetname',
-  'credentialblob',
-  'target',
-  'targetname',
-  'token',
-  'accesstoken',
-  'refreshtoken',
-  'oauthtoken',
-  'githubtoken',
-  'tokenhash',
-  'secret',
-  'password',
-  'hash',
-  'fingerprint',
-  'digest',
-  'sha256',
-  'sha256digest',
-  'login',
-  'displaylogin',
-  'account',
-  'accountusernameguard',
-  'organization',
-  'org',
-  'accountid',
-  'stableaccountid',
-  'userid',
-  'username',
-  'accountlabel',
-  'label'
-]);
-
-const PRODUCT_SUPPORT_CLAIM_KEYS = new Set([
-  'productsupport',
-  'prooflevel',
-  'platformproofcomplete',
-  'platformproofclaimedcomplete',
-  'supportstatus',
-  'builtin',
-  'sourcetype',
-  'runtimewiring',
-  'productsupportclaimed',
-  'copilotbuiltin',
-  'productwiring',
-  'platformsupport'
-]);
 
 const TOKEN_SHAPE_PATTERNS = [
   new RegExp('\\bgh[pousr]' + '_[A-Za-z0-9_]{10,}\\b'),
@@ -215,7 +170,7 @@ function isPlainObject(value: unknown): value is JsonObject {
 }
 
 function normalizeKey(key: string): string {
-  return key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  return normalizeCopilotMetadataKey(key);
 }
 
 function isNonEmptyEvidenceValue(value: unknown): boolean {
@@ -412,20 +367,7 @@ function collectUnsafeAdmissionIssues(
 }
 
 function isForbiddenEvidenceKey(key: string): boolean {
-  const normalized = normalizeKey(key);
-  if (SAFE_REPORT_METADATA_NORMALIZED_KEYS.has(normalized)) return false;
-  return (
-    FORBIDDEN_EVIDENCE_NORMALIZED_KEYS.has(normalized) ||
-    normalized.includes('token') ||
-    normalized.includes('secret') ||
-    normalized.includes('password') ||
-    normalized.includes('hash') ||
-    normalized.includes('fingerprint') ||
-    normalized.includes('digest') ||
-    normalized.includes('sha256') ||
-    (normalized.includes('raw') && normalized.includes('output')) ||
-    (normalized.includes('credential') && normalized.includes('blob'))
-  );
+  return isCopilotForbiddenEvidenceKey(key, SAFE_REPORT_METADATA_NORMALIZED_KEYS);
 }
 
 function isValueFreeWindowsBindingProofContainer(path: string, key: string, child: unknown): boolean {
@@ -522,7 +464,7 @@ function collectDescriptorSafeRejectedIssues(
       issues.push(unsafeAdmissionIssue(source, childPath));
     }
 
-    if (PRODUCT_SUPPORT_CLAIM_KEYS.has(normalizeKey(key)) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
+    if (isCopilotProductOrProofClaimKey(key) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
       issues.push(
         admissionIssue(
           'rejected',
@@ -560,7 +502,7 @@ function collectProductClaimIssues(
   const issues: BucketedIssue[] = [];
   for (const [key, child] of Object.entries(value)) {
     const childPath = childPathForKey(path, key);
-    if (PRODUCT_SUPPORT_CLAIM_KEYS.has(normalizeKey(key)) && isNonEmptyEvidenceValue(child)) {
+    if (isCopilotProductOrProofClaimKey(key) && isNonEmptyEvidenceValue(child)) {
       issues.push(
         admissionIssue(
           'rejected',

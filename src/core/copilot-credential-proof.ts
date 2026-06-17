@@ -6,6 +6,11 @@
  * process, shell, or credential-store access.
  */
 
+import {
+  isCopilotForbiddenEvidenceKey,
+  normalizeCopilotMetadataKey
+} from './copilot-metadata-boundary-taxonomy.js';
+
 export type CopilotCredentialProofEvidenceKind = 'upstream-documentation' | 'human-reviewed-local-probe';
 export type CopilotCredentialProofPlatform =
   | 'darwin-keychain'
@@ -197,41 +202,6 @@ const WINDOWS_BINDING_PROOF_PART_KEYS = new Set(['status', 'valuePolicy']);
 const SAFE_METADATA_NORMALIZED_KEYS = new Set(
   [...ROOT_KEYS, ...PLATFORM_REPORT_KEYS, ...SELECTOR_KEYS].map((key) => normalizeKey(key))
 );
-const FORBIDDEN_NORMALIZED_KEYS = new Set([
-  'securityoutput',
-  'secrettooloutput',
-  'rawoutput',
-  'rawcredentialstoreoutput',
-  'rawtargetname',
-  'credentialblob',
-  'target',
-  'targetname',
-  'token',
-  'accesstoken',
-  'refreshtoken',
-  'oauthtoken',
-  'githubtoken',
-  'tokenhash',
-  'secret',
-  'password',
-  'hash',
-  'fingerprint',
-  'digest',
-  'sha256',
-  'sha256digest',
-  'login',
-  'displaylogin',
-  'account',
-  'accountusernameguard',
-  'organization',
-  'org',
-  'accountid',
-  'stableaccountid',
-  'userid',
-  'username',
-  'accountlabel',
-  'label'
-]);
 
 const TOKEN_SHAPE_PATTERNS = [
   new RegExp('\\bgh[pousr]' + '_[A-Za-z0-9_]{10,}\\b'),
@@ -254,7 +224,7 @@ function isPlainObject(value: unknown): value is JsonObject {
 }
 
 function normalizeKey(key: string): string {
-  return key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  return normalizeCopilotMetadataKey(key);
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -272,20 +242,7 @@ function isNonEmptyEvidenceValue(value: unknown): boolean {
 }
 
 function isForbiddenEvidenceKey(key: string): boolean {
-  const normalized = normalizeKey(key);
-  if (SAFE_METADATA_NORMALIZED_KEYS.has(normalized)) return false;
-  return (
-    FORBIDDEN_NORMALIZED_KEYS.has(normalized) ||
-    normalized.includes('token') ||
-    normalized.includes('secret') ||
-    normalized.includes('password') ||
-    normalized.includes('hash') ||
-    normalized.includes('fingerprint') ||
-    normalized.includes('digest') ||
-    normalized.includes('sha256') ||
-    (normalized.includes('raw') && normalized.includes('output')) ||
-    (normalized.includes('credential') && normalized.includes('blob'))
-  );
+  return isCopilotForbiddenEvidenceKey(key, SAFE_METADATA_NORMALIZED_KEYS);
 }
 
 function isValueFreeWindowsBindingProofContainer(path: string, key: string, child: unknown): boolean {
