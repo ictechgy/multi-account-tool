@@ -500,6 +500,7 @@ describe('Copilot executable probe security review gate', () => {
       value: token
     });
     let ownKeysCalls = 0;
+    let getPrototypeOfCalls = 0;
     const proxy = new Proxy(target, {
       ownKeys(inner) {
         ownKeysCalls += 1;
@@ -512,6 +513,10 @@ describe('Copilot executable probe security review gate', () => {
         return Reflect.getOwnPropertyDescriptor(inner, key);
       },
       getPrototypeOf(inner) {
+        getPrototypeOfCalls += 1;
+        if (getPrototypeOfCalls > 1) {
+          throw new Error('plain-object checks must use the shape preflight cache');
+        }
         return Reflect.getPrototypeOf(inner);
       }
     });
@@ -520,6 +525,7 @@ describe('Copilot executable probe security review gate', () => {
     const serialized = JSON.stringify(result);
 
     expect(ownKeysCalls).toBe(1);
+    expect(getPrototypeOfCalls).toBe(1);
     expect(result.status).toBe('rejected');
     expect(issueCodes(result)).toContain('invalid-proposal');
     expect(issueCodes(result)).toContain('unsafe-evidence');

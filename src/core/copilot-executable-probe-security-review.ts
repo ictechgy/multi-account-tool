@@ -296,7 +296,8 @@ function collectShapeIssues(
   path = '$',
   seen: WeakSet<object> = new WeakSet(),
   depth = 0,
-  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap()
+  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap(),
+  plainObjectsByObject: WeakMap<object, boolean> = new WeakMap()
 ): BucketedIssue[] {
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return [];
   if (depth > MAX_PROPOSAL_SCAN_DEPTH) {
@@ -319,12 +320,15 @@ function collectShapeIssues(
   descriptorsByObject.set(objectValue, descriptors);
 
   if (typeof value === 'function') {
+    plainObjectsByObject.set(objectValue, false);
     seen.delete(objectValue);
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.')];
   }
 
   const isArray = Array.isArray(value);
-  if (!isArray && !isPlainObject(value)) {
+  const isPlain = !isArray && isPlainObject(value);
+  plainObjectsByObject.set(objectValue, isPlain);
+  if (!isArray && !isPlain) {
     seen.delete(objectValue);
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.')];
   }
@@ -363,7 +367,7 @@ function collectShapeIssues(
       issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain hidden non-enumerable fields.'));
       continue;
     }
-    issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1, descriptorsByObject));
+    issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1, descriptorsByObject, plainObjectsByObject));
   }
 
   seen.delete(objectValue);
@@ -661,12 +665,14 @@ export function evaluateCopilotExecutableProbeSecurityReview(
   proposal: unknown
 ): CopilotExecutableProbeSecurityReviewResult {
   const descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap();
-  const shapeIssues = collectShapeIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject);
+  const plainObjectsByObject: WeakMap<object, boolean> = new WeakMap();
+  const shapeIssues = collectShapeIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject, plainObjectsByObject);
   const issues: BucketedIssue[] = [...shapeIssues];
   let targetPlatforms: CopilotExecutableProbePlatform[] = [];
   const descriptorInspectableRoot = proposal !== null && (typeof proposal === 'object' || typeof proposal === 'function');
+  const rootIsPlainObject = descriptorInspectableRoot && plainObjectsByObject.get(proposal as object) === true;
 
-  if (!isPlainObject(proposal)) {
+  if (!rootIsPlainObject) {
     issues.push(issue('blocked', 'invalid-proposal', '$', 'Proposal must be a value-free object.'));
     if (shapeIssues.length > 0 && descriptorInspectableRoot) {
       issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
@@ -674,64 +680,68 @@ export function evaluateCopilotExecutableProbeSecurityReview(
     }
   } else if (shapeIssues.length > 0) {
     issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
-    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal, descriptorsByObject));
+    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal as JsonObject, descriptorsByObject));
   } else {
+    const proposalObject = proposal as JsonObject;
     issues.push(...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal));
-    issues.push(...collectUnknownKeyIssues(proposal, ROOT_KEYS, '$'));
-    if (proposal.schemaVersion !== 1) {
+    issues.push(...collectUnknownKeyIssues(proposalObject, ROOT_KEYS, '$'));
+    if (proposalObject.schemaVersion !== 1) {
       issues.push(issue('blocked', 'invalid-proposal', '$.schemaVersion', 'Proposal schemaVersion must be 1.'));
     }
-    if (proposal.subject !== SUBJECT) {
+    if (proposalObject.subject !== SUBJECT) {
       issues.push(issue('blocked', 'invalid-proposal', '$.subject', 'Proposal subject must be github-copilot-cli.'));
     }
-    if (proposal.reviewKind !== REVIEW_KIND) {
+    if (proposalObject.reviewKind !== REVIEW_KIND) {
       issues.push(issue('blocked', 'invalid-proposal', '$.reviewKind', 'Proposal reviewKind is not supported.'));
     }
 
-    const platformResult = targetPlatformIssues(proposal.targetPlatforms);
+    const platformResult = targetPlatformIssues(proposalObject.targetPlatforms);
     targetPlatforms = platformResult.platforms;
     issues.push(...platformResult.issues);
 
-    if (typeof proposal.collectionIntent !== 'string' || !COLLECTION_INTENTS.has(proposal.collectionIntent as CopilotExecutableProbeCollectionIntent)) {
+    if (
+      typeof proposalObject.collectionIntent !== 'string' ||
+      !COLLECTION_INTENTS.has(proposalObject.collectionIntent as CopilotExecutableProbeCollectionIntent)
+    ) {
       issues.push(issue('deferred', 'unsupported-collection-intent', '$.collectionIntent', 'Unsupported collection intent requires separate review.'));
-    } else if (proposal.collectionIntent !== 'future-executable-local-probe') {
+    } else if (proposalObject.collectionIntent !== 'future-executable-local-probe') {
       issues.push(issue('deferred', 'unsupported-collection-intent', '$.collectionIntent', 'Future collection modes are deferred.'));
     }
 
-    if (proposal.implementationInThisChange === true) {
+    if (proposalObject.implementationInThisChange === true) {
       issues.push(issue('deferred', 'implementation-requested', '$.implementationInThisChange', 'Implementation must be a separate follow-up.'));
-    } else if (proposal.implementationInThisChange !== false) {
+    } else if (proposalObject.implementationInThisChange !== false) {
       issues.push(issue('blocked', 'implementation-requested', '$.implementationInThisChange', 'Implementation boundary must be explicit.'));
     }
-    if (proposal.runnableProbeAdded === true) {
+    if (proposalObject.runnableProbeAdded === true) {
       issues.push(issue('rejected', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probes are not admissible in this gate.'));
-    } else if (proposal.runnableProbeAdded !== false) {
+    } else if (proposalObject.runnableProbeAdded !== false) {
       issues.push(issue('blocked', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probe boundary must be explicit.'));
     }
-    if (proposal.credentialStoreAccessedByMat === true) {
+    if (proposalObject.credentialStoreAccessedByMat === true) {
       issues.push(issue('rejected', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Mat must not access credential stores in this gate.'));
-    } else if (proposal.credentialStoreAccessedByMat !== false) {
+    } else if (proposalObject.credentialStoreAccessedByMat !== false) {
       issues.push(issue('blocked', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Credential-store access boundary must be explicit.'));
     }
-    if (proposal.productSupportClaimed === true) {
+    if (proposalObject.productSupportClaimed === true) {
       issues.push(issue('rejected', 'product-support-claim', '$.productSupportClaimed', 'Product support claims are not admissible.'));
-    } else if (proposal.productSupportClaimed !== false) {
+    } else if (proposalObject.productSupportClaimed !== false) {
       issues.push(issue('blocked', 'product-support-claim', '$.productSupportClaimed', 'Product support boundary must be explicit.'));
     }
-    if (proposal.platformProofClaimedComplete === true) {
+    if (proposalObject.platformProofClaimedComplete === true) {
       issues.push(issue('rejected', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform proof completion claims are not admissible.'));
-    } else if (proposal.platformProofClaimedComplete !== false) {
+    } else if (proposalObject.platformProofClaimedComplete !== false) {
       issues.push(issue('blocked', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform-proof boundary must be explicit.'));
     }
 
-    issues.push(...booleanMustBe(proposal.separateAuthorizationRequired, true, '$.separateAuthorizationRequired', 'missing-review-precondition'));
-    issues.push(...booleanMustBe(proposal.localUserOptInRequired, true, '$.localUserOptInRequired', 'missing-review-precondition'));
-    issues.push(...booleanMustBe(proposal.secondReviewerRequired, true, '$.secondReviewerRequired', 'missing-review-precondition'));
-    issues.push(...commandPolicyIssues(proposal.commandPolicy));
-    issues.push(...environmentPolicyIssues(proposal.environmentPolicy));
-    issues.push(...outputPolicyIssues(proposal.outputPolicy));
-    issues.push(...cleanupPolicyIssues(proposal.cleanupPolicy));
-    issues.push(...reviewPolicyIssues(proposal.reviewPolicy));
+    issues.push(...booleanMustBe(proposalObject.separateAuthorizationRequired, true, '$.separateAuthorizationRequired', 'missing-review-precondition'));
+    issues.push(...booleanMustBe(proposalObject.localUserOptInRequired, true, '$.localUserOptInRequired', 'missing-review-precondition'));
+    issues.push(...booleanMustBe(proposalObject.secondReviewerRequired, true, '$.secondReviewerRequired', 'missing-review-precondition'));
+    issues.push(...commandPolicyIssues(proposalObject.commandPolicy));
+    issues.push(...environmentPolicyIssues(proposalObject.environmentPolicy));
+    issues.push(...outputPolicyIssues(proposalObject.outputPolicy));
+    issues.push(...cleanupPolicyIssues(proposalObject.cleanupPolicy));
+    issues.push(...reviewPolicyIssues(proposalObject.reviewPolicy));
   }
 
   const status = statusFor(issues);
