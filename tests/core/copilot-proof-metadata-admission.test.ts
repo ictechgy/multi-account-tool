@@ -276,6 +276,81 @@ describe('Copilot proof metadata admission gate', () => {
     expect(result?.issues.map((issue) => issue.code)).toContain('validator-failed');
   });
 
+  it('rejects safely inspectable unsafe report evidence even when report shape is cyclic', () => {
+    const token = ['gh', 'p', '_', 'G'.repeat(24)].join('');
+    const report = { ...baseReport(), diagnostic: token, productSupport: 'enabled' } as unknown as Record<
+      string,
+      unknown
+    >;
+    report.self = report;
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.ok).toBe(false);
+    expect(result.admission).toBe('rejected');
+    expect(result.validation.platforms).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['validator-failed', 'unsafe-evidence', 'product-support-claim'])
+    );
+    expect(serialized).toContain('$.diagnostic');
+    expect(serialized).toContain('$.productSupport');
+    expectNoEcho(serialized, token, 'enabled');
+  });
+
+  it('blocks report accessors before report validation can dereference them', () => {
+    const report = { ...baseReport() } as Record<string, unknown>;
+    Object.defineProperty(report, 'diagnostic', {
+      enumerable: true,
+      get() {
+        throw new Error('getter must not run');
+      }
+    });
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.validation.ok).toBe(false);
+    expect(result?.validation.platforms).toEqual([]);
+    expect(result?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'validator-failed',
+          source: 'validator',
+          path: '$.diagnostic'
+        })
+      ])
+    );
+  });
+
+  it('blocks sparse report platform arrays before validators can iterate array holes', () => {
+    const sparsePlatforms: unknown[] = [];
+    sparsePlatforms[1] = baseReport().platforms[0];
+    const report = { ...baseReport(), platforms: sparsePlatforms };
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.validation.platforms).toEqual([]);
+    expect(result?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'validator-failed',
+          source: 'validator',
+          path: '$.platforms[0]'
+        })
+      ])
+    );
+  });
+
   it('blocks checklist accessors before checklist validation can dereference them', () => {
     const checklist = { ...baseChecklist() } as Record<string, unknown>;
     Object.defineProperty(checklist, 'secondReviewerSignedOff', {
@@ -298,6 +373,54 @@ describe('Copilot proof metadata admission gate', () => {
         expect.objectContaining({
           code: 'invalid-checklist',
           source: 'checklist'
+        })
+      ])
+    );
+  });
+
+  it('rejects safely inspectable unsafe checklist evidence even when checklist shape has accessors', () => {
+    const token = ['sk', '-', 'H'.repeat(16)].join('');
+    const checklist = { ...baseChecklist(), diagnostic: token, productSupportClaimed: true } as Record<string, unknown>;
+    Object.defineProperty(checklist, 'secondReviewerSignedOff', {
+      enumerable: true,
+      get() {
+        throw new Error('getter must not run');
+      }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    const serialized = JSON.stringify(result);
+
+    expect(result.ok).toBe(false);
+    expect(result.admission).toBe('rejected');
+    expect(result.targetPlatforms).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['invalid-checklist', 'unsafe-evidence', 'product-support-claim'])
+    );
+    expect(serialized).toContain('$.diagnostic');
+    expect(serialized).toContain('$.productSupportClaimed');
+    expectNoEcho(serialized, token);
+  });
+
+  it('blocks sparse checklist target platform arrays before checklist validation can skip holes', () => {
+    const sparseTargets: unknown[] = [];
+    sparseTargets[1] = 'darwin-keychain';
+    const checklist = { ...baseChecklist(), targetPlatforms: sparseTargets };
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.targetPlatforms).toEqual([]);
+    expect(result?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'invalid-checklist',
+          source: 'checklist',
+          path: '$.targetPlatforms[0]'
         })
       ])
     );
