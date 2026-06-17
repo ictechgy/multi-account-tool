@@ -281,6 +281,86 @@ describe('Copilot executable probe security review gate', () => {
     expect(JSON.stringify(result)).toContain('Proposal metadata must be acyclic.');
   });
 
+  it('rejects safely inspectable unsafe evidence and claims even when proposal shape is invalid', () => {
+    const token = ['gh', 'p', '_', 'E'.repeat(24)].join('');
+    const cyclic = {
+      ...baseProposal(),
+      diagnostic: token,
+      productSupport: true,
+      reviewPolicy: { ...baseProposal().reviewPolicy, platformProof: true }
+    } as Record<string, unknown>;
+    cyclic.self = cyclic;
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(cyclic);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expect(issueCodes(result)).toContain('platform-proof-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('rejects safely inspectable symbol-keyed values without echoing symbol details', () => {
+    const token = ['gh', 'p', '_', 'S'.repeat(24)].join('');
+    const symbolKey = Symbol('real.user@example.com');
+    const symbolBacked = baseProposal() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(symbolBacked, symbolKey, {
+      enumerable: true,
+      value: token
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(symbolBacked);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsafe-evidence', path: '$.<redacted-key>' })]));
+    expectNoEcho(serialized, token, 'real.user@example.com');
+  });
+
+  it('preserves rejected root boundary flags even when proposal shape is invalid', () => {
+    const cyclic = {
+      ...baseProposal(),
+      runnableProbeAdded: true,
+      credentialStoreAccessedByMat: true,
+      productSupportClaimed: true,
+      platformProofClaimedComplete: true
+    } as Record<string, unknown>;
+    cyclic.self = cyclic;
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(cyclic);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toEqual(
+      expect.arrayContaining([
+        'invalid-proposal',
+        'executable-probe-present',
+        'credential-store-accessed-by-mat',
+        'product-support-claim',
+        'platform-proof-claim'
+      ])
+    );
+  });
+
+  it('rejects accessor-backed claims without invoking the accessor', () => {
+    const accessorBacked = baseProposal() as unknown as Record<string, unknown>;
+    Object.defineProperty(accessorBacked, 'productSupport', {
+      enumerable: true,
+      get: () => {
+        throw new Error('accessor must not run');
+      }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(accessorBacked);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('product-support-claim');
+  });
+
   it('keeps the gate pure and disconnected from executable/product wiring', () => {
     const source = readFileSync(sourceUrl, 'utf8');
 

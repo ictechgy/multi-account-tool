@@ -5,6 +5,8 @@ import {
   isCopilotExecutableProbeProductSupportClaimKey,
   isCopilotForbiddenEvidenceKey,
   isCopilotProofMetadataAdmissionClaimKey,
+  isCopilotRealLabelPresent,
+  isCopilotTokenShapePresent,
   normalizeCopilotMetadataKey
 } from '../../src/core/copilot-metadata-boundary-taxonomy.js';
 
@@ -33,5 +35,12 @@ describe('Copilot metadata boundary taxonomy', () => {
     expect(isCopilotExecutableProbeProductSupportClaimKey('productSupportClaimed')).toBe(false);
     expect(isCopilotExecutableProbePlatformProofClaimKey('platformProof')).toBe(true);
     expect(isCopilotExecutableProbePlatformProofClaimKey('platformProofClaimedComplete')).toBe(false);
+  });
+
+  it('centralizes unsafe value-shape predicates for Copilot metadata gates', () => {
+    expect(isCopilotTokenShapePresent(['gh', 'p', '_', 'A'.repeat(24)].join(''))).toBe(true);
+    expect(isCopilotTokenShapePresent('value-free-enums-only')).toBe(false);
+    expect(isCopilotRealLabelPresent('fixture-user@fixture.example')).toBe(false);
+    expect(isCopilotRealLabelPresent('real.user@example.com')).toBe(true);
   });
 });

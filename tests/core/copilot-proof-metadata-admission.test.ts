@@ -312,6 +312,25 @@ describe('Copilot proof metadata admission gate', () => {
     expectNoEcho(serialized, token, 'enabled');
   });
 
+  it('rejects symbol-keyed unsafe report values without echoing symbol details', () => {
+    const token = ['gh', 'p', '_', 'S'.repeat(24)].join('');
+    const symbolKey = Symbol('real.user@example.com');
+    const report = baseReport() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(report, symbolKey, {
+      enumerable: true,
+      value: token
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toContain('validator-failed');
+    expect(result.issues.map((issue) => issue.code)).toContain('unsafe-evidence');
+    expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsafe-evidence', path: '$.<redacted-key>' })]));
+    expectNoEcho(serialized, token, 'real.user@example.com');
+  });
+
   it('blocks report accessors before report validation can dereference them', () => {
     const report = { ...baseReport() } as Record<string, unknown>;
     Object.defineProperty(report, 'diagnostic', {

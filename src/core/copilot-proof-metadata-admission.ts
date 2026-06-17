@@ -18,6 +18,8 @@ import {
 import {
   isCopilotForbiddenEvidenceKey,
   isCopilotProofMetadataAdmissionClaimKey,
+  isCopilotRealLabelPresent,
+  isCopilotTokenShapePresent,
   normalizeCopilotMetadataKey
 } from './copilot-metadata-boundary-taxonomy.js';
 
@@ -153,16 +155,6 @@ const SAFE_REPORT_METADATA_NORMALIZED_KEYS = new Set(
   [...REPORT_ROOT_KEYS, ...REPORT_PLATFORM_KEYS, ...REPORT_SELECTOR_KEYS].map((key) => normalizeKey(key))
 );
 
-const TOKEN_SHAPE_PATTERNS = [
-  new RegExp('\\bgh[pousr]' + '_[A-Za-z0-9_]{10,}\\b'),
-  new RegExp('\\bgithub' + '_pat' + '_[A-Za-z0-9_]{10,}\\b'),
-  new RegExp('\\bsk' + '-[A-Za-z0-9]{12,}\\b'),
-  new RegExp('\\bxox[baprs]' + '-[A-Za-z0-9-]{8,}\\b'),
-  new RegExp('\\bey' + 'J[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b'),
-  /\b[A-Fa-f0-9]{64,}\b/
-] as const;
-const EMAIL_LIKE_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-
 function isPlainObject(value: unknown): value is JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const proto = Object.getPrototypeOf(value);
@@ -181,17 +173,8 @@ function isNonEmptyEvidenceValue(value: unknown): boolean {
   return true;
 }
 
-function tokenShapePresent(value: string): boolean {
-  return TOKEN_SHAPE_PATTERNS.some((pattern) => pattern.test(value));
-}
-
-function realLabelPresent(value: string): boolean {
-  const matches = value.match(EMAIL_LIKE_RE) ?? [];
-  return matches.some((match) => !match.toLowerCase().endsWith('@fixture.example'));
-}
-
 function safePathSegment(key: string): string {
-  if (tokenShapePresent(key) || realLabelPresent(key)) return '<redacted-key>';
+  if (isCopilotTokenShapePresent(key) || isCopilotRealLabelPresent(key)) return '<redacted-key>';
   if (/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(key)) return key;
   return '<redacted-key>';
 }
@@ -420,8 +403,8 @@ function collectDescriptorSafeRejectedIssues(
 ): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
   if (typeof value === 'string') {
-    if (tokenShapePresent(value)) issues.push(unsafeAdmissionIssue(source, path));
-    if (realLabelPresent(value)) issues.push(unsafeAdmissionIssue(source, path));
+    if (isCopilotTokenShapePresent(value)) issues.push(unsafeAdmissionIssue(source, path));
+    if (isCopilotRealLabelPresent(value)) issues.push(unsafeAdmissionIssue(source, path));
     return issues;
   }
   if (value === null || typeof value !== 'object' || depth > MAX_ADMISSION_SCAN_DEPTH || seen.has(value)) {
@@ -446,16 +429,16 @@ function collectDescriptorSafeRejectedIssues(
   }
 
   for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== 'string') continue;
     if (isArray && key === 'length') continue;
-    const descriptor = descriptors[key];
-    const childPath = descriptorSafePathForKey(path, key, isArray);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, isArray) : `${path}.<redacted-key>`;
     const child = descriptorValue(descriptor);
 
-    if (tokenShapePresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
-    if (realLabelPresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
+    if (typeof key === 'string' && isCopilotTokenShapePresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
+    if (typeof key === 'string' && isCopilotRealLabelPresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
 
     if (
+      typeof key === 'string' &&
       isForbiddenEvidenceKey(key) &&
       !(source === 'checklist' && isSafeChecklistMetadataKeyFinding({ kind: 'forbidden-key', path: childPath })) &&
       !(child.known && isValueFreeWindowsBindingProofContainer(path, key, child.value)) &&
@@ -464,7 +447,7 @@ function collectDescriptorSafeRejectedIssues(
       issues.push(unsafeAdmissionIssue(source, childPath));
     }
 
-    if (isCopilotProofMetadataAdmissionClaimKey(key) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
+    if (typeof key === 'string' && isCopilotProofMetadataAdmissionClaimKey(key) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
       issues.push(
         admissionIssue(
           'rejected',

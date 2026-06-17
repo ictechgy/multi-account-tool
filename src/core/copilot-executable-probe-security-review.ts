@@ -12,7 +12,11 @@ import {
 } from './copilot-credential-proof.js';
 import {
   isCopilotExecutableProbePlatformProofClaimKey,
-  isCopilotExecutableProbeProductSupportClaimKey
+  isCopilotExecutableProbeProductSupportClaimKey,
+  isCopilotForbiddenEvidenceKey,
+  isCopilotRealLabelPresent,
+  isCopilotTokenShapePresent,
+  normalizeCopilotMetadataKey
 } from './copilot-metadata-boundary-taxonomy.js';
 
 export type CopilotExecutableProbeSecurityReviewStatus =
@@ -209,6 +213,9 @@ const ALL_SCHEMA_KEYS = new Set([
   ...CLEANUP_POLICY_KEYS,
   ...REVIEW_POLICY_KEYS
 ]);
+const DESCRIPTOR_SAFE_UNSAFE_NORMALIZED_KEYS: ReadonlySet<string> = new Set(
+  [...ALL_SCHEMA_KEYS].filter((key) => key !== 'rawLocalOutputPolicy').map((key) => normalizeCopilotMetadataKey(key))
+);
 const MAX_PROPOSAL_SCAN_DEPTH = 64;
 
 function isPlainObject(value: unknown): value is JsonObject {
@@ -243,6 +250,29 @@ function collectUnsafeIssues(proposal: unknown): BucketedIssue[] {
     .map((finding) =>
       issue('rejected', 'unsafe-evidence', finding.path, 'Unsafe credential evidence is present; key path only is reported.')
     );
+}
+
+function descriptorHasPresentValue(descriptor: PropertyDescriptor | undefined): boolean {
+  if (!descriptor) return false;
+  if (descriptor.get || descriptor.set) return true;
+  const value = descriptor.value;
+  return value !== false && value !== null && value !== undefined && !(typeof value === 'string' && value.trim() === '');
+}
+
+function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: true; value: unknown } | { known: false } {
+  if (!descriptor || descriptor.get || descriptor.set) return { known: false };
+  return { known: true, value: descriptor.value };
+}
+
+function descriptorHasTrueValue(value: object, key: string): boolean {
+  const child = descriptorValue(Object.getOwnPropertyDescriptor(value, key));
+  return child.known && child.value === true;
+}
+
+function descriptorSafeChildPath(path: string, key: string, parentIsArray: boolean): string {
+  if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
+  if (isCopilotTokenShapePresent(key) || isCopilotRealLabelPresent(key)) return `${path}.<redacted-key>`;
+  return childPath(path, key);
 }
 
 function collectShapeIssues(
@@ -293,6 +323,111 @@ function isSafeScannerPolicyFinding(proposal: unknown, path: string): boolean {
     return proposal.outputPolicy.forbidHashesAndFingerprints === true;
   }
   return false;
+}
+
+function isSafeScannerPolicyDescriptor(path: string, descriptor: PropertyDescriptor | undefined): boolean {
+  if (!SAFE_UNSAFE_SCANNER_POLICY_PATHS.has(path) || !descriptor || descriptor.get || descriptor.set) {
+    return false;
+  }
+  if (path === '$.outputPolicy.rawLocalOutputPolicy') {
+    return descriptor.value === 'discard-before-review';
+  }
+  if (path === '$.outputPolicy.forbidHashesAndFingerprints') {
+    return descriptor.value === true;
+  }
+  return false;
+}
+
+function unsafeDescriptorIssue(path: string): BucketedIssue {
+  return issue('rejected', 'unsafe-evidence', path, 'Unsafe credential evidence is present; key path only is reported.');
+}
+
+function collectDescriptorSafeRejectedIssues(
+  value: unknown,
+  path = '$',
+  seen: WeakSet<object> = new WeakSet(),
+  depth = 0
+): BucketedIssue[] {
+  const issues: BucketedIssue[] = [];
+  if (typeof value === 'string') {
+    if (isCopilotTokenShapePresent(value)) issues.push(unsafeDescriptorIssue(path));
+    if (isCopilotRealLabelPresent(value)) issues.push(unsafeDescriptorIssue(path));
+    return issues;
+  }
+  if (value === null || typeof value !== 'object' || depth > MAX_PROPOSAL_SCAN_DEPTH || seen.has(value)) {
+    return issues;
+  }
+
+  const isArray = Array.isArray(value);
+  if (!isArray && !isPlainObject(value)) return issues;
+
+  seen.add(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (isArray && key === 'length') continue;
+
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const child = descriptorValue(descriptor);
+    const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<redacted-key>`;
+    const present = descriptorHasPresentValue(descriptor);
+
+    if (typeof key === 'string' && isCopilotTokenShapePresent(key)) issues.push(unsafeDescriptorIssue(childPathForIssue));
+    if (typeof key === 'string' && isCopilotRealLabelPresent(key)) issues.push(unsafeDescriptorIssue(childPathForIssue));
+
+    if (
+      typeof key === 'string' &&
+      present &&
+      !isSafeScannerPolicyDescriptor(childPathForIssue, descriptor) &&
+      isCopilotForbiddenEvidenceKey(key, DESCRIPTOR_SAFE_UNSAFE_NORMALIZED_KEYS)
+    ) {
+      issues.push(unsafeDescriptorIssue(childPathForIssue));
+    }
+
+    if (
+      typeof key === 'string' &&
+      present &&
+      !(path === '$' && key === 'productSupportClaimed') &&
+      isCopilotExecutableProbeProductSupportClaimKey(key)
+    ) {
+      issues.push(issue('rejected', 'product-support-claim', childPathForIssue, 'Product support claims are not admissible.'));
+    }
+
+    if (
+      typeof key === 'string' &&
+      present &&
+      !(path === '$' && key === 'platformProofClaimedComplete') &&
+      isCopilotExecutableProbePlatformProofClaimKey(key)
+    ) {
+      issues.push(
+        issue('rejected', 'platform-proof-claim', childPathForIssue, 'Completed platform-proof claims are not admissible.')
+      );
+    }
+
+    if (child.known) {
+      issues.push(...collectDescriptorSafeRejectedIssues(child.value, childPathForIssue, seen, depth + 1));
+    }
+  }
+  seen.delete(value);
+  return issues;
+}
+
+function collectDescriptorSafeRootBoundaryIssues(proposal: JsonObject): BucketedIssue[] {
+  const issues: BucketedIssue[] = [];
+  if (descriptorHasTrueValue(proposal, 'runnableProbeAdded')) {
+    issues.push(issue('rejected', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probes are not admissible in this gate.'));
+  }
+  if (descriptorHasTrueValue(proposal, 'credentialStoreAccessedByMat')) {
+    issues.push(
+      issue('rejected', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Mat must not access credential stores in this gate.')
+    );
+  }
+  if (descriptorHasTrueValue(proposal, 'productSupportClaimed')) {
+    issues.push(issue('rejected', 'product-support-claim', '$.productSupportClaimed', 'Product support claims are not admissible.'));
+  }
+  if (descriptorHasTrueValue(proposal, 'platformProofClaimedComplete')) {
+    issues.push(issue('rejected', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform proof completion claims are not admissible.'));
+  }
+  return issues;
 }
 
 function collectClaimIssues(value: unknown, path = '$', seen: WeakSet<object> = new WeakSet()): BucketedIssue[] {
@@ -464,7 +599,8 @@ export function evaluateCopilotExecutableProbeSecurityReview(
   if (!isPlainObject(proposal)) {
     issues.push(issue('blocked', 'invalid-proposal', '$', 'Proposal must be a value-free object.'));
   } else if (shapeIssues.length > 0) {
-    // Accessor/cyclic/deep metadata is not safe to inspect with the normal schema checks.
+    issues.push(...collectDescriptorSafeRejectedIssues(proposal));
+    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal));
   } else {
     issues.push(...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal));
     issues.push(...collectUnknownKeyIssues(proposal, ROOT_KEYS, '$'));

@@ -75,6 +75,16 @@ const COPILOT_EXECUTABLE_PROBE_PLATFORM_PROOF_CLAIM_NORMALIZED_KEYS: ReadonlySet
   'proofcomplete'
 ]);
 
+const COPILOT_TOKEN_SHAPE_PATTERNS = [
+  new RegExp('\\bgh[pousr]' + '_[A-Za-z0-9_]{10,}\\b'),
+  new RegExp('\\bgithub' + '_pat' + '_[A-Za-z0-9_]{10,}\\b'),
+  new RegExp('\\bsk' + '-[A-Za-z0-9]{12,}\\b'),
+  new RegExp('\\bxox[baprs]' + '-[A-Za-z0-9-]{8,}\\b'),
+  new RegExp('\\bey' + 'J[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b'),
+  /\b[A-Fa-f0-9]{64,}\b/
+] as const;
+const COPILOT_EMAIL_LIKE_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
+
 export function normalizeCopilotMetadataKey(key: string): string {
   return key.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
 }
@@ -109,4 +119,13 @@ export function isCopilotExecutableProbeProductSupportClaimKey(key: string): boo
 
 export function isCopilotExecutableProbePlatformProofClaimKey(key: string): boolean {
   return COPILOT_EXECUTABLE_PROBE_PLATFORM_PROOF_CLAIM_NORMALIZED_KEYS.has(normalizeCopilotMetadataKey(key));
+}
+
+export function isCopilotTokenShapePresent(value: string): boolean {
+  return COPILOT_TOKEN_SHAPE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+export function isCopilotRealLabelPresent(value: string): boolean {
+  const matches = value.match(COPILOT_EMAIL_LIKE_RE) ?? [];
+  return matches.some((match) => !match.toLowerCase().endsWith('@fixture.example'));
 }
