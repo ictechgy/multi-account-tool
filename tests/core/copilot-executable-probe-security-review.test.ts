@@ -576,6 +576,44 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, token);
   });
 
+  it('validates clean-shape proxy proposals from descriptor snapshots without invoking getters', () => {
+    const target = { ...baseProposal(), productSupportClaimed: true } as Record<string, unknown>;
+    let ownKeysCalls = 0;
+    let getPrototypeOfCalls = 0;
+    let getCalls = 0;
+    const proxy = new Proxy(target, {
+      ownKeys(inner) {
+        ownKeysCalls += 1;
+        if (ownKeysCalls > 1) {
+          throw new Error('descriptor traps must not be called after shape preflight');
+        }
+        return Reflect.ownKeys(inner);
+      },
+      getOwnPropertyDescriptor(inner, key) {
+        return Reflect.getOwnPropertyDescriptor(inner, key);
+      },
+      getPrototypeOf(inner) {
+        getPrototypeOfCalls += 1;
+        if (getPrototypeOfCalls > 1) {
+          throw new Error('plain-object checks must use the shape preflight cache');
+        }
+        return Reflect.getPrototypeOf(inner);
+      },
+      get() {
+        getCalls += 1;
+        throw new Error('semantic validation must not invoke proxy getters');
+      }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(proxy);
+
+    expect(ownKeysCalls).toBe(1);
+    expect(getPrototypeOfCalls).toBe(1);
+    expect(getCalls).toBe(0);
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('product-support-claim');
+  });
+
   it('rejects accessor-backed claims without invoking the accessor', () => {
     const accessorBacked = baseProposal() as unknown as Record<string, unknown>;
     Object.defineProperty(accessorBacked, 'productSupport', {

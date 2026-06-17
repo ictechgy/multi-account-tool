@@ -532,6 +532,41 @@ function collectDescriptorSafeRootBoundaryIssues(
   return issues;
 }
 
+function materializeDescriptorSnapshot(
+  value: unknown,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>,
+  seen: WeakMap<object, unknown> = new WeakMap()
+): unknown {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value;
+
+  const objectValue = value as object;
+  if (seen.has(objectValue)) return seen.get(objectValue);
+  const descriptors = descriptorsByObject.get(objectValue);
+  if (!descriptors) return undefined;
+
+  if (Array.isArray(value)) {
+    const lengthDescriptor = descriptorValue(descriptors.length);
+    const length = lengthDescriptor.known ? lengthDescriptor.value : 0;
+    const arrayLength = typeof length === 'number' && Number.isSafeInteger(length) && length >= 0 ? length : 0;
+    const output: unknown[] = new Array(arrayLength);
+    seen.set(objectValue, output);
+    for (let index = 0; index < arrayLength; index += 1) {
+      const child = descriptorValue(descriptors[String(index)]);
+      if (child.known) output[index] = materializeDescriptorSnapshot(child.value, descriptorsByObject, seen);
+    }
+    return output;
+  }
+
+  const output: JsonObject = {};
+  seen.set(objectValue, output);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') continue;
+    const child = descriptorValue(descriptors[key]);
+    if (child.known) output[key] = materializeDescriptorSnapshot(child.value, descriptorsByObject, seen);
+  }
+  return output;
+}
+
 function collectClaimIssues(value: unknown, path = '$', seen: WeakSet<object> = new WeakSet()): BucketedIssue[] {
   if (Array.isArray(value)) {
     if (seen.has(value)) return [];
@@ -712,8 +747,8 @@ export function evaluateCopilotExecutableProbeSecurityReview(
     issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
     issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal as JsonObject, descriptorsByObject));
   } else {
-    const proposalObject = proposal as JsonObject;
-    issues.push(...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal));
+    const proposalObject = materializeDescriptorSnapshot(proposal, descriptorsByObject) as JsonObject;
+    issues.push(...collectUnsafeIssues(proposalObject), ...collectClaimIssues(proposalObject));
     issues.push(...collectUnknownKeyIssues(proposalObject, ROOT_KEYS, '$'));
     if (proposalObject.schemaVersion !== 1) {
       issues.push(issue('blocked', 'invalid-proposal', '$.schemaVersion', 'Proposal schemaVersion must be 1.'));
