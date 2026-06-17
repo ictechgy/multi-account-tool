@@ -81,6 +81,11 @@ interface BucketedIssue extends CopilotProofMetadataAdmissionIssue {
   bucket: IssueBucket;
 }
 
+interface ShapeScanIssue {
+  path: string;
+  message: string;
+}
+
 const PROOF_LEVEL: CopilotCredentialProofLevel = 'metadata-report-only';
 const PRODUCT_SUPPORT: CopilotCredentialProofProductSupport = 'blocked';
 
@@ -120,6 +125,63 @@ const REQUIRED_TRUE_CHECKLIST_KEYS = [
   'ambientTokenPolicyReviewed',
   'secondReviewerSignedOff'
 ] as const;
+
+const MAX_ADMISSION_SCAN_DEPTH = 64;
+const MAX_ADMISSION_ARRAY_LENGTH = 256;
+
+const REPORT_ROOT_KEYS = new Set(['schemaVersion', 'subject', 'evidenceKind', 'observedAt', 'platforms', 'notes']);
+const REPORT_PLATFORM_KEYS = new Set([
+  'platform',
+  'serviceName',
+  'serviceNameSource',
+  'perAccountSelector',
+  'entryCardinality',
+  'secretValuesObservedByMat',
+  'rawCredentialStoreOutputCommitted',
+  'appStateCrossCheck',
+  'ambientTokenPolicy',
+  'windowsCredentialBindingProof',
+  'conclusion'
+]);
+const REPORT_SELECTOR_KEYS = new Set(['status', 'fieldName', 'valuePolicy']);
+const SAFE_REPORT_METADATA_NORMALIZED_KEYS = new Set(
+  [...REPORT_ROOT_KEYS, ...REPORT_PLATFORM_KEYS, ...REPORT_SELECTOR_KEYS].map((key) => normalizeKey(key))
+);
+const FORBIDDEN_EVIDENCE_NORMALIZED_KEYS = new Set([
+  'securityoutput',
+  'secrettooloutput',
+  'rawoutput',
+  'rawcredentialstoreoutput',
+  'rawtargetname',
+  'credentialblob',
+  'target',
+  'targetname',
+  'token',
+  'accesstoken',
+  'refreshtoken',
+  'oauthtoken',
+  'githubtoken',
+  'tokenhash',
+  'secret',
+  'password',
+  'hash',
+  'fingerprint',
+  'digest',
+  'sha256',
+  'sha256digest',
+  'login',
+  'displaylogin',
+  'account',
+  'accountusernameguard',
+  'organization',
+  'org',
+  'accountid',
+  'stableaccountid',
+  'userid',
+  'username',
+  'accountlabel',
+  'label'
+]);
 
 const PRODUCT_SUPPORT_CLAIM_KEYS = new Set([
   'productsupport',
@@ -183,6 +245,17 @@ function childPathForKey(path: string, key: string): string {
   return `${path}.${safePathSegment(key)}`;
 }
 
+function shapePathForKey(path: string, key: string, parentIsArray: boolean): string {
+  if (parentIsArray && isCanonicalArrayIndexKey(key)) return `${path}[${key}]`;
+  return childPathForKey(path, key);
+}
+
+function isCanonicalArrayIndexKey(key: string): boolean {
+  if (!/^(0|[1-9]\d*)$/.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index <= 4294967294 && String(index) === key;
+}
+
 function admissionIssue(
   bucket: IssueBucket,
   code: CopilotProofMetadataAdmissionIssueCode,
@@ -210,6 +283,109 @@ function reportForAdmissionScans(report: unknown): unknown {
   }
 }
 
+function collectShapeScanIssues(
+  value: unknown,
+  path = '$',
+  seen: WeakSet<object> = new WeakSet(),
+  depth = 0
+): ShapeScanIssue[] {
+  if (typeof value === 'function') {
+    return [{ path, message: 'Metadata values must be JSON-like data, not functions.' }];
+  }
+  if (value === null || typeof value !== 'object') return [];
+  if (depth > MAX_ADMISSION_SCAN_DEPTH) {
+    return [{ path, message: 'Metadata exceeds the maximum supported depth.' }];
+  }
+  if (seen.has(value)) {
+    return [{ path, message: 'Metadata must be an acyclic tree without shared object references.' }];
+  }
+
+  const isArray = Array.isArray(value);
+  let plainObject = false;
+  try {
+    plainObject = isPlainObject(value);
+  } catch {
+    return [{ path, message: 'Metadata object shape could not be inspected safely.' }];
+  }
+  if (!isArray && !plainObject) {
+    return [{ path, message: 'Metadata must contain only plain objects, arrays, and primitive values.' }];
+  }
+
+  seen.add(value);
+  const issues: ShapeScanIssue[] = [];
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    return [{ path, message: 'Metadata object descriptors could not be inspected safely.' }];
+  }
+  if (isArray) {
+    const lengthDescriptor = descriptors.length;
+    const length = typeof lengthDescriptor?.value === 'number' ? lengthDescriptor.value : undefined;
+    if (length === undefined) {
+      issues.push({ path, message: 'Metadata arrays must expose a numeric length.' });
+    } else if (!Number.isSafeInteger(length) || length < 0 || length > MAX_ADMISSION_ARRAY_LENGTH) {
+      issues.push({ path, message: 'Metadata arrays must stay within the supported admission size.' });
+    } else {
+      for (let index = 0; index < length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(descriptors, String(index))) {
+          issues.push({ path: `${path}[${index}]`, message: 'Metadata arrays must be dense JSON-like arrays.' });
+        }
+      }
+    }
+  }
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') {
+      issues.push({ path: `${path}.<unknown-key>`, message: 'Metadata must use string keys only.' });
+      continue;
+    }
+    if (isArray && key === 'length') continue;
+    if (isArray && !isCanonicalArrayIndexKey(key)) {
+      issues.push({ path: childPathForKey(path, key), message: 'Metadata arrays must not contain non-index fields.' });
+      continue;
+    }
+    const descriptor = descriptors[key];
+    const childPath = shapePathForKey(path, key, isArray);
+    if (!descriptor || descriptor.get || descriptor.set) {
+      issues.push({ path: childPath, message: 'Metadata must not contain accessors.' });
+      continue;
+    }
+    if (!descriptor.enumerable) {
+      issues.push({ path: childPath, message: 'Metadata must not contain hidden non-enumerable fields.' });
+      continue;
+    }
+    issues.push(...collectShapeScanIssues(descriptor.value, childPath, seen, depth + 1));
+  }
+  return issues;
+}
+
+function reportShapeIssues(report: unknown): BucketedIssue[] {
+  return collectShapeScanIssues(report).map((entry) =>
+    admissionIssue('blocked', 'validator-failed', 'validator', entry.path, entry.message, 'invalid-root')
+  );
+}
+
+function checklistShapeIssues(checklist: unknown): BucketedIssue[] {
+  return collectShapeScanIssues(checklist).map((entry) =>
+    admissionIssue('blocked', 'invalid-checklist', 'checklist', entry.path, entry.message)
+  );
+}
+
+function invalidValidationForShape(issues: readonly BucketedIssue[]): CopilotCredentialProofValidationResult {
+  return {
+    ok: false,
+    structurallyValid: false,
+    proofLevel: PROOF_LEVEL,
+    productSupport: PRODUCT_SUPPORT,
+    issues: issues.map((entry) => ({
+      code: entry.validatorCode ?? 'invalid-root',
+      path: entry.path,
+      message: entry.message
+    })),
+    platforms: []
+  };
+}
+
 function isSafeChecklistMetadataPath(path: string): boolean {
   return path === '$.rawLocalOutputDiscarded' || path === '$.ambientTokenPolicyReviewed';
 }
@@ -235,15 +411,151 @@ function collectUnsafeAdmissionIssues(
     );
 }
 
+function isForbiddenEvidenceKey(key: string): boolean {
+  const normalized = normalizeKey(key);
+  if (SAFE_REPORT_METADATA_NORMALIZED_KEYS.has(normalized)) return false;
+  return (
+    FORBIDDEN_EVIDENCE_NORMALIZED_KEYS.has(normalized) ||
+    normalized.includes('token') ||
+    normalized.includes('secret') ||
+    normalized.includes('password') ||
+    normalized.includes('hash') ||
+    normalized.includes('fingerprint') ||
+    normalized.includes('digest') ||
+    normalized.includes('sha256') ||
+    (normalized.includes('raw') && normalized.includes('output')) ||
+    (normalized.includes('credential') && normalized.includes('blob'))
+  );
+}
+
+function isValueFreeWindowsBindingProofContainer(path: string, key: string, child: unknown): boolean {
+  try {
+    return (
+      /^\$\.platforms\[\d+\]\.windowsCredentialBindingProof$/.test(path) &&
+      (key === 'targetName' || key === 'accountUserNameGuard') &&
+      isPlainObject(child)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function unsafeAdmissionIssue(source: CopilotProofMetadataAdmissionIssueSource, path: string): BucketedIssue {
+  return admissionIssue(
+    'rejected',
+    'unsafe-evidence',
+    source,
+    path,
+    'Unsafe credential evidence is present; key path only is reported.'
+  );
+}
+
+function descriptorHasNonEmptyEvidenceValue(descriptor: PropertyDescriptor | undefined): boolean {
+  if (!descriptor) return false;
+  if (descriptor.get || descriptor.set) return true;
+  try {
+    return isNonEmptyEvidenceValue(descriptor.value);
+  } catch {
+    return false;
+  }
+}
+
+function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: true; value: unknown } | { known: false } {
+  if (!descriptor || descriptor.get || descriptor.set) return { known: false };
+  return { known: true, value: descriptor.value };
+}
+
+function descriptorSafePathForKey(path: string, key: string, parentIsArray: boolean): string {
+  return shapePathForKey(path, key, parentIsArray);
+}
+
+function collectDescriptorSafeRejectedIssues(
+  value: unknown,
+  source: CopilotProofMetadataAdmissionIssueSource,
+  path = '$',
+  seen: WeakSet<object> = new WeakSet(),
+  depth = 0
+): BucketedIssue[] {
+  const issues: BucketedIssue[] = [];
+  if (typeof value === 'string') {
+    if (tokenShapePresent(value)) issues.push(unsafeAdmissionIssue(source, path));
+    if (realLabelPresent(value)) issues.push(unsafeAdmissionIssue(source, path));
+    return issues;
+  }
+  if (value === null || typeof value !== 'object' || depth > MAX_ADMISSION_SCAN_DEPTH || seen.has(value)) {
+    return issues;
+  }
+
+  const isArray = Array.isArray(value);
+  let plainObject = false;
+  try {
+    plainObject = isPlainObject(value);
+  } catch {
+    return issues;
+  }
+  if (!isArray && !plainObject) return issues;
+
+  seen.add(value);
+  let descriptors: PropertyDescriptorMap;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    return issues;
+  }
+
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') continue;
+    if (isArray && key === 'length') continue;
+    const descriptor = descriptors[key];
+    const childPath = descriptorSafePathForKey(path, key, isArray);
+    const child = descriptorValue(descriptor);
+
+    if (tokenShapePresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
+    if (realLabelPresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
+
+    if (
+      isForbiddenEvidenceKey(key) &&
+      !(source === 'checklist' && isSafeChecklistMetadataKeyFinding({ kind: 'forbidden-key', path: childPath })) &&
+      !(child.known && isValueFreeWindowsBindingProofContainer(path, key, child.value)) &&
+      descriptorHasNonEmptyEvidenceValue(descriptor)
+    ) {
+      issues.push(unsafeAdmissionIssue(source, childPath));
+    }
+
+    if (PRODUCT_SUPPORT_CLAIM_KEYS.has(normalizeKey(key)) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
+      issues.push(
+        admissionIssue(
+          'rejected',
+          'product-support-claim',
+          source,
+          childPath,
+          'Product support or completed-proof claim metadata is not admissible in this gate.'
+        )
+      );
+    }
+
+    if (child.known) {
+      issues.push(...collectDescriptorSafeRejectedIssues(child.value, source, childPath, seen, depth + 1));
+    }
+  }
+
+  return issues;
+}
+
 function collectProductClaimIssues(
   value: unknown,
   source: CopilotProofMetadataAdmissionIssueSource,
-  path = '$'
+  path = '$',
+  seen: WeakSet<object> = new WeakSet()
 ): BucketedIssue[] {
   if (Array.isArray(value)) {
-    return value.flatMap((entry, index) => collectProductClaimIssues(entry, source, `${path}[${index}]`));
+    if (seen.has(value)) return [];
+    seen.add(value);
+    return value.flatMap((entry, index) => collectProductClaimIssues(entry, source, `${path}[${index}]`, seen));
   }
   if (!isPlainObject(value)) return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
 
   const issues: BucketedIssue[] = [];
   for (const [key, child] of Object.entries(value)) {
@@ -259,7 +571,7 @@ function collectProductClaimIssues(
         )
       );
     }
-    issues.push(...collectProductClaimIssues(child, source, childPath));
+    issues.push(...collectProductClaimIssues(child, source, childPath, seen));
   }
   return issues;
 }
@@ -517,19 +829,31 @@ export function evaluateCopilotProofMetadataAdmission(
   report: unknown,
   checklist: unknown
 ): CopilotProofMetadataAdmissionResult {
-  const validation = validateCopilotCredentialProofReport(report);
-  const checklistShape = validateChecklistShape(checklist);
-  const passPlatforms = passPlatformsFor(validation);
   const reportScanTarget = reportForAdmissionScans(report);
+  const reportShape = reportShapeIssues(reportScanTarget);
+  const checklistShapePreflight = checklistShapeIssues(checklist);
+  const validation = reportShape.length > 0 ? invalidValidationForShape(reportShape) : validateCopilotCredentialProofReport(report);
+  const checklistShape =
+    checklistShapePreflight.length > 0
+      ? { targetPlatforms: [] as CopilotCredentialProofPlatform[], issues: checklistShapePreflight }
+      : validateChecklistShape(checklist);
+  const passPlatforms = passPlatformsFor(validation);
+  const reportShapeRejectedIssues =
+    reportShape.length > 0 ? collectDescriptorSafeRejectedIssues(reportScanTarget, 'report') : [];
+  const checklistShapeRejectedIssues =
+    checklistShapePreflight.length > 0 ? collectDescriptorSafeRejectedIssues(checklist, 'checklist') : [];
 
   const issues: BucketedIssue[] = [
-    ...collectUnsafeAdmissionIssues(reportScanTarget, 'report'),
-    ...collectUnsafeAdmissionIssues(checklist, 'checklist'),
-    ...collectProductClaimIssues(reportScanTarget, 'report'),
-    ...collectProductClaimIssues(checklist, 'checklist'),
+    ...reportShape,
+    ...reportShapeRejectedIssues,
+    ...(reportShape.length > 0 ? [] : collectUnsafeAdmissionIssues(reportScanTarget, 'report')),
+    ...checklistShapeRejectedIssues,
+    ...(checklistShapePreflight.length > 0 ? [] : collectUnsafeAdmissionIssues(checklist, 'checklist')),
+    ...(reportShape.length > 0 ? [] : collectProductClaimIssues(reportScanTarget, 'report')),
+    ...(checklistShapePreflight.length > 0 ? [] : collectProductClaimIssues(checklist, 'checklist')),
     ...checklistShape.issues,
-    ...reportNotesIssues(report),
-    ...validatorIssues(validation),
+    ...(reportShape.length > 0 ? [] : reportNotesIssues(report)),
+    ...(reportShape.length > 0 ? [] : validatorIssues(validation)),
     ...platformScopeIssues(passPlatforms, checklistShape.targetPlatforms)
   ];
 

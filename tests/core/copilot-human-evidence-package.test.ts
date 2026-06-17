@@ -231,6 +231,80 @@ describe('Copilot human evidence package', () => {
     expectNoEcho(serialized, token);
   });
 
+  it('inherits admission shape safety for cyclic report metadata', () => {
+    const report = baseReport() as unknown as Record<string, unknown>;
+    report.self = report;
+
+    let result: ReturnType<typeof evaluateCopilotHumanEvidencePackage> | undefined;
+    expect(() => {
+      result = evaluateCopilotHumanEvidencePackage(
+        request(['darwin-keychain', 'linux-secret-service']),
+        report,
+        checklist(['darwin-keychain', 'linux-secret-service'])
+      );
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.status).toBe('blocked');
+    expect(result?.admission.validation.ok).toBe(false);
+    expect(result?.admission.issues.map((issue) => issue.code)).toContain('validator-failed');
+  });
+
+  it('inherits admission shape safety for accessor checklist metadata', () => {
+    const unsafeChecklist = { ...checklist(['darwin-keychain', 'linux-secret-service']) } as Record<string, unknown>;
+    Object.defineProperty(unsafeChecklist, 'secondReviewerSignedOff', {
+      enumerable: true,
+      get() {
+        throw new Error('getter must not run');
+      }
+    });
+
+    let result: ReturnType<typeof evaluateCopilotHumanEvidencePackage> | undefined;
+    expect(() => {
+      result = evaluateCopilotHumanEvidencePackage(
+        request(['darwin-keychain', 'linux-secret-service']),
+        baseReport(),
+        unsafeChecklist
+      );
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.status).toBe('blocked');
+    expect(result?.admission.targetPlatforms).toEqual([]);
+    expect(result?.admission.issues.map((issue) => issue.code)).toContain('invalid-checklist');
+  });
+
+  it('inherits admission shape safety for sparse report and checklist arrays', () => {
+    const sparsePlatforms: unknown[] = [];
+    sparsePlatforms[1] = baseReport().platforms[0];
+    const report = { ...baseReport(), platforms: sparsePlatforms };
+    const validChecklist = checklist(['darwin-keychain', 'linux-secret-service']);
+
+    expect(() =>
+      evaluateCopilotHumanEvidencePackage(request(['darwin-keychain', 'linux-secret-service']), report, validChecklist)
+    ).not.toThrow();
+    const reportResult = evaluateCopilotHumanEvidencePackage(
+      request(['darwin-keychain', 'linux-secret-service']),
+      report,
+      validChecklist
+    );
+    expect(reportResult.status).toBe('blocked');
+    expect(reportResult.admission.validation.platforms).toEqual([]);
+    expect(reportResult.admission.issues.map((issue) => issue.code)).toContain('validator-failed');
+
+    const sparseTargets: unknown[] = [];
+    sparseTargets[1] = 'darwin-keychain';
+    const sparseChecklist = { ...checklist(['darwin-keychain', 'linux-secret-service']), targetPlatforms: sparseTargets };
+    const checklistResult = evaluateCopilotHumanEvidencePackage(
+      request(['darwin-keychain', 'linux-secret-service']),
+      baseReport(),
+      sparseChecklist
+    );
+    expect(checklistResult.status).toBe('blocked');
+    expect(checklistResult.admission.targetPlatforms).toEqual([]);
+    expect(checklistResult.admission.issues.map((issue) => issue.code)).toContain('invalid-checklist');
+  });
+
   it('keeps the package layer pure and delegated to the existing admission gate', () => {
     const source = readFileSync(sourceUrl, 'utf8');
 
