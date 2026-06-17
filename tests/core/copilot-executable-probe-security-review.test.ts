@@ -72,6 +72,10 @@ function issueCodes(result: CopilotExecutableProbeSecurityReviewResult): string[
   return result.issues.map((issue) => issue.code);
 }
 
+function issueCount(result: CopilotExecutableProbeSecurityReviewResult, code: string): number {
+  return issueCodes(result).filter((entry) => entry === code).length;
+}
+
 function expectNoEcho(text: string, ...values: string[]): void {
   for (const value of values) {
     expect(text).not.toContain(value);
@@ -129,6 +133,20 @@ describe('Copilot executable probe security review gate', () => {
     missingDenylist.commandPolicy.deniedToolClasses = ['raw-credential-output'];
     expect(issueCodes(evaluateCopilotExecutableProbeSecurityReview(missingDenylist))).toContain('missing-denylist');
 
+    const duplicateAllowlist = baseProposal();
+    duplicateAllowlist.commandPolicy.allowedToolClasses = [
+      ...duplicateAllowlist.commandPolicy.allowedToolClasses,
+      'redaction-only'
+    ];
+    expect(issueCodes(evaluateCopilotExecutableProbeSecurityReview(duplicateAllowlist))).toContain('missing-tool-policy');
+
+    const duplicateDenylist = baseProposal();
+    duplicateDenylist.commandPolicy.deniedToolClasses = [
+      ...duplicateDenylist.commandPolicy.deniedToolClasses,
+      'source-schema-wiring'
+    ];
+    expect(issueCodes(evaluateCopilotExecutableProbeSecurityReview(duplicateDenylist))).toContain('missing-denylist');
+
     const missingEnvironment = baseProposal();
     missingEnvironment.environmentPolicy.isolatedConfigHomeRequired = false;
     expect(issueCodes(evaluateCopilotExecutableProbeSecurityReview(missingEnvironment))).toContain('missing-environment-policy');
@@ -159,6 +177,7 @@ describe('Copilot executable probe security review gate', () => {
     expect(claimedResult.status).toBe('rejected');
     expect(issueCodes(claimedResult)).toContain('product-support-claim');
     expect(issueCodes(claimedResult)).toContain('platform-proof-claim');
+    expect(issueCount(claimedResult, 'platform-proof-claim')).toBe(1);
 
     const broad = baseProposal();
     broad.commandPolicy.permissionMode = 'broad-allow-all';
@@ -180,11 +199,13 @@ describe('Copilot executable probe security review gate', () => {
   it('rejects unsafe evidence and unknown freeform fields without echoing submitted values', () => {
     const token = ['gh', 'p', '_', 'A'.repeat(24)].join('');
     const key = ['gh', 'p', '_', 'B'.repeat(24)].join('');
+    const nestedKey = ['gh', 'p', '_', 'D'.repeat(24)].join('');
     const rawOutput = 'synthetic raw transcript that must not echo';
     const proposal = {
       ...baseProposal(),
       diagnostic: token,
-      [key]: rawOutput
+      [key]: rawOutput,
+      [nestedKey]: { productSupport: true }
     };
 
     const result = evaluateCopilotExecutableProbeSecurityReview(proposal);
@@ -195,7 +216,20 @@ describe('Copilot executable probe security review gate', () => {
     expect(issueCodes(result)).toContain('unknown-proposal-key');
     expect(serialized).toContain('$.<redacted-key>');
     expect(serialized).toContain('$.<unknown-key>');
-    expectNoEcho(serialized, token, key, rawOutput);
+    expectNoEcho(serialized, token, key, nestedKey, rawOutput);
+  });
+
+  it('rejects unsafe raw output policy values while allowing the safe policy literal', () => {
+    const safe = baseProposal();
+    expect(evaluateCopilotExecutableProbeSecurityReview(safe).status).toBe('eligible-for-implementation-review');
+
+    const unsafe = baseProposal() as unknown as { outputPolicy: { rawLocalOutputPolicy: unknown } };
+    unsafe.outputPolicy.rawLocalOutputPolicy = 'raw transcript retained';
+    const result = evaluateCopilotExecutableProbeSecurityReview(unsafe);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('missing-output-policy');
   });
 
   it('prioritizes unsafe rejection over deferred and blocked findings', () => {
@@ -215,6 +249,17 @@ describe('Copilot executable probe security review gate', () => {
     expect(issueCodes(result)).toContain('unsupported-collection-intent');
     expect(issueCodes(result)).toContain('missing-review-precondition');
     expectNoEcho(serialized, token);
+  });
+
+  it('returns structured invalid metadata instead of recursing forever on cyclic objects', () => {
+    const cyclic = baseProposal() as unknown as Record<string, unknown>;
+    cyclic.self = cyclic;
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(cyclic);
+
+    expect(result.status).toBe('blocked');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(JSON.stringify(result)).toContain('Proposal metadata must be acyclic.');
   });
 
   it('keeps the gate pure and disconnected from executable/product wiring', () => {

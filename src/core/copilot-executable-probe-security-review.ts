@@ -206,13 +206,21 @@ const PLATFORM_PROOF_CLAIM_KEYS = new Set([
   'prooflevel',
   'platformproof',
   'platformproofcomplete',
-  'platformproofclaimedcomplete',
   'proofcomplete'
 ]);
 const SAFE_UNSAFE_SCANNER_POLICY_PATHS = new Set([
   '$.outputPolicy.rawLocalOutputPolicy',
   '$.outputPolicy.forbidHashesAndFingerprints'
 ]);
+const ALL_SCHEMA_KEYS = new Set([
+  ...ROOT_KEYS,
+  ...COMMAND_POLICY_KEYS,
+  ...ENVIRONMENT_POLICY_KEYS,
+  ...OUTPUT_POLICY_KEYS,
+  ...CLEANUP_POLICY_KEYS,
+  ...REVIEW_POLICY_KEYS
+]);
+const MAX_PROPOSAL_SCAN_DEPTH = 64;
 
 function isPlainObject(value: unknown): value is JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -225,7 +233,7 @@ function normalizeKey(key: string): string {
 }
 
 function childPath(path: string, key: string): string {
-  return `${path}.${ROOT_KEYS.has(key) || /^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(key) ? key : '<unknown-key>'}`;
+  return `${path}.${ALL_SCHEMA_KEYS.has(key) ? key : '<unknown-key>'}`;
 }
 
 function issue(
@@ -246,17 +254,73 @@ function collectUnknownKeyIssues(value: unknown, allowed: ReadonlySet<string>, p
 
 function collectUnsafeIssues(proposal: unknown): BucketedIssue[] {
   return collectCopilotCredentialProofUnsafeEvidence(proposal)
-    .filter((finding) => !(finding.kind === 'forbidden-key' && SAFE_UNSAFE_SCANNER_POLICY_PATHS.has(finding.path)))
+    .filter((finding) => !(finding.kind === 'forbidden-key' && isSafeScannerPolicyFinding(proposal, finding.path)))
     .map((finding) =>
       issue('rejected', 'unsafe-evidence', finding.path, 'Unsafe credential evidence is present; key path only is reported.')
     );
 }
 
-function collectClaimIssues(value: unknown, path = '$'): BucketedIssue[] {
+function collectShapeIssues(
+  value: unknown,
+  path = '$',
+  seen: WeakSet<object> = new WeakSet(),
+  depth = 0
+): BucketedIssue[] {
+  if (value === null || typeof value !== 'object') return [];
+  if (depth > MAX_PROPOSAL_SCAN_DEPTH) {
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata exceeds the maximum supported depth.')];
+  }
+  if (seen.has(value)) {
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must be acyclic.')];
+  }
+  seen.add(value);
+
+  const issues: BucketedIssue[] = [];
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') {
+      issues.push(issue('blocked', 'invalid-proposal', `${path}.<unknown-key>`, 'Proposal metadata must use string keys only.'));
+      continue;
+    }
+    if (Array.isArray(value) && key === 'length') continue;
+    const descriptor = descriptors[key];
+    if (!descriptor || descriptor.get || descriptor.set) {
+      issues.push(issue('blocked', 'invalid-proposal', childPath(path, key), 'Proposal metadata must not contain accessors.'));
+      continue;
+    }
+    const child = descriptor.value;
+    const nextPath = Array.isArray(value) && /^\d+$/.test(key) ? `${path}[${key}]` : childPath(path, key);
+    issues.push(...collectShapeIssues(child, nextPath, seen, depth + 1));
+  }
+
+  seen.delete(value);
+  return issues;
+}
+
+function isSafeScannerPolicyFinding(proposal: unknown, path: string): boolean {
+  if (!SAFE_UNSAFE_SCANNER_POLICY_PATHS.has(path) || !isPlainObject(proposal) || !isPlainObject(proposal.outputPolicy)) {
+    return false;
+  }
+  if (path === '$.outputPolicy.rawLocalOutputPolicy') {
+    return proposal.outputPolicy.rawLocalOutputPolicy === 'discard-before-review';
+  }
+  if (path === '$.outputPolicy.forbidHashesAndFingerprints') {
+    return proposal.outputPolicy.forbidHashesAndFingerprints === true;
+  }
+  return false;
+}
+
+function collectClaimIssues(value: unknown, path = '$', seen: WeakSet<object> = new WeakSet()): BucketedIssue[] {
   if (Array.isArray(value)) {
-    return value.flatMap((entry, index) => collectClaimIssues(entry, `${path}[${index}]`));
+    if (seen.has(value)) return [];
+    seen.add(value);
+    const issues = value.flatMap((entry, index) => collectClaimIssues(entry, `${path}[${index}]`, seen));
+    seen.delete(value);
+    return issues;
   }
   if (!isPlainObject(value)) return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
 
   const issues: BucketedIssue[] = [];
   for (const [key, child] of Object.entries(value)) {
@@ -269,8 +333,9 @@ function collectClaimIssues(value: unknown, path = '$'): BucketedIssue[] {
     if (present && PLATFORM_PROOF_CLAIM_KEYS.has(normalized)) {
       issues.push(issue('rejected', 'platform-proof-claim', candidatePath, 'Completed platform-proof claims are not admissible.'));
     }
-    issues.push(...collectClaimIssues(child, candidatePath));
+    issues.push(...collectClaimIssues(child, candidatePath, seen));
   }
+  seen.delete(value);
   return issues;
 }
 
@@ -292,6 +357,9 @@ function exactSetIssues<T extends string>(
   for (const [index, entry] of values.entries()) {
     if (typeof entry !== 'string' || !required.has(entry as T)) {
       return [issue('blocked', code, `${path}[${index}]`, 'Proposal enum array contains an unsupported value.')];
+    }
+    if (actual.has(entry as T)) {
+      return [issue('blocked', code, `${path}[${index}]`, 'Proposal enum array must not contain duplicate values.')];
     }
     actual.add(entry as T);
   }
@@ -405,12 +473,16 @@ function statusFor(issues: readonly BucketedIssue[]): CopilotExecutableProbeSecu
 export function evaluateCopilotExecutableProbeSecurityReview(
   proposal: unknown
 ): CopilotExecutableProbeSecurityReviewResult {
-  const issues: BucketedIssue[] = [...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal)];
+  const shapeIssues = collectShapeIssues(proposal);
+  const issues: BucketedIssue[] = [...shapeIssues];
   let targetPlatforms: CopilotExecutableProbePlatform[] = [];
 
   if (!isPlainObject(proposal)) {
     issues.push(issue('blocked', 'invalid-proposal', '$', 'Proposal must be a value-free object.'));
+  } else if (shapeIssues.length > 0) {
+    // Accessor/cyclic/deep metadata is not safe to inspect with the normal schema checks.
   } else {
+    issues.push(...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal));
     issues.push(...collectUnknownKeyIssues(proposal, ROOT_KEYS, '$'));
     if (proposal.schemaVersion !== 1) {
       issues.push(issue('blocked', 'invalid-proposal', '$.schemaVersion', 'Proposal schemaVersion must be 1.'));
