@@ -14,6 +14,8 @@ import {
   isCopilotExecutableProbePlatformProofClaimKey,
   isCopilotExecutableProbeProductSupportClaimKey,
   isCopilotForbiddenEvidenceKey,
+  isCopilotRealLabelPresent,
+  isCopilotTokenShapePresent,
   normalizeCopilotMetadataKey
 } from './copilot-metadata-boundary-taxonomy.js';
 
@@ -215,15 +217,6 @@ const DESCRIPTOR_SAFE_UNSAFE_NORMALIZED_KEYS: ReadonlySet<string> = new Set(
   [...ALL_SCHEMA_KEYS].filter((key) => key !== 'rawLocalOutputPolicy').map((key) => normalizeCopilotMetadataKey(key))
 );
 const MAX_PROPOSAL_SCAN_DEPTH = 64;
-const TOKEN_SHAPE_PATTERNS = [
-  new RegExp('\\bgh[pousr]' + '_[A-Za-z0-9_]{10,}\\b'),
-  new RegExp('\\bgithub' + '_pat' + '_[A-Za-z0-9_]{10,}\\b'),
-  new RegExp('\\bsk' + '-[A-Za-z0-9]{12,}\\b'),
-  new RegExp('\\bxox[baprs]' + '-[A-Za-z0-9-]{8,}\\b'),
-  new RegExp('\\bey' + 'J[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b'),
-  /\b[A-Fa-f0-9]{64,}\b/
-] as const;
-const EMAIL_LIKE_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 
 function isPlainObject(value: unknown): value is JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -259,15 +252,6 @@ function collectUnsafeIssues(proposal: unknown): BucketedIssue[] {
     );
 }
 
-function tokenShapePresent(value: string): boolean {
-  return TOKEN_SHAPE_PATTERNS.some((pattern) => pattern.test(value));
-}
-
-function realLabelPresent(value: string): boolean {
-  const matches = value.match(EMAIL_LIKE_RE) ?? [];
-  return matches.some((match) => !match.toLowerCase().endsWith('@fixture.example'));
-}
-
 function descriptorHasPresentValue(descriptor: PropertyDescriptor | undefined): boolean {
   if (!descriptor) return false;
   if (descriptor.get || descriptor.set) return true;
@@ -282,7 +266,7 @@ function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: t
 
 function descriptorSafeChildPath(path: string, key: string, parentIsArray: boolean): string {
   if (parentIsArray && /^\d+$/.test(key)) return `${path}[${key}]`;
-  if (tokenShapePresent(key) || realLabelPresent(key)) return `${path}.<redacted-key>`;
+  if (isCopilotTokenShapePresent(key) || isCopilotRealLabelPresent(key)) return `${path}.<redacted-key>`;
   return childPath(path, key);
 }
 
@@ -361,8 +345,8 @@ function collectDescriptorSafeRejectedIssues(
 ): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
   if (typeof value === 'string') {
-    if (tokenShapePresent(value)) issues.push(unsafeDescriptorIssue(path));
-    if (realLabelPresent(value)) issues.push(unsafeDescriptorIssue(path));
+    if (isCopilotTokenShapePresent(value)) issues.push(unsafeDescriptorIssue(path));
+    if (isCopilotRealLabelPresent(value)) issues.push(unsafeDescriptorIssue(path));
     return issues;
   }
   if (value === null || typeof value !== 'object' || depth > MAX_PROPOSAL_SCAN_DEPTH || seen.has(value)) {
@@ -375,18 +359,18 @@ function collectDescriptorSafeRejectedIssues(
   seen.add(value);
   const descriptors = Object.getOwnPropertyDescriptors(value);
   for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== 'string') continue;
     if (isArray && key === 'length') continue;
 
-    const descriptor = descriptors[key];
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
     const child = descriptorValue(descriptor);
-    const childPathForIssue = descriptorSafeChildPath(path, key, isArray);
+    const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<unknown-key>`;
     const present = descriptorHasPresentValue(descriptor);
 
-    if (tokenShapePresent(key)) issues.push(unsafeDescriptorIssue(childPathForIssue));
-    if (realLabelPresent(key)) issues.push(unsafeDescriptorIssue(childPathForIssue));
+    if (typeof key === 'string' && isCopilotTokenShapePresent(key)) issues.push(unsafeDescriptorIssue(childPathForIssue));
+    if (typeof key === 'string' && isCopilotRealLabelPresent(key)) issues.push(unsafeDescriptorIssue(childPathForIssue));
 
     if (
+      typeof key === 'string' &&
       present &&
       !isSafeScannerPolicyDescriptor(childPathForIssue, descriptor) &&
       isCopilotForbiddenEvidenceKey(key, DESCRIPTOR_SAFE_UNSAFE_NORMALIZED_KEYS)
@@ -395,6 +379,7 @@ function collectDescriptorSafeRejectedIssues(
     }
 
     if (
+      typeof key === 'string' &&
       present &&
       !(path === '$' && key === 'productSupportClaimed') &&
       isCopilotExecutableProbeProductSupportClaimKey(key)
@@ -403,6 +388,7 @@ function collectDescriptorSafeRejectedIssues(
     }
 
     if (
+      typeof key === 'string' &&
       present &&
       !(path === '$' && key === 'platformProofClaimedComplete') &&
       isCopilotExecutableProbePlatformProofClaimKey(key)

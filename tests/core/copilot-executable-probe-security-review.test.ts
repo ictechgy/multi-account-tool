@@ -302,6 +302,24 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, token);
   });
 
+  it('rejects safely inspectable symbol-keyed values without echoing symbol details', () => {
+    const token = ['gh', 'p', '_', 'S'.repeat(24)].join('');
+    const symbolKey = Symbol('real.user@example.com');
+    const symbolBacked = baseProposal() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(symbolBacked, symbolKey, {
+      enumerable: true,
+      value: token
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(symbolBacked);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expectNoEcho(serialized, token, 'real.user@example.com');
+  });
+
   it('rejects accessor-backed claims without invoking the accessor', () => {
     const accessorBacked = baseProposal() as unknown as Record<string, unknown>;
     Object.defineProperty(accessorBacked, 'productSupport', {

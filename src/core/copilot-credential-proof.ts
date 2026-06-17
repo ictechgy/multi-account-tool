@@ -8,6 +8,8 @@
 
 import {
   isCopilotForbiddenEvidenceKey,
+  isCopilotRealLabelPresent,
+  isCopilotTokenShapePresent,
   normalizeCopilotMetadataKey
 } from './copilot-metadata-boundary-taxonomy.js';
 
@@ -203,16 +205,6 @@ const SAFE_METADATA_NORMALIZED_KEYS = new Set(
   [...ROOT_KEYS, ...PLATFORM_REPORT_KEYS, ...SELECTOR_KEYS].map((key) => normalizeKey(key))
 );
 
-const TOKEN_SHAPE_PATTERNS = [
-  new RegExp('\\bgh[pousr]' + '_[A-Za-z0-9_]{10,}\\b'),
-  new RegExp('\\bgithub' + '_pat' + '_[A-Za-z0-9_]{10,}\\b'),
-  new RegExp('\\bsk' + '-[A-Za-z0-9]{12,}\\b'),
-  new RegExp('\\bxox[baprs]' + '-[A-Za-z0-9-]{8,}\\b'),
-  new RegExp('\\bey' + 'J[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b'),
-  /\b[A-Fa-f0-9]{64,}\b/
-] as const;
-const EMAIL_LIKE_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
-
 function issue(code: CopilotCredentialProofIssueCode, path: string, message: string): CopilotCredentialProofIssue {
   return { code, path, message };
 }
@@ -254,22 +246,13 @@ function isValueFreeWindowsBindingProofContainer(path: string, key: string, chil
 }
 
 function safePathSegment(key: string): string {
-  if (tokenShapePresent(key) || realLabelPresent(key)) return '<redacted-key>';
+  if (isCopilotTokenShapePresent(key) || isCopilotRealLabelPresent(key)) return '<redacted-key>';
   if (/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(key)) return key;
   return '<redacted-key>';
 }
 
 function childPathForKey(path: string, key: string): string {
   return `${path}.${safePathSegment(key)}`;
-}
-
-function tokenShapePresent(value: string): boolean {
-  return TOKEN_SHAPE_PATTERNS.some((pattern) => pattern.test(value));
-}
-
-function realLabelPresent(value: string): boolean {
-  const matches = value.match(EMAIL_LIKE_RE) ?? [];
-  return matches.some((match) => !match.toLowerCase().endsWith('@fixture.example'));
 }
 
 export function collectCopilotCredentialProofUnsafeEvidence(
@@ -279,8 +262,8 @@ export function collectCopilotCredentialProofUnsafeEvidence(
   const findings: UnsafeEvidenceFinding[] = [];
 
   if (typeof value === 'string') {
-    if (tokenShapePresent(value)) findings.push({ kind: 'token-shaped-value', path });
-    if (realLabelPresent(value)) findings.push({ kind: 'real-label-value', path });
+    if (isCopilotTokenShapePresent(value)) findings.push({ kind: 'token-shaped-value', path });
+    if (isCopilotRealLabelPresent(value)) findings.push({ kind: 'real-label-value', path });
     return findings;
   }
 
@@ -295,8 +278,8 @@ export function collectCopilotCredentialProofUnsafeEvidence(
 
   for (const [key, child] of Object.entries(value)) {
     const childPath = childPathForKey(path, key);
-    if (tokenShapePresent(key)) findings.push({ kind: 'token-shaped-value', path: childPath });
-    if (realLabelPresent(key)) findings.push({ kind: 'real-label-value', path: childPath });
+    if (isCopilotTokenShapePresent(key)) findings.push({ kind: 'token-shaped-value', path: childPath });
+    if (isCopilotRealLabelPresent(key)) findings.push({ kind: 'real-label-value', path: childPath });
     if (
       !isValueFreeWindowsBindingProofContainer(path, key, child) &&
       isForbiddenEvidenceKey(key) &&
