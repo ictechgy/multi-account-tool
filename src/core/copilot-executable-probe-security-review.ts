@@ -274,13 +274,9 @@ function descriptorFromMap(descriptors: DescriptorRecord, key: PropertyKey): Pro
   return descriptors[key];
 }
 
-function descriptorHasTrueValue(value: object, key: string): boolean {
-  try {
-    const child = descriptorValue(Object.getOwnPropertyDescriptor(value, key));
-    return child.known && child.value === true;
-  } catch {
-    return false;
-  }
+function descriptorHasTrueValue(value: object, key: string, descriptorsByObject: WeakMap<object, DescriptorRecord>): boolean {
+  const child = descriptorValue(descriptorsByObject.get(value)?.[key]);
+  return child.known && child.value === true;
 }
 
 function descriptorSafeChildPath(path: string, key: string, parentIsArray: boolean): string {
@@ -299,7 +295,8 @@ function collectShapeIssues(
   value: unknown,
   path = '$',
   seen: WeakSet<object> = new WeakSet(),
-  depth = 0
+  depth = 0,
+  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap()
 ): BucketedIssue[] {
   if (typeof value === 'function') {
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.')];
@@ -312,11 +309,6 @@ function collectShapeIssues(
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must be acyclic.')];
   }
 
-  const isArray = Array.isArray(value);
-  if (!isArray && !isPlainObject(value)) {
-    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.')];
-  }
-
   seen.add(value);
   const issues: BucketedIssue[] = [];
   let descriptors: DescriptorRecord;
@@ -325,6 +317,13 @@ function collectShapeIssues(
   } catch {
     seen.delete(value);
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata descriptors could not be inspected safely.')];
+  }
+  descriptorsByObject.set(value, descriptors);
+
+  const isArray = Array.isArray(value);
+  if (!isArray && !isPlainObject(value)) {
+    seen.delete(value);
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.')];
   }
   if (isArray) {
     const lengthDescriptor = descriptors.length;
@@ -361,7 +360,7 @@ function collectShapeIssues(
       issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain hidden non-enumerable fields.'));
       continue;
     }
-    issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1));
+    issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1, descriptorsByObject));
   }
 
   seen.delete(value);
@@ -402,7 +401,8 @@ function collectDescriptorSafeRejectedIssues(
   value: unknown,
   path = '$',
   seen: WeakSet<object> = new WeakSet(),
-  depth = 0
+  depth = 0,
+  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap()
 ): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
   if (typeof value === 'string') {
@@ -415,16 +415,10 @@ function collectDescriptorSafeRejectedIssues(
   }
 
   const isArray = Array.isArray(value);
-  if (!isArray && !isPlainObject(value)) return issues;
+  const descriptors = descriptorsByObject.get(value);
+  if (!descriptors) return issues;
 
   seen.add(value);
-  let descriptors: DescriptorRecord;
-  try {
-    descriptors = Object.getOwnPropertyDescriptors(value) as DescriptorRecord;
-  } catch {
-    seen.delete(value);
-    return issues;
-  }
   for (const key of Reflect.ownKeys(descriptors)) {
     if (isArray && key === 'length') continue;
 
@@ -466,27 +460,30 @@ function collectDescriptorSafeRejectedIssues(
     }
 
     if (child.known) {
-      issues.push(...collectDescriptorSafeRejectedIssues(child.value, childPathForIssue, seen, depth + 1));
+      issues.push(...collectDescriptorSafeRejectedIssues(child.value, childPathForIssue, seen, depth + 1, descriptorsByObject));
     }
   }
   seen.delete(value);
   return issues;
 }
 
-function collectDescriptorSafeRootBoundaryIssues(proposal: JsonObject): BucketedIssue[] {
+function collectDescriptorSafeRootBoundaryIssues(
+  proposal: JsonObject,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>
+): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
-  if (descriptorHasTrueValue(proposal, 'runnableProbeAdded')) {
+  if (descriptorHasTrueValue(proposal, 'runnableProbeAdded', descriptorsByObject)) {
     issues.push(issue('rejected', 'executable-probe-present', '$.runnableProbeAdded', 'Runnable probes are not admissible in this gate.'));
   }
-  if (descriptorHasTrueValue(proposal, 'credentialStoreAccessedByMat')) {
+  if (descriptorHasTrueValue(proposal, 'credentialStoreAccessedByMat', descriptorsByObject)) {
     issues.push(
       issue('rejected', 'credential-store-accessed-by-mat', '$.credentialStoreAccessedByMat', 'Mat must not access credential stores in this gate.')
     );
   }
-  if (descriptorHasTrueValue(proposal, 'productSupportClaimed')) {
+  if (descriptorHasTrueValue(proposal, 'productSupportClaimed', descriptorsByObject)) {
     issues.push(issue('rejected', 'product-support-claim', '$.productSupportClaimed', 'Product support claims are not admissible.'));
   }
-  if (descriptorHasTrueValue(proposal, 'platformProofClaimedComplete')) {
+  if (descriptorHasTrueValue(proposal, 'platformProofClaimedComplete', descriptorsByObject)) {
     issues.push(issue('rejected', 'platform-proof-claim', '$.platformProofClaimedComplete', 'Platform proof completion claims are not admissible.'));
   }
   return issues;
@@ -654,15 +651,16 @@ function statusFor(issues: readonly BucketedIssue[]): CopilotExecutableProbeSecu
 export function evaluateCopilotExecutableProbeSecurityReview(
   proposal: unknown
 ): CopilotExecutableProbeSecurityReviewResult {
-  const shapeIssues = collectShapeIssues(proposal);
+  const descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap();
+  const shapeIssues = collectShapeIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject);
   const issues: BucketedIssue[] = [...shapeIssues];
   let targetPlatforms: CopilotExecutableProbePlatform[] = [];
 
   if (!isPlainObject(proposal)) {
     issues.push(issue('blocked', 'invalid-proposal', '$', 'Proposal must be a value-free object.'));
   } else if (shapeIssues.length > 0) {
-    issues.push(...collectDescriptorSafeRejectedIssues(proposal));
-    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal));
+    issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
+    issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal, descriptorsByObject));
   } else {
     issues.push(...collectUnsafeIssues(proposal), ...collectClaimIssues(proposal));
     issues.push(...collectUnknownKeyIssues(proposal, ROOT_KEYS, '$'));

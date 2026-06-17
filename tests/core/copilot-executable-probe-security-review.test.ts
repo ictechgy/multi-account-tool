@@ -398,7 +398,7 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, token);
   });
 
-  it('blocks non-plain nested objects and descriptor inspection failures without throwing', () => {
+  it('rejects own descriptor evidence on non-plain nested objects while still blocking empty non-plain shapes', () => {
     const nonPlainResult = evaluateCopilotExecutableProbeSecurityReview({
       ...baseProposal(),
       reviewPolicy: new Date('2026-01-01T00:00:00.000Z')
@@ -409,6 +409,25 @@ describe('Copilot executable probe security review gate', () => {
       expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.reviewPolicy' })])
     );
 
+    const nonPlainToken = ['gh', 'p', '_', 'N'.repeat(24)].join('');
+    class NonPlainEvidence {
+      diagnostic = nonPlainToken;
+      productSupport = true;
+    }
+    const evidenceResult = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      reviewPolicy: new NonPlainEvidence()
+    });
+    const serialized = JSON.stringify(evidenceResult);
+
+    expect(evidenceResult.status).toBe('rejected');
+    expect(issueCodes(evidenceResult)).toContain('invalid-proposal');
+    expect(issueCodes(evidenceResult)).toContain('unsafe-evidence');
+    expect(issueCodes(evidenceResult)).toContain('product-support-claim');
+    expectNoEcho(serialized, nonPlainToken);
+  });
+
+  it('blocks descriptor inspection failures without throwing', () => {
     const hostile = new Proxy(
       {},
       {
@@ -426,6 +445,42 @@ describe('Copilot executable probe security review gate', () => {
     expect(hostileResult?.issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'invalid-proposal', path: '$.reviewPolicy' })])
     );
+  });
+
+  it('uses the shape preflight descriptor snapshot for rejected scans without retrapping proxies', () => {
+    const token = ['gh', 'p', '_', 'P'.repeat(24)].join('');
+    const target = { ...baseProposal(), productSupportClaimed: true } as Record<string, unknown>;
+    Object.defineProperty(target, 'diagnostic', {
+      enumerable: false,
+      configurable: true,
+      value: token
+    });
+    let ownKeysCalls = 0;
+    const proxy = new Proxy(target, {
+      ownKeys(inner) {
+        ownKeysCalls += 1;
+        if (ownKeysCalls > 1) {
+          throw new Error('descriptor traps must not be called after shape preflight');
+        }
+        return Reflect.ownKeys(inner);
+      },
+      getOwnPropertyDescriptor(inner, key) {
+        return Reflect.getOwnPropertyDescriptor(inner, key);
+      },
+      getPrototypeOf(inner) {
+        return Reflect.getPrototypeOf(inner);
+      }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(proxy);
+    const serialized = JSON.stringify(result);
+
+    expect(ownKeysCalls).toBe(1);
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
   });
 
   it('rejects accessor-backed claims without invoking the accessor', () => {
