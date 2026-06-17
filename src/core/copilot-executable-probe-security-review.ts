@@ -291,6 +291,21 @@ function isCanonicalArrayIndexKey(key: string): boolean {
   return Number.isSafeInteger(index) && index >= 0 && index <= 4294967294 && String(index) === key;
 }
 
+function collectDescriptorChildShapeIssues(
+  descriptor: PropertyDescriptor | undefined,
+  childPathForIssue: string,
+  seen: WeakSet<object>,
+  depth: number,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>,
+  plainObjectsByObject: WeakMap<object, boolean>
+): BucketedIssue[] {
+  const child = descriptorValue(descriptor);
+  if (!child.known || child.value === null || (typeof child.value !== 'object' && typeof child.value !== 'function')) {
+    return [];
+  }
+  return collectShapeIssues(child.value, childPathForIssue, seen, depth + 1, descriptorsByObject, plainObjectsByObject);
+}
+
 function collectShapeIssues(
   value: unknown,
   path = '$',
@@ -321,16 +336,28 @@ function collectShapeIssues(
 
   if (typeof value === 'function') {
     plainObjectsByObject.set(objectValue, false);
+    issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.'));
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptorFromMap(descriptors, key);
+      const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, false) : `${path}.<redacted-key>`;
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPathForIssue, seen, depth, descriptorsByObject, plainObjectsByObject));
+    }
     seen.delete(objectValue);
-    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.')];
+    return issues;
   }
 
   const isArray = Array.isArray(value);
   const isPlain = !isArray && isPlainObject(value);
   plainObjectsByObject.set(objectValue, isPlain);
   if (!isArray && !isPlain) {
+    issues.push(issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.'));
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptorFromMap(descriptors, key);
+      const childPathForIssue = typeof key === 'string' ? descriptorSafeChildPath(path, key, false) : `${path}.<redacted-key>`;
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPathForIssue, seen, depth, descriptorsByObject, plainObjectsByObject));
+    }
     seen.delete(objectValue);
-    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.')];
+    return issues;
   }
   if (isArray) {
     const lengthDescriptor = descriptors.length;
@@ -348,23 +375,26 @@ function collectShapeIssues(
     }
   }
   for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptorFromMap(descriptors, key);
+    const nextPath = typeof key === 'string' ? descriptorSafeChildPath(path, key, isArray) : `${path}.<redacted-key>`;
     if (typeof key !== 'string') {
       issues.push(issue('blocked', 'invalid-proposal', `${path}.<unknown-key>`, 'Proposal metadata must use string keys only.'));
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, nextPath, seen, depth, descriptorsByObject, plainObjectsByObject));
       continue;
     }
     if (isArray && key === 'length') continue;
     if (isArray && !isCanonicalArrayIndexKey(key)) {
-      issues.push(issue('blocked', 'invalid-proposal', descriptorSafeChildPath(path, key, isArray), 'Proposal arrays must not contain non-index fields.'));
+      issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal arrays must not contain non-index fields.'));
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, nextPath, seen, depth, descriptorsByObject, plainObjectsByObject));
       continue;
     }
-    const descriptor = descriptorFromMap(descriptors, key);
-    const nextPath = descriptorSafeChildPath(path, key, isArray);
     if (!descriptor || descriptor.get || descriptor.set) {
       issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain accessors.'));
       continue;
     }
     if (!descriptor.enumerable) {
       issues.push(issue('blocked', 'invalid-proposal', nextPath, 'Proposal metadata must not contain hidden non-enumerable fields.'));
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, nextPath, seen, depth, descriptorsByObject, plainObjectsByObject));
       continue;
     }
     issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1, descriptorsByObject, plainObjectsByObject));

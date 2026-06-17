@@ -321,6 +321,25 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, token, 'real.user@example.com');
   });
 
+  it('rejects nested unsafe evidence under symbol-keyed object values', () => {
+    const token = ['gh', 'p', '_', 'Y'.repeat(24)].join('');
+    const symbolKey = Symbol('nested-real.user@example.com');
+    const symbolBacked = baseProposal() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(symbolBacked, symbolKey, {
+      enumerable: true,
+      value: { diagnostic: token, productSupport: true }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(symbolBacked);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token, 'nested-real.user@example.com');
+  });
+
   it('rejects non-enumerable unsafe evidence and claims that normal scanners would skip', () => {
     const token = ['sk', '-', 'H'.repeat(16)].join('');
     const hidden = baseProposal() as unknown as Record<string, unknown>;
@@ -331,6 +350,24 @@ describe('Copilot executable probe security review gate', () => {
     Object.defineProperty(hidden, 'productSupport', {
       enumerable: false,
       value: true
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(hidden);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('rejects nested unsafe evidence under non-enumerable object values', () => {
+    const token = ['gh', 'p', '_', 'H'.repeat(24)].join('');
+    const hidden = baseProposal() as unknown as Record<string, unknown>;
+    Object.defineProperty(hidden, 'hiddenBox', {
+      enumerable: false,
+      value: { diagnostic: token, productSupport: true }
     });
 
     const result = evaluateCopilotExecutableProbeSecurityReview(hidden);
@@ -383,7 +420,7 @@ describe('Copilot executable probe security review gate', () => {
     const sidePropertyTargets = ['darwin-keychain', 'linux-secret-service'];
     Object.defineProperty(sidePropertyTargets, 'diagnostic', {
       enumerable: true,
-      value: token
+      value: { nested: token, productSupport: true }
     });
 
     const sidePropertyResult = evaluateCopilotExecutableProbeSecurityReview({
@@ -395,6 +432,7 @@ describe('Copilot executable probe security review gate', () => {
     expect(sidePropertyResult.status).toBe('rejected');
     expect(issueCodes(sidePropertyResult)).toContain('invalid-proposal');
     expect(issueCodes(sidePropertyResult)).toContain('unsafe-evidence');
+    expect(issueCodes(sidePropertyResult)).toContain('product-support-claim');
     expectNoEcho(serialized, token);
   });
 
@@ -440,6 +478,10 @@ describe('Copilot executable probe security review gate', () => {
       enumerable: true,
       value: true
     });
+    Object.defineProperty(functionValue, 'payload', {
+      enumerable: true,
+      value: { diagnostic: token, platformProof: true }
+    });
 
     const result = evaluateCopilotExecutableProbeSecurityReview({
       ...baseProposal(),
@@ -451,6 +493,7 @@ describe('Copilot executable probe security review gate', () => {
     expect(issueCodes(result)).toContain('invalid-proposal');
     expect(issueCodes(result)).toContain('unsafe-evidence');
     expect(issueCodes(result)).toContain('product-support-claim');
+    expect(issueCodes(result)).toContain('platform-proof-claim');
     expectNoEcho(serialized, token);
   });
 
