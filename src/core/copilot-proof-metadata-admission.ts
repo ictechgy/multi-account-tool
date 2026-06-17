@@ -321,8 +321,10 @@ function collectShapeScanIssues(
   }
   if (isArray) {
     const lengthDescriptor = descriptors.length;
-    const length = typeof lengthDescriptor?.value === 'number' ? lengthDescriptor.value : (value as unknown[]).length;
-    if (!Number.isSafeInteger(length) || length < 0 || length > MAX_ADMISSION_ARRAY_LENGTH) {
+    const length = typeof lengthDescriptor?.value === 'number' ? lengthDescriptor.value : undefined;
+    if (length === undefined) {
+      issues.push({ path, message: 'Metadata arrays must expose a numeric length.' });
+    } else if (!Number.isSafeInteger(length) || length < 0 || length > MAX_ADMISSION_ARRAY_LENGTH) {
       issues.push({ path, message: 'Metadata arrays must stay within the supported admission size.' });
     } else {
       for (let index = 0; index < length; index += 1) {

@@ -351,6 +351,39 @@ describe('Copilot proof metadata admission gate', () => {
     );
   });
 
+  it('blocks array proxies with non-numeric descriptor length without reading live length', () => {
+    const hostilePlatforms = new Proxy([], {
+      getOwnPropertyDescriptor(target, key) {
+        if (key === 'length') {
+          return { value: 'bad-length', writable: true, enumerable: false, configurable: false };
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+      get() {
+        throw new Error('array length getter must not run');
+      }
+    });
+    const report = { ...baseReport(), platforms: hostilePlatforms };
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(false);
+    expect(result?.admission).toBe('blocked');
+    expect(result?.validation.platforms).toEqual([]);
+    expect(result?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'validator-failed',
+          source: 'validator',
+          path: '$.platforms'
+        })
+      ])
+    );
+  });
+
   it('rejects unsafe non-index array fields that downstream array iterators would skip', () => {
     const token = ['gh', 'p', '_', 'I'.repeat(24)].join('');
     const platforms = [...baseReport().platforms] as unknown[];
