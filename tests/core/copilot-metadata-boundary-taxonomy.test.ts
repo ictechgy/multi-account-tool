@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isCopilotExecutableProbePlatformProofClaimKey,
+  isCopilotExecutableProbeProductSupportClaimKey,
   isCopilotForbiddenEvidenceKey,
-  isCopilotPlatformProofClaimKey,
-  isCopilotProductOrProofClaimKey,
-  isCopilotProductSupportClaimKey,
+  isCopilotProofMetadataAdmissionClaimKey,
   normalizeCopilotMetadataKey
 } from '../../src/core/copilot-metadata-boundary-taxonomy.js';
 
@@ -15,17 +15,23 @@ describe('Copilot metadata boundary taxonomy', () => {
   });
 
   it('classifies forbidden evidence keys with caller-owned schema exemptions', () => {
-    expect(isCopilotForbiddenEvidenceKey('rawOutput')).toBe(true);
-    expect(isCopilotForbiddenEvidenceKey('tokenHash')).toBe(true);
-    expect(isCopilotForbiddenEvidenceKey('rawLocalOutputPolicy')).toBe(true);
+    expect(isCopilotForbiddenEvidenceKey('rawOutput', new Set())).toBe(true);
+    expect(isCopilotForbiddenEvidenceKey('tokenHash', new Set())).toBe(true);
+    expect(isCopilotForbiddenEvidenceKey('rawLocalOutputPolicy', new Set())).toBe(true);
     expect(isCopilotForbiddenEvidenceKey('rawLocalOutputPolicy', new Set(['rawlocaloutputpolicy']))).toBe(false);
   });
 
-  it('separates product-support and platform-proof claim taxonomy', () => {
-    expect(isCopilotProductSupportClaimKey('productSupportClaimed')).toBe(true);
-    expect(isCopilotProductSupportClaimKey('runtimeWiring')).toBe(true);
-    expect(isCopilotPlatformProofClaimKey('platformProofClaimedComplete')).toBe(true);
-    expect(isCopilotPlatformProofClaimKey('proofLevel')).toBe(true);
-    expect(isCopilotProductOrProofClaimKey('proofLevel')).toBe(true);
+  it('keeps gate-specific claim taxonomy explicit in the shared module', () => {
+    expect(isCopilotProofMetadataAdmissionClaimKey('productSupportClaimed')).toBe(true);
+    expect(isCopilotProofMetadataAdmissionClaimKey('sourceType')).toBe(true);
+    expect(isCopilotProofMetadataAdmissionClaimKey('platformProofClaimedComplete')).toBe(true);
+    expect(isCopilotProofMetadataAdmissionClaimKey('platformProof')).toBe(false);
+    expect(isCopilotProofMetadataAdmissionClaimKey('proofComplete')).toBe(false);
+
+    expect(isCopilotExecutableProbeProductSupportClaimKey('runtimeWiring')).toBe(true);
+    expect(isCopilotExecutableProbeProductSupportClaimKey('sourceType')).toBe(false);
+    expect(isCopilotExecutableProbeProductSupportClaimKey('productSupportClaimed')).toBe(false);
+    expect(isCopilotExecutableProbePlatformProofClaimKey('platformProof')).toBe(true);
+    expect(isCopilotExecutableProbePlatformProofClaimKey('platformProofClaimedComplete')).toBe(false);
   });
 });

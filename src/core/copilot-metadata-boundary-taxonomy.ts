@@ -3,10 +3,9 @@
  *
  * These normalized key sets are intentionally centralized so metadata-only gates
  * reject credential evidence, product-support claims, and completed-proof claims
- * consistently as the proof schemas evolve.
+ * without duplicating string taxonomies in each gate. Claim predicates stay
+ * gate-specific because each gate has a different schema contract.
  */
-
-const EMPTY_SAFE_METADATA_NORMALIZED_KEYS: ReadonlySet<string> = new Set();
 
 export const COPILOT_FORBIDDEN_EVIDENCE_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
   'securityoutput',
@@ -44,8 +43,11 @@ export const COPILOT_FORBIDDEN_EVIDENCE_NORMALIZED_KEYS: ReadonlySet<string> = n
   'label'
 ]);
 
-export const COPILOT_PRODUCT_SUPPORT_CLAIM_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
+const COPILOT_PROOF_METADATA_ADMISSION_CLAIM_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
   'productsupport',
+  'prooflevel',
+  'platformproofcomplete',
+  'platformproofclaimedcomplete',
   'supportstatus',
   'builtin',
   'sourcetype',
@@ -56,11 +58,20 @@ export const COPILOT_PRODUCT_SUPPORT_CLAIM_NORMALIZED_KEYS: ReadonlySet<string> 
   'platformsupport'
 ]);
 
-export const COPILOT_PLATFORM_PROOF_CLAIM_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
+const COPILOT_EXECUTABLE_PROBE_PRODUCT_SUPPORT_CLAIM_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
+  'productsupport',
+  'supportstatus',
+  'builtin',
+  'copilotbuiltin',
+  'runtimewiring',
+  'productwiring',
+  'platformsupport'
+]);
+
+const COPILOT_EXECUTABLE_PROBE_PLATFORM_PROOF_CLAIM_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
   'prooflevel',
   'platformproof',
   'platformproofcomplete',
-  'platformproofclaimedcomplete',
   'proofcomplete'
 ]);
 
@@ -70,7 +81,7 @@ export function normalizeCopilotMetadataKey(key: string): string {
 
 export function isCopilotForbiddenEvidenceKey(
   key: string,
-  safeMetadataNormalizedKeys: ReadonlySet<string> = EMPTY_SAFE_METADATA_NORMALIZED_KEYS
+  safeMetadataNormalizedKeys: ReadonlySet<string>
 ): boolean {
   const normalized = normalizeCopilotMetadataKey(key);
   if (safeMetadataNormalizedKeys.has(normalized)) return false;
@@ -88,14 +99,14 @@ export function isCopilotForbiddenEvidenceKey(
   );
 }
 
-export function isCopilotProductSupportClaimKey(key: string): boolean {
-  return COPILOT_PRODUCT_SUPPORT_CLAIM_NORMALIZED_KEYS.has(normalizeCopilotMetadataKey(key));
+export function isCopilotProofMetadataAdmissionClaimKey(key: string): boolean {
+  return COPILOT_PROOF_METADATA_ADMISSION_CLAIM_NORMALIZED_KEYS.has(normalizeCopilotMetadataKey(key));
 }
 
-export function isCopilotPlatformProofClaimKey(key: string): boolean {
-  return COPILOT_PLATFORM_PROOF_CLAIM_NORMALIZED_KEYS.has(normalizeCopilotMetadataKey(key));
+export function isCopilotExecutableProbeProductSupportClaimKey(key: string): boolean {
+  return COPILOT_EXECUTABLE_PROBE_PRODUCT_SUPPORT_CLAIM_NORMALIZED_KEYS.has(normalizeCopilotMetadataKey(key));
 }
 
-export function isCopilotProductOrProofClaimKey(key: string): boolean {
-  return isCopilotProductSupportClaimKey(key) || isCopilotPlatformProofClaimKey(key);
+export function isCopilotExecutableProbePlatformProofClaimKey(key: string): boolean {
+  return COPILOT_EXECUTABLE_PROBE_PLATFORM_PROOF_CLAIM_NORMALIZED_KEYS.has(normalizeCopilotMetadataKey(key));
 }

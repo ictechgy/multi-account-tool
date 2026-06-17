@@ -11,8 +11,8 @@ import {
   type CopilotCredentialProofPlatform
 } from './copilot-credential-proof.js';
 import {
-  isCopilotPlatformProofClaimKey,
-  isCopilotProductSupportClaimKey
+  isCopilotExecutableProbePlatformProofClaimKey,
+  isCopilotExecutableProbeProductSupportClaimKey
 } from './copilot-metadata-boundary-taxonomy.js';
 
 export type CopilotExecutableProbeSecurityReviewStatus =
@@ -311,10 +311,10 @@ function collectClaimIssues(value: unknown, path = '$', seen: WeakSet<object> = 
   for (const [key, child] of Object.entries(value)) {
     const candidatePath = childPath(path, key);
     const present = child !== false && child !== null && child !== undefined && !(typeof child === 'string' && child.trim() === '');
-    if (present && candidatePath !== '$.productSupportClaimed' && isCopilotProductSupportClaimKey(key)) {
+    if (present && !(path === '$' && key === 'productSupportClaimed') && isCopilotExecutableProbeProductSupportClaimKey(key)) {
       issues.push(issue('rejected', 'product-support-claim', candidatePath, 'Product support claims are not admissible.'));
     }
-    if (present && candidatePath !== '$.platformProofClaimedComplete' && isCopilotPlatformProofClaimKey(key)) {
+    if (present && !(path === '$' && key === 'platformProofClaimedComplete') && isCopilotExecutableProbePlatformProofClaimKey(key)) {
       issues.push(issue('rejected', 'platform-proof-claim', candidatePath, 'Completed platform-proof claims are not admissible.'));
     }
     issues.push(...collectClaimIssues(child, candidatePath, seen));

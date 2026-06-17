@@ -17,7 +17,7 @@ import {
 } from './copilot-credential-proof.js';
 import {
   isCopilotForbiddenEvidenceKey,
-  isCopilotProductOrProofClaimKey,
+  isCopilotProofMetadataAdmissionClaimKey,
   normalizeCopilotMetadataKey
 } from './copilot-metadata-boundary-taxonomy.js';
 
@@ -464,7 +464,7 @@ function collectDescriptorSafeRejectedIssues(
       issues.push(unsafeAdmissionIssue(source, childPath));
     }
 
-    if (isCopilotProductOrProofClaimKey(key) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
+    if (isCopilotProofMetadataAdmissionClaimKey(key) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
       issues.push(
         admissionIssue(
           'rejected',
@@ -502,7 +502,7 @@ function collectProductClaimIssues(
   const issues: BucketedIssue[] = [];
   for (const [key, child] of Object.entries(value)) {
     const childPath = childPathForKey(path, key);
-    if (isCopilotProductOrProofClaimKey(key) && isNonEmptyEvidenceValue(child)) {
+    if (isCopilotProofMetadataAdmissionClaimKey(key) && isNonEmptyEvidenceValue(child)) {
       issues.push(
         admissionIssue(
           'rejected',
