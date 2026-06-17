@@ -427,6 +427,50 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, nonPlainToken);
   });
 
+  it('rejects own descriptor evidence on function values without invoking them', () => {
+    const token = ['gh', 'p', '_', 'F'.repeat(24)].join('');
+    const functionValue = () => {
+      throw new Error('function must not run');
+    };
+    Object.defineProperty(functionValue, 'diagnostic', {
+      enumerable: true,
+      value: token
+    });
+    Object.defineProperty(functionValue, 'productSupport', {
+      enumerable: true,
+      value: true
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview({
+      ...baseProposal(),
+      reviewPolicy: functionValue
+    });
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
+  it('rejects own descriptor evidence on non-plain root proposals', () => {
+    const token = ['gh', 'p', '_', 'R'.repeat(24)].join('');
+    class RootProposal {
+      diagnostic = token;
+      productSupportClaimed = true;
+    }
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(new RootProposal());
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toContain('invalid-proposal');
+    expect(issueCodes(result)).toContain('unsafe-evidence');
+    expect(issueCodes(result)).toContain('product-support-claim');
+    expectNoEcho(serialized, token);
+  });
+
   it('blocks descriptor inspection failures without throwing', () => {
     const hostile = new Proxy(
       {},

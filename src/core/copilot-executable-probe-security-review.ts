@@ -298,31 +298,34 @@ function collectShapeIssues(
   depth = 0,
   descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap()
 ): BucketedIssue[] {
-  if (typeof value === 'function') {
-    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.')];
-  }
-  if (value === null || typeof value !== 'object') return [];
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return [];
   if (depth > MAX_PROPOSAL_SCAN_DEPTH) {
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata exceeds the maximum supported depth.')];
   }
-  if (seen.has(value)) {
+  const objectValue = value as object;
+  if (seen.has(objectValue)) {
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must be acyclic.')];
   }
 
-  seen.add(value);
+  seen.add(objectValue);
   const issues: BucketedIssue[] = [];
   let descriptors: DescriptorRecord;
   try {
     descriptors = Object.getOwnPropertyDescriptors(value) as DescriptorRecord;
   } catch {
-    seen.delete(value);
+    seen.delete(objectValue);
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata descriptors could not be inspected safely.')];
   }
-  descriptorsByObject.set(value, descriptors);
+  descriptorsByObject.set(objectValue, descriptors);
+
+  if (typeof value === 'function') {
+    seen.delete(objectValue);
+    return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata values must be JSON-like data, not functions.')];
+  }
 
   const isArray = Array.isArray(value);
   if (!isArray && !isPlainObject(value)) {
-    seen.delete(value);
+    seen.delete(objectValue);
     return [issue('blocked', 'invalid-proposal', path, 'Proposal metadata must contain only plain objects, arrays, and primitive values.')];
   }
   if (isArray) {
@@ -363,7 +366,7 @@ function collectShapeIssues(
     issues.push(...collectShapeIssues(descriptor.value, nextPath, seen, depth + 1, descriptorsByObject));
   }
 
-  seen.delete(value);
+  seen.delete(objectValue);
   return issues;
 }
 
@@ -410,15 +413,21 @@ function collectDescriptorSafeRejectedIssues(
     if (isCopilotRealLabelPresent(value)) issues.push(unsafeDescriptorIssue(path));
     return issues;
   }
-  if (value === null || typeof value !== 'object' || depth > MAX_PROPOSAL_SCAN_DEPTH || seen.has(value)) {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function') ||
+    depth > MAX_PROPOSAL_SCAN_DEPTH ||
+    seen.has(value as object)
+  ) {
     return issues;
   }
 
   const isArray = Array.isArray(value);
-  const descriptors = descriptorsByObject.get(value);
+  const objectValue = value as object;
+  const descriptors = descriptorsByObject.get(objectValue);
   if (!descriptors) return issues;
 
-  seen.add(value);
+  seen.add(objectValue);
   for (const key of Reflect.ownKeys(descriptors)) {
     if (isArray && key === 'length') continue;
 
@@ -463,12 +472,12 @@ function collectDescriptorSafeRejectedIssues(
       issues.push(...collectDescriptorSafeRejectedIssues(child.value, childPathForIssue, seen, depth + 1, descriptorsByObject));
     }
   }
-  seen.delete(value);
+  seen.delete(objectValue);
   return issues;
 }
 
 function collectDescriptorSafeRootBoundaryIssues(
-  proposal: JsonObject,
+  proposal: object,
   descriptorsByObject: WeakMap<object, DescriptorRecord>
 ): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
@@ -655,9 +664,14 @@ export function evaluateCopilotExecutableProbeSecurityReview(
   const shapeIssues = collectShapeIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject);
   const issues: BucketedIssue[] = [...shapeIssues];
   let targetPlatforms: CopilotExecutableProbePlatform[] = [];
+  const descriptorInspectableRoot = proposal !== null && (typeof proposal === 'object' || typeof proposal === 'function');
 
   if (!isPlainObject(proposal)) {
     issues.push(issue('blocked', 'invalid-proposal', '$', 'Proposal must be a value-free object.'));
+    if (shapeIssues.length > 0 && descriptorInspectableRoot) {
+      issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
+      issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal as object, descriptorsByObject));
+    }
   } else if (shapeIssues.length > 0) {
     issues.push(...collectDescriptorSafeRejectedIssues(proposal, '$', new WeakSet(), 0, descriptorsByObject));
     issues.push(...collectDescriptorSafeRootBoundaryIssues(proposal, descriptorsByObject));
