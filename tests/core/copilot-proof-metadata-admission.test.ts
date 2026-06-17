@@ -178,6 +178,20 @@ describe('Copilot proof metadata admission gate', () => {
     expectNoEcho(serialized, 'enabled', 'platform-proof-complete');
   });
 
+  it('preserves admission-specific proof claim taxonomy while centralizing keys', () => {
+    const report = {
+      ...baseReport(),
+      platformProof: 'synthetic metadata field',
+      proofComplete: true
+    };
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+
+    expect(result.admission).toBe('blocked');
+    expect(result.issues.map((issue) => issue.code)).toContain('validator-failed');
+    expect(result.issues.map((issue) => issue.code)).not.toContain('product-support-claim');
+  });
+
   it('rejects support claims and forbidden evidence when the report is supplied as a JSON string', () => {
     const rawOutput = 'synthetic JSON-string raw output that must not echo';
     const report = JSON.stringify({

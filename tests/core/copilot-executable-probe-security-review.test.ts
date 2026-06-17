@@ -177,11 +177,30 @@ describe('Copilot executable probe security review gate', () => {
     expect(claimedResult.status).toBe('rejected');
     expect(issueCodes(claimedResult)).toContain('product-support-claim');
     expect(issueCodes(claimedResult)).toContain('platform-proof-claim');
+    expect(issueCount(claimedResult, 'product-support-claim')).toBe(1);
     expect(issueCount(claimedResult, 'platform-proof-claim')).toBe(1);
 
     const broad = baseProposal();
     broad.commandPolicy.permissionMode = 'broad-allow-all';
     expect(issueCodes(evaluateCopilotExecutableProbeSecurityReview(broad))).toContain('broad-permission-mode');
+  });
+
+  it('keeps executable-review claim taxonomy gate-specific while preserving root preconditions', () => {
+    const sourceType = { ...baseProposal(), sourceType: 'metadata-only' } as unknown as Record<string, unknown>;
+    const sourceTypeResult = evaluateCopilotExecutableProbeSecurityReview(sourceType);
+
+    expect(sourceTypeResult.status).toBe('rejected');
+    expect(issueCodes(sourceTypeResult)).toContain('unknown-proposal-key');
+    expect(issueCodes(sourceTypeResult)).not.toContain('product-support-claim');
+
+    const nestedProof = {
+      ...baseProposal(),
+      reviewPolicy: { ...baseProposal().reviewPolicy, platformProof: true }
+    };
+    const nestedProofResult = evaluateCopilotExecutableProbeSecurityReview(nestedProof);
+
+    expect(issueCodes(nestedProofResult)).toContain('unknown-proposal-key');
+    expect(issueCodes(nestedProofResult)).toContain('platform-proof-claim');
   });
 
   it('defers unsupported future collection modes and implementation-in-this-change requests', () => {
