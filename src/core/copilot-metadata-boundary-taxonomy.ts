@@ -7,7 +7,7 @@
  * gate-specific because each gate has a different schema contract.
  */
 
-export const COPILOT_FORBIDDEN_EVIDENCE_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
+const COPILOT_FORBIDDEN_EVIDENCE_NORMALIZED_KEYS: ReadonlySet<string> = new Set([
   'securityoutput',
   'secrettooloutput',
   'rawoutput',
