@@ -238,6 +238,25 @@ describe('Copilot executable probe security review gate', () => {
     expectNoEcho(serialized, token, key, nestedKey, rawOutput);
   });
 
+  it('preserves own __proto__ proposal metadata as inert snapshot data before unsafe scans', () => {
+    const token = ['gh', 'p', '_', 'P'.repeat(24)].join('');
+    const proposal = baseProposal() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(proposal, '__proto__', {
+      enumerable: true,
+      configurable: true,
+      value: { rawOutput: token, productSupport: 'enabled' }
+    });
+
+    const result = evaluateCopilotExecutableProbeSecurityReview(proposal);
+    const serialized = JSON.stringify(result);
+
+    expect(result.status).toBe('rejected');
+    expect(issueCodes(result)).toEqual(expect.arrayContaining(['unsafe-evidence', 'product-support-claim', 'unknown-proposal-key']));
+    expect(serialized).toContain('$.__proto__.rawOutput');
+    expect(serialized).toContain('$.<unknown-key>.<unknown-key>');
+    expectNoEcho(serialized, token, 'enabled');
+  });
+
   it('rejects unsafe raw output policy values while allowing the safe policy literal', () => {
     const safe = baseProposal();
     expect(evaluateCopilotExecutableProbeSecurityReview(safe).status).toBe('eligible-for-implementation-review');

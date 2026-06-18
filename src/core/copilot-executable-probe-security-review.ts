@@ -557,12 +557,19 @@ function materializeDescriptorSnapshot(
     return output;
   }
 
-  const output: JsonObject = {};
+  const output = Object.create(null) as JsonObject;
   seen.set(objectValue, output);
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== 'string') continue;
     const child = descriptorValue(descriptors[key]);
-    if (child.known) output[key] = materializeDescriptorSnapshot(child.value, descriptorsByObject, seen);
+    if (child.known) {
+      Object.defineProperty(output, key, {
+        value: materializeDescriptorSnapshot(child.value, descriptorsByObject, seen),
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
   }
   return output;
 }

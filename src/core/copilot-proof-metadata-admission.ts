@@ -81,6 +81,7 @@ export interface CopilotProofMetadataAdmissionResult {
 }
 
 type JsonObject = Record<string, unknown>;
+type DescriptorRecord = Record<PropertyKey, PropertyDescriptor | undefined>;
 
 type IssueBucket = 'rejected' | 'deferred' | 'blocked';
 
@@ -225,17 +226,36 @@ function collectShapeScanIssues(
   value: unknown,
   path = '$',
   seen: WeakSet<object> = new WeakSet(),
-  depth = 0
+  depth = 0,
+  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap()
 ): ShapeScanIssue[] {
-  if (typeof value === 'function') {
-    return [{ path, message: 'Metadata values must be JSON-like data, not functions.' }];
-  }
-  if (value === null || typeof value !== 'object') return [];
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return [];
   if (depth > MAX_ADMISSION_SCAN_DEPTH) {
     return [{ path, message: 'Metadata exceeds the maximum supported depth.' }];
   }
-  if (seen.has(value)) {
+  const objectValue = value as object;
+  if (seen.has(objectValue)) {
     return [{ path, message: 'Metadata must be an acyclic tree without shared object references.' }];
+  }
+
+  seen.add(objectValue);
+  const issues: ShapeScanIssue[] = [];
+  let descriptors: DescriptorRecord;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value) as DescriptorRecord;
+  } catch {
+    return [{ path, message: 'Metadata object descriptors could not be inspected safely.' }];
+  }
+  descriptorsByObject.set(objectValue, descriptors);
+
+  if (typeof value === 'function') {
+    issues.push({ path, message: 'Metadata values must be JSON-like data, not functions.' });
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptorFromMap(descriptors, key);
+      const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, false) : `${path}.<redacted-key>`;
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPath, seen, depth, descriptorsByObject));
+    }
+    return issues;
   }
 
   const isArray = Array.isArray(value);
@@ -243,20 +263,24 @@ function collectShapeScanIssues(
   try {
     plainObject = isPlainObject(value);
   } catch {
-    return [{ path, message: 'Metadata object shape could not be inspected safely.' }];
+    issues.push({ path, message: 'Metadata object shape could not be inspected safely.' });
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptorFromMap(descriptors, key);
+      const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, false) : `${path}.<redacted-key>`;
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPath, seen, depth, descriptorsByObject));
+    }
+    return issues;
   }
   if (!isArray && !plainObject) {
-    return [{ path, message: 'Metadata must contain only plain objects, arrays, and primitive values.' }];
+    issues.push({ path, message: 'Metadata must contain only plain objects, arrays, and primitive values.' });
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptorFromMap(descriptors, key);
+      const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, false) : `${path}.<redacted-key>`;
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPath, seen, depth, descriptorsByObject));
+    }
+    return issues;
   }
 
-  seen.add(value);
-  const issues: ShapeScanIssue[] = [];
-  let descriptors: PropertyDescriptorMap;
-  try {
-    descriptors = Object.getOwnPropertyDescriptors(value);
-  } catch {
-    return [{ path, message: 'Metadata object descriptors could not be inspected safely.' }];
-  }
   if (isArray) {
     const lengthDescriptor = descriptors.length;
     const length = typeof lengthDescriptor?.value === 'number' ? lengthDescriptor.value : undefined;
@@ -273,38 +297,53 @@ function collectShapeScanIssues(
     }
   }
   for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptorFromMap(descriptors, key);
+    const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, isArray) : `${path}.<redacted-key>`;
     if (typeof key !== 'string') {
       issues.push({ path: `${path}.<unknown-key>`, message: 'Metadata must use string keys only.' });
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPath, seen, depth, descriptorsByObject));
       continue;
     }
     if (isArray && key === 'length') continue;
     if (isArray && !isCanonicalArrayIndexKey(key)) {
       issues.push({ path: childPathForKey(path, key), message: 'Metadata arrays must not contain non-index fields.' });
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPath, seen, depth, descriptorsByObject));
       continue;
     }
-    const descriptor = descriptors[key];
-    const childPath = shapePathForKey(path, key, isArray);
     if (!descriptor || descriptor.get || descriptor.set) {
       issues.push({ path: childPath, message: 'Metadata must not contain accessors.' });
       continue;
     }
     if (!descriptor.enumerable) {
       issues.push({ path: childPath, message: 'Metadata must not contain hidden non-enumerable fields.' });
+      issues.push(...collectDescriptorChildShapeIssues(descriptor, childPath, seen, depth, descriptorsByObject));
       continue;
     }
-    issues.push(...collectShapeScanIssues(descriptor.value, childPath, seen, depth + 1));
+    issues.push(...collectShapeScanIssues(descriptor.value, childPath, seen, depth + 1, descriptorsByObject));
   }
   return issues;
 }
 
-function reportShapeIssues(report: unknown): BucketedIssue[] {
-  return collectShapeScanIssues(report).map((entry) =>
+function collectDescriptorChildShapeIssues(
+  descriptor: PropertyDescriptor | undefined,
+  childPath: string,
+  seen: WeakSet<object>,
+  depth: number,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>
+): ShapeScanIssue[] {
+  const child = descriptorValue(descriptor);
+  if (!child.known || child.value === null || (typeof child.value !== 'object' && typeof child.value !== 'function')) return [];
+  return collectShapeScanIssues(child.value, childPath, seen, depth + 1, descriptorsByObject);
+}
+
+function reportShapeIssues(report: unknown, descriptorsByObject: WeakMap<object, DescriptorRecord>): BucketedIssue[] {
+  return collectShapeScanIssues(report, '$', new WeakSet(), 0, descriptorsByObject).map((entry) =>
     admissionIssue('blocked', 'validator-failed', 'validator', entry.path, entry.message, 'invalid-root')
   );
 }
 
-function checklistShapeIssues(checklist: unknown): BucketedIssue[] {
-  return collectShapeScanIssues(checklist).map((entry) =>
+function checklistShapeIssues(checklist: unknown, descriptorsByObject: WeakMap<object, DescriptorRecord>): BucketedIssue[] {
+  return collectShapeScanIssues(checklist, '$', new WeakSet(), 0, descriptorsByObject).map((entry) =>
     admissionIssue('blocked', 'invalid-checklist', 'checklist', entry.path, entry.message)
   );
 }
@@ -375,6 +414,42 @@ function unsafeAdmissionIssue(source: CopilotProofMetadataAdmissionIssueSource, 
   );
 }
 
+function descriptorBooleanValue(descriptor: PropertyDescriptor | undefined): boolean | undefined {
+  const child = descriptorValue(descriptor);
+  return child.known && typeof child.value === 'boolean' ? child.value : undefined;
+}
+
+function descriptorSafeBoundaryIssues(
+  source: CopilotProofMetadataAdmissionIssueSource,
+  path: string,
+  key: string,
+  descriptor: PropertyDescriptor | undefined
+): BucketedIssue[] {
+  const value = descriptorBooleanValue(descriptor);
+  if (source === 'report') {
+    if ((key === 'secretValuesObservedByMat' || key === 'rawCredentialStoreOutputCommitted') && value === true) {
+      return [unsafeAdmissionIssue(source, path)];
+    }
+    return [];
+  }
+  if (source !== 'checklist' || path !== `$.${key}`) return [];
+  if (key === 'rawLocalOutputDiscarded' && value === false) {
+    return [admissionIssue('rejected', 'raw-output-retained', 'checklist', path, 'Raw local output was not discarded.')];
+  }
+  if (key === 'credentialStoreAccessedByMat' && value === true) {
+    return [
+      admissionIssue(
+        'rejected',
+        'credential-store-accessed-by-mat',
+        'checklist',
+        path,
+        'Mat must not access a real credential store in this metadata-admission gate.'
+      )
+    ];
+  }
+  return [];
+}
+
 function descriptorHasNonEmptyEvidenceValue(descriptor: PropertyDescriptor | undefined): boolean {
   if (!descriptor) return false;
   if (descriptor.get || descriptor.set) return true;
@@ -390,6 +465,10 @@ function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: t
   return { known: true, value: descriptor.value };
 }
 
+function descriptorFromMap(descriptors: DescriptorRecord, key: PropertyKey): PropertyDescriptor | undefined {
+  return descriptors[key];
+}
+
 function descriptorSafePathForKey(path: string, key: string, parentIsArray: boolean): string {
   return shapePathForKey(path, key, parentIsArray);
 }
@@ -399,7 +478,8 @@ function collectDescriptorSafeRejectedIssues(
   source: CopilotProofMetadataAdmissionIssueSource,
   path = '$',
   seen: WeakSet<object> = new WeakSet(),
-  depth = 0
+  depth = 0,
+  descriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap()
 ): BucketedIssue[] {
   const issues: BucketedIssue[] = [];
   if (typeof value === 'string') {
@@ -407,35 +487,30 @@ function collectDescriptorSafeRejectedIssues(
     if (isCopilotRealLabelPresent(value)) issues.push(unsafeAdmissionIssue(source, path));
     return issues;
   }
-  if (value === null || typeof value !== 'object' || depth > MAX_ADMISSION_SCAN_DEPTH || seen.has(value)) {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function') ||
+    depth > MAX_ADMISSION_SCAN_DEPTH ||
+    seen.has(value as object)
+  ) {
     return issues;
   }
 
   const isArray = Array.isArray(value);
-  let plainObject = false;
-  try {
-    plainObject = isPlainObject(value);
-  } catch {
-    return issues;
-  }
-  if (!isArray && !plainObject) return issues;
+  const objectValue = value as object;
+  const descriptors = descriptorsByObject.get(objectValue);
+  if (!descriptors) return issues;
 
-  seen.add(value);
-  let descriptors: PropertyDescriptorMap;
-  try {
-    descriptors = Object.getOwnPropertyDescriptors(value);
-  } catch {
-    return issues;
-  }
-
+  seen.add(objectValue);
   for (const key of Reflect.ownKeys(descriptors)) {
     if (isArray && key === 'length') continue;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const descriptor = descriptorFromMap(descriptors, key);
     const childPath = typeof key === 'string' ? descriptorSafePathForKey(path, key, isArray) : `${path}.<redacted-key>`;
     const child = descriptorValue(descriptor);
 
     if (typeof key === 'string' && isCopilotTokenShapePresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
     if (typeof key === 'string' && isCopilotRealLabelPresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
+    if (typeof key === 'string') issues.push(...descriptorSafeBoundaryIssues(source, childPath, key, descriptor));
 
     if (
       typeof key === 'string' &&
@@ -460,11 +535,53 @@ function collectDescriptorSafeRejectedIssues(
     }
 
     if (child.known) {
-      issues.push(...collectDescriptorSafeRejectedIssues(child.value, source, childPath, seen, depth + 1));
+      issues.push(...collectDescriptorSafeRejectedIssues(child.value, source, childPath, seen, depth + 1, descriptorsByObject));
     }
   }
 
   return issues;
+}
+
+function materializeDescriptorSnapshot(
+  value: unknown,
+  descriptorsByObject: WeakMap<object, DescriptorRecord>,
+  seen: WeakMap<object, unknown> = new WeakMap()
+): unknown {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value;
+
+  const objectValue = value as object;
+  if (seen.has(objectValue)) return seen.get(objectValue);
+  const descriptors = descriptorsByObject.get(objectValue);
+  if (!descriptors) return undefined;
+
+  if (Array.isArray(value)) {
+    const lengthDescriptor = descriptorValue(descriptors.length);
+    const length = lengthDescriptor.known ? lengthDescriptor.value : 0;
+    const arrayLength = typeof length === 'number' && Number.isSafeInteger(length) && length >= 0 ? length : 0;
+    const output: unknown[] = new Array(arrayLength);
+    seen.set(objectValue, output);
+    for (let index = 0; index < arrayLength; index += 1) {
+      const child = descriptorValue(descriptors[String(index)]);
+      if (child.known) output[index] = materializeDescriptorSnapshot(child.value, descriptorsByObject, seen);
+    }
+    return output;
+  }
+
+  const output = Object.create(null) as JsonObject;
+  seen.set(objectValue, output);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') continue;
+    const child = descriptorValue(descriptors[key]);
+    if (child.known) {
+      Object.defineProperty(output, key, {
+        value: materializeDescriptorSnapshot(child.value, descriptorsByObject, seen),
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
+  }
+  return output;
 }
 
 function collectProductClaimIssues(
@@ -755,29 +872,40 @@ export function evaluateCopilotProofMetadataAdmission(
   checklist: unknown
 ): CopilotProofMetadataAdmissionResult {
   const reportScanTarget = reportForAdmissionScans(report);
-  const reportShape = reportShapeIssues(reportScanTarget);
-  const checklistShapePreflight = checklistShapeIssues(checklist);
-  const validation = reportShape.length > 0 ? invalidValidationForShape(reportShape) : validateCopilotCredentialProofReport(report);
+  const reportDescriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap();
+  const checklistDescriptorsByObject: WeakMap<object, DescriptorRecord> = new WeakMap();
+  const reportShape = reportShapeIssues(reportScanTarget, reportDescriptorsByObject);
+  const checklistShapePreflight = checklistShapeIssues(checklist, checklistDescriptorsByObject);
+  const reportSemanticTarget =
+    reportShape.length > 0 ? reportScanTarget : materializeDescriptorSnapshot(reportScanTarget, reportDescriptorsByObject);
+  const checklistSemanticTarget =
+    checklistShapePreflight.length > 0 ? checklist : materializeDescriptorSnapshot(checklist, checklistDescriptorsByObject);
+  const validation =
+    reportShape.length > 0 ? invalidValidationForShape(reportShape) : validateCopilotCredentialProofReport(reportSemanticTarget);
   const checklistShape =
     checklistShapePreflight.length > 0
       ? { targetPlatforms: [] as CopilotCredentialProofPlatform[], issues: checklistShapePreflight }
-      : validateChecklistShape(checklist);
+      : validateChecklistShape(checklistSemanticTarget);
   const passPlatforms = passPlatformsFor(validation);
   const reportShapeRejectedIssues =
-    reportShape.length > 0 ? collectDescriptorSafeRejectedIssues(reportScanTarget, 'report') : [];
+    reportShape.length > 0
+      ? collectDescriptorSafeRejectedIssues(reportScanTarget, 'report', '$', new WeakSet(), 0, reportDescriptorsByObject)
+      : [];
   const checklistShapeRejectedIssues =
-    checklistShapePreflight.length > 0 ? collectDescriptorSafeRejectedIssues(checklist, 'checklist') : [];
+    checklistShapePreflight.length > 0
+      ? collectDescriptorSafeRejectedIssues(checklist, 'checklist', '$', new WeakSet(), 0, checklistDescriptorsByObject)
+      : [];
 
   const issues: BucketedIssue[] = [
     ...reportShape,
     ...reportShapeRejectedIssues,
-    ...(reportShape.length > 0 ? [] : collectUnsafeAdmissionIssues(reportScanTarget, 'report')),
+    ...(reportShape.length > 0 ? [] : collectUnsafeAdmissionIssues(reportSemanticTarget, 'report')),
     ...checklistShapeRejectedIssues,
-    ...(checklistShapePreflight.length > 0 ? [] : collectUnsafeAdmissionIssues(checklist, 'checklist')),
-    ...(reportShape.length > 0 ? [] : collectProductClaimIssues(reportScanTarget, 'report')),
-    ...(checklistShapePreflight.length > 0 ? [] : collectProductClaimIssues(checklist, 'checklist')),
+    ...(checklistShapePreflight.length > 0 ? [] : collectUnsafeAdmissionIssues(checklistSemanticTarget, 'checklist')),
+    ...(reportShape.length > 0 ? [] : collectProductClaimIssues(reportSemanticTarget, 'report')),
+    ...(checklistShapePreflight.length > 0 ? [] : collectProductClaimIssues(checklistSemanticTarget, 'checklist')),
     ...checklistShape.issues,
-    ...(reportShape.length > 0 ? [] : reportNotesIssues(report)),
+    ...(reportShape.length > 0 ? [] : reportNotesIssues(reportSemanticTarget)),
     ...(reportShape.length > 0 ? [] : validatorIssues(validation)),
     ...platformScopeIssues(passPlatforms, checklistShape.targetPlatforms)
   ];
