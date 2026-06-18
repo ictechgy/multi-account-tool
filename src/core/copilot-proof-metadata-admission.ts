@@ -392,16 +392,24 @@ function isForbiddenEvidenceKey(key: string): boolean {
   return isCopilotForbiddenEvidenceKey(key, SAFE_REPORT_METADATA_NORMALIZED_KEYS);
 }
 
-function isValueFreeWindowsBindingProofContainer(path: string, key: string, child: unknown): boolean {
-  try {
-    return (
-      /^\$\.platforms\[\d+\]\.windowsCredentialBindingProof$/.test(path) &&
-      (key === 'targetName' || key === 'accountUserNameGuard') &&
-      isPlainObject(child)
-    );
-  } catch {
+function isDescriptorSafeWindowsBindingProofContainer(
+  path: string,
+  key: string,
+  child: { known: true; value: unknown } | { known: false },
+  descriptorsByObject: WeakMap<object, DescriptorRecord>
+): boolean {
+  if (
+    !/^\$\.platforms\[\d+\]\.windowsCredentialBindingProof$/.test(path) ||
+    (key !== 'targetName' && key !== 'accountUserNameGuard') ||
+    !child.known ||
+    child.value === null ||
+    (typeof child.value !== 'object' && typeof child.value !== 'function')
+  ) {
     return false;
   }
+  if (typeof child.value === 'function') return false;
+  const descriptors = descriptorsByObject.get(child.value as object);
+  return Boolean(descriptors?.status || descriptors?.valuePolicy);
 }
 
 function unsafeAdmissionIssue(source: CopilotProofMetadataAdmissionIssueSource, path: string): BucketedIssue {
@@ -450,14 +458,13 @@ function descriptorSafeBoundaryIssues(
   return [];
 }
 
-function descriptorHasNonEmptyEvidenceValue(descriptor: PropertyDescriptor | undefined): boolean {
+function descriptorHasPresentEvidenceValue(descriptor: PropertyDescriptor | undefined): boolean {
   if (!descriptor) return false;
   if (descriptor.get || descriptor.set) return true;
-  try {
-    return isNonEmptyEvidenceValue(descriptor.value);
-  } catch {
-    return false;
-  }
+  const value = descriptor.value;
+  if (value === null || value === undefined || value === false) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return true;
 }
 
 function descriptorValue(descriptor: PropertyDescriptor | undefined): { known: true; value: unknown } | { known: false } {
@@ -516,13 +523,13 @@ function collectDescriptorSafeRejectedIssues(
       typeof key === 'string' &&
       isForbiddenEvidenceKey(key) &&
       !(source === 'checklist' && isSafeChecklistMetadataKeyFinding({ kind: 'forbidden-key', path: childPath })) &&
-      !(child.known && isValueFreeWindowsBindingProofContainer(path, key, child.value)) &&
-      descriptorHasNonEmptyEvidenceValue(descriptor)
+      !isDescriptorSafeWindowsBindingProofContainer(path, key, child, descriptorsByObject) &&
+      descriptorHasPresentEvidenceValue(descriptor)
     ) {
       issues.push(unsafeAdmissionIssue(source, childPath));
     }
 
-    if (typeof key === 'string' && isCopilotProofMetadataAdmissionClaimKey(key) && descriptorHasNonEmptyEvidenceValue(descriptor)) {
+    if (typeof key === 'string' && isCopilotProofMetadataAdmissionClaimKey(key) && descriptorHasPresentEvidenceValue(descriptor)) {
       issues.push(
         admissionIssue(
           'rejected',

@@ -771,9 +771,10 @@ describe('Copilot proof metadata admission gate', () => {
     }).not.toThrow();
 
     expect(result?.ok).toBe(false);
-    expect(result?.admission).toBe('blocked');
+    expect(result?.admission).toBe('rejected');
     expect(result?.targetPlatforms).toEqual([]);
     expect(result?.issues.map((issue) => issue.code)).toContain('invalid-checklist');
+    expect(result?.issues.map((issue) => issue.code)).toContain('unsafe-evidence');
   });
 
   it('keeps Windows binding proof container checks from throwing on hostile descriptor values', () => {
@@ -799,9 +800,10 @@ describe('Copilot proof metadata admission gate', () => {
     }).not.toThrow();
 
     expect(result?.ok).toBe(false);
-    expect(result?.admission).toBe('blocked');
+    expect(result?.admission).toBe('rejected');
     expect(result?.validation.platforms).toEqual([]);
     expect(result?.issues.map((issue) => issue.code)).toContain('validator-failed');
+    expect(result?.issues.map((issue) => issue.code)).toContain('unsafe-evidence');
   });
 
   it('blocks excessive report depth before recursive scans run', () => {
