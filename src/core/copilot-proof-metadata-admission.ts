@@ -414,6 +414,42 @@ function unsafeAdmissionIssue(source: CopilotProofMetadataAdmissionIssueSource, 
   );
 }
 
+function descriptorBooleanValue(descriptor: PropertyDescriptor | undefined): boolean | undefined {
+  const child = descriptorValue(descriptor);
+  return child.known && typeof child.value === 'boolean' ? child.value : undefined;
+}
+
+function descriptorSafeBoundaryIssues(
+  source: CopilotProofMetadataAdmissionIssueSource,
+  path: string,
+  key: string,
+  descriptor: PropertyDescriptor | undefined
+): BucketedIssue[] {
+  const value = descriptorBooleanValue(descriptor);
+  if (source === 'report') {
+    if ((key === 'secretValuesObservedByMat' || key === 'rawCredentialStoreOutputCommitted') && value === true) {
+      return [unsafeAdmissionIssue(source, path)];
+    }
+    return [];
+  }
+  if (source !== 'checklist' || path !== `$.${key}`) return [];
+  if (key === 'rawLocalOutputDiscarded' && value === false) {
+    return [admissionIssue('rejected', 'raw-output-retained', 'checklist', path, 'Raw local output was not discarded.')];
+  }
+  if (key === 'credentialStoreAccessedByMat' && value === true) {
+    return [
+      admissionIssue(
+        'rejected',
+        'credential-store-accessed-by-mat',
+        'checklist',
+        path,
+        'Mat must not access a real credential store in this metadata-admission gate.'
+      )
+    ];
+  }
+  return [];
+}
+
 function descriptorHasNonEmptyEvidenceValue(descriptor: PropertyDescriptor | undefined): boolean {
   if (!descriptor) return false;
   if (descriptor.get || descriptor.set) return true;
@@ -474,6 +510,7 @@ function collectDescriptorSafeRejectedIssues(
 
     if (typeof key === 'string' && isCopilotTokenShapePresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
     if (typeof key === 'string' && isCopilotRealLabelPresent(key)) issues.push(unsafeAdmissionIssue(source, childPath));
+    if (typeof key === 'string') issues.push(...descriptorSafeBoundaryIssues(source, childPath, key, descriptor));
 
     if (
       typeof key === 'string' &&
@@ -530,12 +567,19 @@ function materializeDescriptorSnapshot(
     return output;
   }
 
-  const output: JsonObject = {};
+  const output = Object.create(null) as JsonObject;
   seen.set(objectValue, output);
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== 'string') continue;
     const child = descriptorValue(descriptors[key]);
-    if (child.known) output[key] = materializeDescriptorSnapshot(child.value, descriptorsByObject, seen);
+    if (child.known) {
+      Object.defineProperty(output, key, {
+        value: materializeDescriptorSnapshot(child.value, descriptorsByObject, seen),
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
   }
   return output;
 }

@@ -178,6 +178,27 @@ describe('Copilot proof metadata admission gate', () => {
     expectNoEcho(serialized, 'enabled', 'platform-proof-complete');
   });
 
+  it('preserves own __proto__ report metadata as inert snapshot data before unsafe scans', () => {
+    const token = ['gh', 'p', '_', 'P'.repeat(24)].join('');
+    const report = baseReport() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(report, '__proto__', {
+      enumerable: true,
+      configurable: true,
+      value: { diagnostic: token, productSupport: 'enabled' }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['unsafe-evidence', 'product-support-claim', 'validator-failed'])
+    );
+    expect(serialized).toContain('$.__proto__.diagnostic');
+    expect(serialized).toContain('$.__proto__.productSupport');
+    expectNoEcho(serialized, token, 'enabled');
+  });
+
   it('preserves admission-specific proof claim taxonomy while centralizing keys', () => {
     const report = {
       ...baseReport(),
@@ -226,6 +247,27 @@ describe('Copilot proof metadata admission gate', () => {
     expect(result.issues.map((issue) => issue.code)).toContain('invalid-checklist');
     expect(serialized).toContain('$.rawLocalOutputDiscarded');
     expectNoEcho(serialized, token);
+  });
+
+  it('preserves own __proto__ checklist metadata as inert snapshot data before unsafe scans', () => {
+    const token = ['sk', '-', 'P'.repeat(16)].join('');
+    const checklist = baseChecklist() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(checklist, '__proto__', {
+      enumerable: true,
+      configurable: true,
+      value: { diagnostic: token, productSupport: 'enabled' }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['unsafe-evidence', 'product-support-claim', 'unknown-checklist-key'])
+    );
+    expect(serialized).toContain('$.__proto__.diagnostic');
+    expect(serialized).toContain('$.__proto__.productSupport');
+    expectNoEcho(serialized, token, 'enabled');
   });
 
   it('blocks non-empty report notes and rejects unsafe notes without echoing values', () => {
@@ -310,6 +352,28 @@ describe('Copilot proof metadata admission gate', () => {
     expect(serialized).toContain('$.diagnostic');
     expect(serialized).toContain('$.productSupport');
     expectNoEcho(serialized, token, 'enabled');
+  });
+
+  it('rejects report safety booleans from descriptor snapshots when report shape is invalid', () => {
+    const report = baseReport() as unknown as Record<string, unknown>;
+    const platform = (report.platforms as Array<Record<string, unknown>>)[0];
+    platform.secretValuesObservedByMat = true;
+    platform.rawCredentialStoreOutputCommitted = true;
+    Object.defineProperty(report, 'accessorShapeViolation', {
+      enumerable: true,
+      get() {
+        throw new Error('accessor must not run');
+      }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const paths = result.issues.map((issue) => issue.path);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.validation.platforms).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toContain('unsafe-evidence');
+    expect(paths).toContain('$.platforms[0].secretValuesObservedByMat');
+    expect(paths).toContain('$.platforms[0].rawCredentialStoreOutputCommitted');
   });
 
   it('rejects symbol-keyed unsafe report values without echoing symbol details', () => {
@@ -636,6 +700,28 @@ describe('Copilot proof metadata admission gate', () => {
     expect(serialized).toContain('$.diagnostic');
     expect(serialized).toContain('$.productSupportClaimed');
     expectNoEcho(serialized, token);
+  });
+
+  it('rejects checklist safety booleans from descriptor snapshots when checklist shape is invalid', () => {
+    const checklist = {
+      ...baseChecklist(),
+      rawLocalOutputDiscarded: false,
+      credentialStoreAccessedByMat: true
+    } as Record<string, unknown>;
+    Object.defineProperty(checklist, 'accessorShapeViolation', {
+      enumerable: true,
+      get() {
+        throw new Error('accessor must not run');
+      }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.targetPlatforms).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['invalid-checklist', 'raw-output-retained', 'credential-store-accessed-by-mat'])
+    );
   });
 
   it('blocks sparse checklist target platform arrays before checklist validation can skip holes', () => {
