@@ -4,9 +4,9 @@
 
 📖 **Documentation:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from a single TUI. Keep a profile per account, then switch with a keystroke instead of repeating `logout` / `login`.
+Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) in a single TUI. Save one profile per account, then switch with a keystroke instead of repeating `logout` / `login`.
 
-`mat` is conservative by default: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, documents plaintext-credential backup risks, and detects OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks you to recapture, discard, or cancel.
+`mat` takes a conservative path by default: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, documents plaintext-credential backup risks, and detects OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks you to recapture, discard, or cancel.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -24,7 +24,7 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, 
 
 - You use Claude Code, Codex, Gemini, and friends, each with multiple accounts (personal / work / team)
 - You're tired of running `logout` → `login` every time you change context
-- You forget which account is currently active
+- You lose track of which account is currently active
 
 ## How it works
 
@@ -46,9 +46,9 @@ Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, 
 
 Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refresh token may be single-use, so the provider invalidates it after the next successful refresh. Restoring an older snapshot can then make the provider reject the token as "already used", forcing a re-login. The table below summarizes the risk for CLIs that `mat` supports.
 
-| CLI | Auth type | Rotation risk | `mat` safe modes |
+| CLI | Auth type | Rotation risk | `mat` safe workflows |
 | --- | --- | --- | --- |
-| Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 High — confirmed token revocation after stale restore | `mat freshness codex` before swap; `mat exec` for one-shot sessions |
+| Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 High — confirmed token revocation after stale restore | `mat freshness codex` before swap; `mat exec` for one-shot commands |
 | Gemini CLI | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 High | Same as Codex |
 | OpenCode | OAuth per provider (`provider.refresh`, `provider.accountId`) | 🔴 High | Same as Codex |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 Mitigated — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec`, and `mat freshness claude` (PR-H adapter, high-confidence rotation classification) |
@@ -61,7 +61,7 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 
 ### Platform support
 
-| CLI | macOS | Linux | Windows | Override / known limits |
+| CLI | macOS | Linux | Windows | Overrides / known limits |
 | --- | --- | --- | --- | --- |
 | Claude Code | ✅ | ✅ | ❌ | macOS Keychain on macOS; `~/.claude/.credentials.json` on Linux. `mat session` supports Linux via `CLAUDE_CONFIG_DIR`; macOS Keychain cannot be session-isolated |
 | Codex CLI | ✅ | ✅ | ⚠️ untested | `~/.codex/auth.json` (cross-platform file path) |
@@ -83,7 +83,7 @@ During foreground profile switching and `mat exec`, `mat` warns about high-confi
 ### Switch flow (lossless)
 
 0. **Pre-swap freshness check** — if the live credentials drifted from the active profile (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before steps 1–3 below. See "OAuth Rotation Safety Matrix" above for per-CLI classification.
-1. The current live credentials are snapshotted into the currently active profile (automatic backup).
+1. The current live credentials are snapshotted into the active profile (automatic backup).
 2. The target profile's stored credentials are atomically restored to the live location.
 3. The active-profile pointer is updated.
 
@@ -140,7 +140,7 @@ The TUI opens with **CLI → profile → switch**.
 
 ### First run
 
-If the CLI's live credentials are already present, `mat` offers to import them as a `default` profile. The prompt is shown once and never auto-pops again (you can always capture manually later).
+If the CLI's live credentials are already present, `mat` offers to import them as a `default` profile. The prompt appears only once and is not shown automatically again; you can always capture manually later.
 
 ### Adding a new account
 
@@ -182,7 +182,7 @@ mat exec claude work -- claude
 lterm send-keys "mat exec claude work -- claude" Enter
 ```
 
-Behaviour:
+Behavior:
 
 - Requires an active profile for `<cli>` already set (use the TUI to capture live credentials first).
 - A per-CLI lockfile (`~/.multi-account-tool/locks/<cli>.lock`) prevents two `mat exec` runs from racing on the same CLI. Stale locks from crashed processes are auto-recovered.
@@ -303,7 +303,7 @@ format = '[$output]($style) '
 style = 'cyan'
 ```
 
-The default formatter prints short output such as `codex:work gemini:personal ⚠1/0`, where the warning counts are `orphan/unknown` sessions. Adjust the Node formatter if you want a different shape.
+The default formatter prints compact output such as `codex:work gemini:personal ⚠1/0`, where the warning counts are `orphan/unknown` sessions. Adjust the Node formatter if you want a different shape.
 
 **Supported CLIs** (those that relocate their *credential* directory via an env var):
 
@@ -464,7 +464,7 @@ Files are created with `0600`, directories with `0700`.
 - Error messages are redacted (JWT pattern + 50+ char base64-like sequences → `[redacted]`), and session allow-list paths are sanitized for terminal control characters before they can reach stderr
 - Dependencies: `npm audit` clean
 
-### Not recommended on
+### Not recommended for
 
 - Shared workstations
 - Multi-user hosts
@@ -502,7 +502,7 @@ mat plugin validate --json   # validate every installed ~/.multi-account-tool/cl
 
 `mat plugin validate` is a **static** JSON/schema/lint check. It does not read credential files, query Keychain/Secret Service/Windows Credential Manager secrets, or prove that an upstream CLI will prefer the intended credential source. A passing report means **static validation passed**, not that the plugin is security-certified. The JSON report is `schemaVersion: 1`; exit codes are `0` when there are no errors, `1` for validation/read/parse errors, and `2` for usage errors. Risky-but-compatible patterns (for example broad file paths or generic keychain services without `account`) are warnings.
 
-mat loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped — mat keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) cannot be overridden — id collision is rejected.
+`mat` loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped, and `mat` keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) cannot be overridden — id collision is rejected.
 
 Field rules:
 - `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).
