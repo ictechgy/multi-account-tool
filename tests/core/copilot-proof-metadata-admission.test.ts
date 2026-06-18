@@ -331,6 +331,47 @@ describe('Copilot proof metadata admission gate', () => {
     expectNoEcho(serialized, token, 'real.user@example.com');
   });
 
+  it('rejects nested symbol-keyed unsafe report values without echoing symbol details', () => {
+    const token = ['gh', 'p', '_', 'N'.repeat(24)].join('');
+    const symbolKey = Symbol('real.user@example.com');
+    const report = baseReport() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(report, symbolKey, {
+      enumerable: true,
+      value: { diagnostic: token, productSupport: 'enabled' }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['validator-failed', 'unsafe-evidence', 'product-support-claim'])
+    );
+    expect(serialized).toContain('$.<redacted-key>.diagnostic');
+    expect(serialized).toContain('$.<redacted-key>.productSupport');
+    expectNoEcho(serialized, token, 'real.user@example.com', 'enabled');
+  });
+
+  it('rejects nested non-enumerable unsafe report values that normal validators skip', () => {
+    const token = ['gh', 'p', '_', 'H'.repeat(24)].join('');
+    const report = baseReport() as unknown as Record<PropertyKey, unknown>;
+    Object.defineProperty(report, 'hiddenEvidence', {
+      enumerable: false,
+      value: { diagnostic: token, productSupport: 'enabled' }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['validator-failed', 'unsafe-evidence', 'product-support-claim'])
+    );
+    expect(serialized).toContain('$.hiddenEvidence.diagnostic');
+    expect(serialized).toContain('$.hiddenEvidence.productSupport');
+    expectNoEcho(serialized, token, 'enabled');
+  });
+
   it('blocks report accessors before report validation can dereference them', () => {
     const report = { ...baseReport() } as Record<string, unknown>;
     Object.defineProperty(report, 'diagnostic', {
@@ -358,6 +399,59 @@ describe('Copilot proof metadata admission gate', () => {
         })
       ])
     );
+  });
+
+  it('validates clean-shaped report proxies from descriptor snapshots without invoking get traps', () => {
+    const report = new Proxy(baseReport() as unknown as Record<string, unknown>, {
+      get() {
+        throw new Error('report get trap must not run');
+      }
+    });
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(true);
+    expect(result?.admission).toBe('admissible-metadata');
+    expect(result?.validation.ok).toBe(true);
+  });
+
+  it('reuses report descriptor preflight snapshots for rejected scans without re-trapping proxies', () => {
+    const token = ['gh', 'p', '_', 'R'.repeat(24)].join('');
+    const target = { ...baseReport(), diagnostic: token } as Record<PropertyKey, unknown>;
+    Object.defineProperty(target, 'accessorShapeViolation', {
+      enumerable: true,
+      get() {
+        throw new Error('accessor must not run');
+      }
+    });
+    const expectedDescriptorReads = Reflect.ownKeys(target).length;
+    let ownKeysCalls = 0;
+    let descriptorReads = 0;
+    const report = new Proxy(target, {
+      ownKeys(value) {
+        ownKeysCalls += 1;
+        return Reflect.ownKeys(value);
+      },
+      getOwnPropertyDescriptor(value, key) {
+        descriptorReads += 1;
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+      get() {
+        throw new Error('report get trap must not run');
+      }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(report, baseChecklist());
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(['validator-failed', 'unsafe-evidence']));
+    expect(ownKeysCalls).toBe(1);
+    expect(descriptorReads).toBe(expectedDescriptorReads);
+    expectNoEcho(serialized, token);
   });
 
   it('blocks sparse report platform arrays before validators can iterate array holes', () => {
@@ -464,6 +558,60 @@ describe('Copilot proof metadata admission gate', () => {
         })
       ])
     );
+  });
+
+  it('validates clean-shaped checklist proxies from descriptor snapshots without invoking get traps', () => {
+    const checklist = new Proxy(baseChecklist() as unknown as Record<string, unknown>, {
+      get() {
+        throw new Error('checklist get trap must not run');
+      }
+    });
+
+    let result: ReturnType<typeof evaluateCopilotProofMetadataAdmission> | undefined;
+    expect(() => {
+      result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    }).not.toThrow();
+
+    expect(result?.ok).toBe(true);
+    expect(result?.admission).toBe('admissible-metadata');
+    expect(result?.targetPlatforms).toEqual(['darwin-keychain', 'linux-secret-service']);
+  });
+
+  it('reuses checklist descriptor preflight snapshots for rejected scans without re-trapping proxies', () => {
+    const token = ['sk', '-', 'R'.repeat(16)].join('');
+    const target = { ...baseChecklist(), diagnostic: token } as Record<PropertyKey, unknown>;
+    Object.defineProperty(target, 'accessorShapeViolation', {
+      enumerable: true,
+      get() {
+        throw new Error('accessor must not run');
+      }
+    });
+    const expectedDescriptorReads = Reflect.ownKeys(target).length;
+    let ownKeysCalls = 0;
+    let descriptorReads = 0;
+    const checklist = new Proxy(target, {
+      ownKeys(value) {
+        ownKeysCalls += 1;
+        return Reflect.ownKeys(value);
+      },
+      getOwnPropertyDescriptor(value, key) {
+        descriptorReads += 1;
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+      get() {
+        throw new Error('checklist get trap must not run');
+      }
+    });
+
+    const result = evaluateCopilotProofMetadataAdmission(baseReport(), checklist);
+    const serialized = JSON.stringify(result);
+
+    expect(result.admission).toBe('rejected');
+    expect(result.targetPlatforms).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(['invalid-checklist', 'unsafe-evidence']));
+    expect(ownKeysCalls).toBe(1);
+    expect(descriptorReads).toBe(expectedDescriptorReads);
+    expectNoEcho(serialized, token);
   });
 
   it('rejects safely inspectable unsafe checklist evidence even when checklist shape has accessors', () => {
