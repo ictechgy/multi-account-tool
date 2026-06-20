@@ -7,11 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-20
+
+Grok Build profile-swap support plus credential-source hardening, Windows/env-secret groundwork, and Copilot proof-gate safety work since v0.6.0.
+
 ### Added
 
-- Antigravity (`agy`) auth-store research note and support metadata now document why product support remains blocked until upstream publishes a stable credential-store, redirect, and recapture contract.
-- Capture-time profile identity metadata for active-profile/status diagnostics. `mat status`, `mat doctor`, and `mat support` now surface only sanitized static identity hints (masked account/email fingerprints, allowlisted mode/tier signals) without parsing credential files or keyring secret entries during read-only diagnostics.
+- Built-in Grok Build profile-swap support for `~/.grok/auth.json` saved as `grok-auth.json`. Grok remains PR1 profile-swap-only: `mat session start/run grok` is intentionally unsupported until a separate isolation design can hard-stop config/env/project/plugin/hook/MCP bypass channels or rely on upstream credential/config-root redirect semantics.
+- Capture-time profile identity metadata for active-profile/status diagnostics. `mat status`, `mat doctor`, and `mat support` now surface only sanitized static identity hints without parsing credential files or keyring secret entries during read-only diagnostics.
+- Plugin validation tooling and support metadata/docs for blocked Antigravity (`agy`) auth-store assumptions.
+- Internal env-secret core, public env-secret schema refusal/hard-stop scaffolding, Linux Secret Service backend spike, synthetic command runtime gate, and product-runtime bridge groundwork.
+- Windows Credential Manager R&D, targeted Windows Node preflight CI, internal backend/source scaffolding, and public source write guards.
+- Copilot credential proof validator, platform-proof probe design, metadata admission/review gates, executable probe security review gate, and human evidence packaging.
 
+### Changed
+
+- README/README.ko and generated site docs now include Grok support boundaries, xAI Build documentation links, and clearer session-isolation rationale.
+- Roadmap/research docs now clarify Antigravity, Copilot, Amp config, env-secret storage, and Windows credential support boundaries.
+- Build-docs/site generation and publish/readiness surfaces were kept aligned with the current support matrix.
+
+### Fixed
+
+- Hardened credential switching and os-keyring handling around unavailable sources, fail-closed writes, rollback metadata, and Keychain compatibility/opt-out behavior.
+- Hardened Copilot proof metadata admission against unsafe descriptor/value shapes, value-bearing aliases, retraps, and shape-invalid executable probe evidence.
+- Preserved descriptor snapshots and exact Windows credential account comparisons for safer proof-gate review.
 
 ## [0.6.0] - 2026-06-14
 
