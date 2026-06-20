@@ -170,6 +170,26 @@ describe('switcher', () => {
       expect(await readProfileFile('gemini', 'partial', 'google_accounts.json')).toBeNull();
     });
 
+    it('grok profile capture 는 ~/.grok/auth.json 값을 grok-auth.json 으로 저장하고 raw secret 을 metadata 에 남기지 않는다', async () => {
+      const rawSecret = 'grok-secret-token-abcdefghijklmnopqrstuvwxyz0123456789';
+      mockReadSource.mockResolvedValue(rawSecret);
+
+      const result = await snapshotLiveToProfile('grok', 'work');
+      const meta = await readMeta('grok', 'work');
+
+      expect(result).toMatchObject({
+        cliId: 'grok',
+        profileName: 'work',
+        captured: ['grok-auth.json'],
+        empty: []
+      });
+      expect(await readProfileFile('grok', 'work', 'grok-auth.json')).toBe(rawSecret);
+      expect(JSON.stringify(meta)).not.toContain(rawSecret);
+      expect(meta?.identity?.warnings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'unsupported' })
+      ]));
+    });
+
     it('readSource 가 throw → 에러 전파 (snapshot 중단)', async () => {
       mockReadSource.mockRejectedValue(new Error('keychain locked'));
 

@@ -35,7 +35,7 @@
 <h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
 <p class="inline-lang" aria-hidden="true"><a href="ko.html">한국어</a> | English</p>
 
-<p>Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose) in a single TUI. Save one profile per account, then switch with a keystroke instead of repeating <code>logout</code> / <code>login</code>.</p>
+<p>Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build) in a single TUI. Save one profile per account, then switch with a keystroke instead of repeating <code>logout</code> / <code>login</code>.</p>
 <p><code>mat</code> takes a conservative path by default: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, documents plaintext-credential backup risks, and detects OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks you to recapture, discard, or cancel.</p>
 <div class="hero-cta"><a class="btn btn-primary" href="#install">Install</a><a class="btn" href="https://github.com/ictechgy/multi-account-tool">GitHub <span aria-hidden="true">↗</span></a></div>
 <pre><code>╭ Multi-Account Tool ────────────────────────────────╮
@@ -121,6 +121,11 @@
 <td>macOS Keychain / Linux Secret Service (service <code>goose</code>, account <code>secrets</code>) + <code>~/.config/goose/secrets.yaml</code> + <code>config.yaml</code></td>
 <td>Multi-source (account-scoped Keychain/os-keyring; Linux swaps via <code>secret-tool</code> — see below)</td>
 </tr>
+<tr>
+<td>Grok Build</td>
+<td><code>~/.grok/auth.json</code></td>
+<td>File swap (PR1 profile-swap-only)</td>
+</tr>
 </tbody></table></div>
 <h3 id="oauth-rotation-safety-matrix">OAuth Rotation Safety Matrix</h3>
 <p>Some CLIs use <strong>OAuth refresh-token rotation</strong> (RFC 6749 best practice): a refresh token may be single-use, so the provider invalidates it after the next successful refresh. Restoring an older snapshot can then make the provider reject the token as &quot;already used&quot;, forcing a re-login. The table below summarizes the risk for CLIs that <code>mat</code> supports.</p>
@@ -162,6 +167,12 @@
 <td>macOS Keychain + <code>secrets.yaml</code> / <code>config.yaml</code> (provider-routed)</td>
 <td>🟢 Mitigated — identity-aware adapter (provider key matrix + keychain account)</td>
 <td><code>mat freshness goose</code> reports per-source result, identity-aware</td>
+</tr>
+<tr>
+<td>Grok Build</td>
+<td>Browser/OIDC <code>~/.grok/auth.json</code></td>
+<td>⚠️ Unknown — fallback byte-diff only, no identity adapter yet</td>
+<td><code>mat switch grok &lt;profile&gt;</code> only; review config/env/project overrides before relying on the selected profile</td>
 </tr>
 <tr>
 <td>Aider / Kimi / Qwen / Crush</td>
@@ -254,6 +265,13 @@
 <td>✅ os-keyring</td>
 <td>❌</td>
 <td>macOS Keychain / Linux Secret Service (<code>goose</code>/<code>secrets</code> via <code>secret-tool</code>) + <code>~/.config/goose/*.yaml</code>. On Linux mat includes the os-keyring source by default and requires <code>secret-tool</code> (libsecret-tools) + a keyring daemon — a missing tool or down daemon <strong>errors out</strong> rather than silently swapping stale YAML (Goose reaches the keyring via the libsecret <em>library</em>, so a missing <code>secret-tool</code> CLI does not prove the keyring is unused). Set <code>GOOSE_DISABLE_KEYRING=1</code> if you use the file backend; mat then omits os-keyring and swaps <code>secrets.yaml</code>. Windows Credential Manager not yet supported</td>
+</tr>
+<tr>
+<td>Grok Build</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ untested</td>
+<td>PR1 swaps only the primary signed-in browser/OIDC token file <code>~/.grok/auth.json</code> as <code>grok-auth.json</code>. <code>mat session start/run grok</code> is unsupported. <code>~/.grok/config.toml</code> model <code>api_key</code>/<code>env_key</code>, <code>XAI_API_KEY</code>, <code>GROK_*</code> auth/model env, <code>GROK_HOME</code>, project <code>.grok/config.toml</code>, and MCP credentials can override or bypass <code>auth.json</code>; unset/review those before relying on a selected profile.</td>
 </tr>
 </tbody></table></div>
 <p>&quot;⚠️ untested&quot; = swap logic is platform-agnostic file I/O, but the project&#39;s CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI&#39;s documentation, not exercised. Patches and bug reports welcome.</p>
@@ -538,7 +556,7 @@ style = &#39;cyan&#39;
 <td><code>XDG_DATA_HOME</code> (<code>opencode</code> envSubdir; broad XDG side effects)</td>
 </tr>
 </tbody></table></div>
-<p><strong>Not supported by <code>mat session start</code></strong> (no safe credential-relocating env var; <code>session start</code> errors out): <code>claude</code> on macOS (Keychain service name is not env-overridable), <code>aider</code> (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file; use the narrower <code>mat session run aider</code> partial support instead), <code>goose</code> (keychain/OS-keyring credentials cannot be env-redirected), Google Antigravity / <code>agy</code> (native keyring plus no stable CLI-specific credential redirect; <code>HOME</code> redirect is too broad), and any user <strong>plugin</strong> CLI (built-in only trust boundary).</p>
+<p><strong>Not supported by <code>mat session start</code></strong> (no safe credential-relocating env var; <code>session start</code> errors out): <code>claude</code> on macOS (Keychain service name is not env-overridable), <code>aider</code> (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file; use the narrower <code>mat session run aider</code> partial support instead), <code>goose</code> (keychain/OS-keyring credentials cannot be env-redirected), <code>grok</code> PR1 (profile-swap-only <code>~/.grok/auth.json</code>; config/env/project/MCP bypasses need a separate session-isolation design), Google Antigravity / <code>agy</code> (native keyring plus no stable CLI-specific credential redirect; <code>HOME</code> redirect is too broad), and any user <strong>plugin</strong> CLI (built-in only trust boundary).</p>
 <p>Exit codes mirror <code>mat exec</code>: <code>0</code> success, <code>2</code> usage error, <code>74</code> re-capture failed, <code>128+N</code> child signal <code>N</code> (self-raised), child&#39;s own non-zero code propagated otherwise.</p>
 <p><strong>Limitations (read before relying on it):</strong></p>
 <ul>
@@ -640,7 +658,8 @@ mat explain agy
     ├── qwen/                     # qwen-settings.json + qwen.env (prefixed saveAs to disambiguate)
     ├── crush/                    # crush-config.json + crush-data.json (config + data layers)
     ├── opencode/                 # auth.json (OS-agnostic XDG)
-    └── goose/                    # goose-keyring.json (macOS Keychain / Linux Secret Service) + goose-secrets.yaml + goose-config.yaml
+    ├── goose/                    # goose-keyring.json (macOS Keychain / Linux Secret Service) + goose-secrets.yaml + goose-config.yaml
+    └── grok/                     # grok-auth.json (profile-swap-only ~/.grok/auth.json)
 </code></pre>
 <p>Files are created with <code>0600</code>, directories with <code>0700</code>.</p>
 <hr>

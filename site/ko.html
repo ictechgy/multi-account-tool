@@ -35,7 +35,7 @@
 <h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
 <p class="inline-lang" aria-hidden="true"><a href="index.html">English</a> | 한국어</p>
 
-<p>여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose)을 하나의 TUI에서 전환한다. 계정마다 프로필을 하나씩 저장해 두고, 매번 <code>logout</code> → <code>login</code>을 반복하는 대신 키 한 번으로 전환한다.</p>
+<p>여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build)을 하나의 TUI에서 전환한다. 계정마다 프로필을 하나씩 저장해 두고, 매번 <code>logout</code> → <code>login</code>을 반복하는 대신 키 한 번으로 전환한다.</p>
 <p><code>mat</code>은 보수적으로 동작한다. macOS Keychain 항목을 백업하고, 부분 실패는 롤백하며, 파일은 원자적으로 쓴다. 평문 자격증명 백업 위험을 문서화하고, swap 전 OAuth refresh-token rotation도 감지한다. 라이브 자격증명이 drift된 경우 TUI에서 재캡처 / 폐기 / 취소 중 하나를 선택하게 한다.</p>
 <div class="hero-cta"><a class="btn btn-primary" href="#install">설치</a><a class="btn" href="https://github.com/ictechgy/multi-account-tool">GitHub <span aria-hidden="true">↗</span></a></div>
 <pre><code>╭ Multi-Account Tool ────────────────────────────────╮
@@ -121,6 +121,11 @@
 <td>macOS Keychain / Linux Secret Service (service <code>goose</code>, account <code>secrets</code>) + <code>~/.config/goose/secrets.yaml</code> + <code>config.yaml</code></td>
 <td>Multi-source (account-scoped Keychain/os-keyring; Linux는 <code>secret-tool</code>로 swap — 아래 참고)</td>
 </tr>
+<tr>
+<td>Grok Build</td>
+<td><code>~/.grok/auth.json</code></td>
+<td>파일 swap (PR1 profile-swap-only)</td>
+</tr>
 </tbody></table></div>
 <h3 id="oauth-rotation-안전성-매트릭스">OAuth Rotation 안전성 매트릭스</h3>
 <p>일부 CLI는 <strong>OAuth refresh-token rotation</strong>(RFC 6749 권장 방식)을 사용한다. refresh token이 사실상 1회용이라, 다음 refresh 성공 후 provider가 이전 token을 무효화할 수 있다. 이때 <code>mat</code>이 오래된 snapshot을 복원하면 provider가 token을 &quot;already used&quot;로 거부하고 사용자는 다시 로그인해야 한다. 아래 표는 <code>mat</code>이 지원하는 CLI별 위험도와 안전 워크플로를 정리한 것이다.</p>
@@ -162,6 +167,12 @@
 <td>macOS Keychain + <code>secrets.yaml</code> / <code>config.yaml</code> (provider 라우팅)</td>
 <td>🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account)</td>
 <td><code>mat freshness goose</code>가 source별 결과 보고, identity-aware</td>
+</tr>
+<tr>
+<td>Grok Build</td>
+<td>Browser/OIDC <code>~/.grok/auth.json</code></td>
+<td>⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용</td>
+<td><code>mat switch grok &lt;profile&gt;</code>만 사용; 선택한 프로필을 신뢰하기 전 config/env/project override를 검토</td>
 </tr>
 <tr>
 <td>Aider / Kimi / Qwen / Crush</td>
@@ -254,6 +265,13 @@
 <td>✅ os-keyring</td>
 <td>❌</td>
 <td>macOS Keychain / Linux Secret Service(<code>goose</code>/<code>secrets</code>, <code>secret-tool</code> 경유) + <code>~/.config/goose/*.yaml</code>. Linux는 기본적으로 os-keyring을 포함하며 <code>secret-tool</code>(libsecret-tools) + keyring daemon이 필요 — 미설치/daemon-down 시 stale YAML로 조용히 swap하지 않고 <strong>명시 에러</strong>를 낸다. Goose는 libsecret <em>라이브러리</em>로 keyring에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않는다. file backend라면 <code>GOOSE_DISABLE_KEYRING=1</code> 설정 시 <code>mat</code>이 os-keyring을 생략하고 <code>secrets.yaml</code>을 swap한다. Windows Credential Manager 미지원</td>
+</tr>
+<tr>
+<td>Grok Build</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️ 미검증</td>
+<td>PR1은 기본 signed-in browser/OIDC 토큰 파일 <code>~/.grok/auth.json</code>만 <code>grok-auth.json</code>으로 swap한다. <code>mat session start/run grok</code>은 미지원이다. <code>~/.grok/config.toml</code>의 model <code>api_key</code>/<code>env_key</code>, <code>XAI_API_KEY</code>, <code>GROK_*</code> auth/model env, <code>GROK_HOME</code>, project <code>.grok/config.toml</code>, MCP credentials는 <code>auth.json</code>을 override/우회할 수 있으므로 선택한 프로필을 신뢰하기 전에 unset/검토해야 한다.</td>
 </tr>
 </tbody></table></div>
 <p>&quot;⚠️ 미검증&quot; = swap 로직은 platform-agnostic file I/O라 동작 가능성이 있지만, 본 프로젝트 CI는 macOS + Ubuntu만 검증한다. Windows 경로는 각 CLI의 공식 문서 기반 추정이며 실제 실행은 검증하지 않았다. patch / 버그 리포트 환영.</p>
@@ -538,7 +556,7 @@ style = &#39;cyan&#39;
 <td><code>XDG_DATA_HOME</code> (<code>opencode</code> envSubdir; broad XDG side effect)</td>
 </tr>
 </tbody></table></div>
-<p><strong><code>mat session start</code> 미지원</strong> (안전한 자격증명 재배치 env 없음; <code>session start</code>가 명시 에러): macOS <code>claude</code>(Keychain service name env override 불가), <code>aider</code>(provider env / CLI args / project-local config 등 세션 재배치 불가 채널; 대신 더 좁은 <code>mat session run aider</code> partial support 사용), <code>goose</code>(keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), Google Antigravity / <code>agy</code>(native keyring + 안정적인 CLI 전용 credential redirect 부재; <code>HOME</code> redirect는 너무 광범위), 그리고 사용자 <strong>플러그인</strong> CLI(빌트인 전용 신뢰경계).</p>
+<p><strong><code>mat session start</code> 미지원</strong> (안전한 자격증명 재배치 env 없음; <code>session start</code>가 명시 에러): macOS <code>claude</code>(Keychain service name env override 불가), <code>aider</code>(provider env / CLI args / project-local config 등 세션 재배치 불가 채널; 대신 더 좁은 <code>mat session run aider</code> partial support 사용), <code>goose</code>(keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), <code>grok</code> PR1(profile-swap-only <code>~/.grok/auth.json</code>; config/env/project/MCP 우회는 별도 session-isolation 설계 필요), Google Antigravity / <code>agy</code>(native keyring + 안정적인 CLI 전용 credential redirect 부재; <code>HOME</code> redirect는 너무 광범위), 그리고 사용자 <strong>플러그인</strong> CLI(빌트인 전용 신뢰경계).</p>
 <p>종료 코드는 <code>mat exec</code>와 동형: <code>0</code> 성공, <code>2</code> 사용법 에러, <code>74</code> 재캡처 실패, <code>128+N</code> 자식 시그널 <code>N</code> (self-raise), 그 외 자식 종료 코드 전달.</p>
 <p><strong>한계 (사용 전 필독):</strong></p>
 <ul>
@@ -640,7 +658,8 @@ mat explain agy
     ├── qwen/                     # qwen-settings.json + qwen.env (prefix 적용된 saveAs)
     ├── crush/                    # crush-config.json + crush-data.json (config + data 레이어)
     ├── opencode/                 # auth.json (OS 공통 XDG 경로)
-    └── goose/                    # goose-keyring.json (macOS Keychain / Linux Secret Service) + goose-secrets.yaml + goose-config.yaml
+    ├── goose/                    # goose-keyring.json (macOS Keychain / Linux Secret Service) + goose-secrets.yaml + goose-config.yaml
+    └── grok/                     # grok-auth.json (profile-swap-only ~/.grok/auth.json)
 </code></pre>
 <p>파일은 <code>0600</code>, 디렉토리는 <code>0700</code> 권한으로 생성된다.</p>
 <hr>

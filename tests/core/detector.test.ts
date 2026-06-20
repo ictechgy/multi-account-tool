@@ -64,6 +64,37 @@ describe('detectAll', () => {
     expect(gemini!.missing).toEqual(['google_accounts.json']);
   });
 
+  it('grok auth.json 부재 → ordinary missing 으로 보고 unavailable 로 오분류하지 않는다', async () => {
+    mockSourceExists.mockImplementation(async (src: Source) =>
+      src.saveAs !== 'grok-auth.json'
+    );
+
+    const results = await detectAll();
+    const grok = results.find((r) => r.cli.id === 'grok');
+
+    expect(grok).toBeDefined();
+    expect(grok!.hasLiveCredentials).toBe(false);
+    expect(grok!.hasAnyLiveCredential).toBe(false);
+    expect(grok!.present).toEqual([]);
+    expect(grok!.missing).toEqual(['grok-auth.json']);
+    expect(grok!.unavailable).toBeUndefined();
+  });
+
+  it('grok auth.json 존재 → present 에 grok-auth.json 만 기록한다', async () => {
+    mockSourceExists.mockImplementation(async (src: Source) =>
+      src.saveAs === 'grok-auth.json'
+    );
+
+    const results = await detectAll();
+    const grok = results.find((r) => r.cli.id === 'grok');
+
+    expect(grok).toBeDefined();
+    expect(grok!.hasLiveCredentials).toBe(true);
+    expect(grok!.hasAnyLiveCredential).toBe(true);
+    expect(grok!.present).toEqual(['grok-auth.json']);
+    expect(grok!.missing).toEqual([]);
+  });
+
   it('결과는 BUILTIN_CLI_DEFS 순서를 보존', async () => {
     mockSourceExists.mockResolvedValue(true);
     const results = await detectAll();
