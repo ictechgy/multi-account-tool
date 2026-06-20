@@ -262,6 +262,42 @@ const REGISTRY: Record<string, SupportMetadata> = {
         risks: ['Missing secret-tool does not prove Goose is not using libsecret; backend assumptions must stay fail-closed.']
       }
     ]
+  },
+  grok: {
+    capabilities: {
+      freshness: {
+        status: 'partial',
+        summary: 'Fallback byte-diff only; no adapter-backed Grok identity/rotation contract.'
+      },
+      sessionStart: {
+        status: 'unsupported',
+        summary: 'Interactive session start is unsupported in PR1; Grok support is limited to auth.json profile swap.',
+        reasons: ['Grok config/env/project-local/MCP credential channels can bypass auth.json and need a separate session isolation design.']
+      },
+      sessionRun: {
+        status: 'unsupported',
+        summary: 'Command-scoped session run is unsupported in PR1; no builtin executable boundary is enabled.'
+      }
+    },
+    ambientRisks: [
+      '~/.grok/config.toml model api_key/env_key entries can outrank the signed-in auth.json token.',
+      'XAI_API_KEY, GROK_HOME, GROK_AUTH_*, GROK_OIDC_*, GROK_MODELS_*, and project .grok/config.toml are outside PR1 profile swap scope.',
+      'MCP credentials, headers, hooks, and project-local Grok config can select credentials independently of mat-selected auth.json.'
+    ],
+    driftContracts: [
+      {
+        id: 'grok-auth-json-pr1',
+        summary: 'Grok PR1 support swaps only the primary signed-in credential file ~/.grok/auth.json.',
+        lastVerified: '2026-06-20',
+        evidence: ['cli-defs grok builtin source', 'Grok builtin PR1 plan/test spec'],
+        risks: ['Config/env/project-local credential overrides can cause Grok to use a different account than the swapped auth.json.']
+      }
+    ],
+    nextSteps: [
+      'Use `mat switch grok <profile>` only for browser/OIDC auth.json account switching.',
+      'Unset XAI_API_KEY/GROK_* overrides and review ~/.grok/config.toml or project .grok/config.toml before relying on the selected profile.',
+      'Do not use `mat session run grok` until a future explicit session-isolation PR lands.'
+    ]
   }
 };
 
