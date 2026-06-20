@@ -354,6 +354,18 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     id: 'goose',
     name: 'Goose',
     sources: gooseSources()
+  },
+  {
+    // xAI Grok Build CLI PR1 profile-swap-only support.
+    // Grok's primary signed-in browser/OIDC credential is `~/.grok/auth.json`; MAT stores
+    // that single file as `grok-auth.json`. Do not add `session`/`sessionRun` here in PR1:
+    // `~/.grok/config.toml`, project `.grok/config.toml`, `GROK_HOME`, `XAI_API_KEY`,
+    // `GROK_*` auth/model env, and MCP credential config can outrank or bypass auth.json.
+    id: 'grok',
+    name: 'Grok Build',
+    sources: [
+      { type: 'file', path: '~/.grok/auth.json', saveAs: 'grok-auth.json' }
+    ]
   }
 ];
 
