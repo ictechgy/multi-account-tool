@@ -83,6 +83,12 @@ For the exact support boundary of one CLI, run `mat support <cli>` (or `mat expl
 
 During foreground profile switching and `mat exec`, `mat` warns about high-confidence ambient bypass channels such as provider API-key env vars or project-local config files. The warning is informational: `mat` does **not** block or scrub those channels yet. If the override is intentional, continue; otherwise unset or remove the named env/config source before relying on the selected profile.
 
+#### Why Grok session isolation is not enabled yet
+
+Grok Build support is intentionally **profile-swap-only** in PR1. xAI's public Build docs ([Getting Started](https://docs.x.ai/build/overview), [Enterprise Deployments](https://docs.x.ai/build/enterprise)) describe multiple credential, config, and account-selection channels: browser OIDC/device auth, external auth-provider commands, direct API-key auth via `XAI_API_KEY`, model-level `api_key` / `env_key` in `~/.grok/config.toml`, managed/requirements config layers, project-visible instructions/plugins/hooks/MCP servers, and `grok inspect` for the combined discovery view. Because `~/.grok/auth.json` is only one credential channel, copying or redirecting that file alone would not prove that a `mat session` child is using **only** the selected profile.
+
+A future `mat session run grok` needs a separate design that either (1) creates an API-key-only boundary and hard-stops browser/OIDC, config, env, project, plugin, hook, and MCP override channels, or (2) relies on an upstream-supported Grok credential/config-root redirect with clear recapture semantics. Until then, use `mat switch grok <profile>` and unset/review the listed override sources before trusting the active profile.
+
 ### Switch flow (lossless)
 
 0. **Pre-swap freshness check** — if the live credentials drifted from the active profile (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before steps 1–3 below. See "OAuth Rotation Safety Matrix" above for per-CLI classification.

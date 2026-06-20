@@ -83,6 +83,12 @@ CLI 하나의 정확한 지원 경계를 보려면 `mat support <cli>`(또는 `m
 
 foreground 프로필 전환이나 `mat exec` 중 provider API-key env var, project-local config 파일 같은 high-confidence ambient 우회 채널이 보이면 `mat`은 경고를 출력한다. 이 경고는 정보성이다. 아직 **차단하거나 scrub하지는 않는다**. 의도한 override라면 계속 진행하면 되고, 아니라면 선택한 프로필을 신뢰하기 전에 표시된 env/config source를 unset 하거나 제거하라.
 
+#### 왜 Grok session isolation은 아직 켜지 않았나
+
+Grok Build 지원은 PR1에서 의도적으로 **profile-swap-only**다. xAI 공개 Build 문서([Getting Started](https://docs.x.ai/build/overview), [Enterprise Deployments](https://docs.x.ai/build/enterprise))는 여러 자격증명·config·계정 선택 채널을 설명한다: browser OIDC/device auth, external auth-provider command, `XAI_API_KEY` 직접 API-key 인증, `~/.grok/config.toml`의 model-level `api_key` / `env_key`, managed/requirements config layer, project-visible instructions/plugins/hooks/MCP server, 그리고 이 모든 discovery view를 보여주는 `grok inspect`. 즉 `~/.grok/auth.json`은 여러 채널 중 하나일 뿐이므로, 그 파일만 세션 디렉토리로 복사하거나 redirect해도 `mat session` 자식이 선택한 profile만 사용한다고 증명할 수 없다.
+
+향후 `mat session run grok`은 별도 설계가 필요하다. 가능한 방향은 (1) API-key-only 경계를 만들고 browser/OIDC, config, env, project, plugin, hook, MCP override 채널을 hard-stop하거나, (2) upstream이 명확한 recapture semantics를 가진 Grok credential/config-root redirect를 제공하는 것이다. 그 전까지는 `mat switch grok <profile>`만 사용하고, 활성 profile을 신뢰하기 전에 위 override source를 unset/검토하라.
+
 ### 전환 흐름 (데이터 손실 없음)
 
 0. **swap 전 freshness 점검** — 라이브 자격증명이 활성 프로필 저장본과 drift(OAuth refresh 토큰 회전 등)된 상태면, 아래 1~3 단계 전에 **재캡처 / 폐기 / 취소** dialog가 먼저 표시된다. CLI별 분류 신뢰도는 위의 "OAuth Rotation 안전성 매트릭스" 참고.
