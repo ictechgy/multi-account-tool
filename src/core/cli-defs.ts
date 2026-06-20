@@ -53,11 +53,9 @@ function claudeSource(): Source {
  *    `secret-service`) + `secrets.yaml` + `config.yaml`. macOS 와 동형 (keychain → os-keyring
  *    만 교체). macOS 와 마찬가지로 os-keyring 과 yaml 두 backend 를 동시 사용하지 말 것 —
  *    keyring 미가용 환경에서 stale yaml swap(wrong-account) 위험. secret-tool
- *    (libsecret-tools) + keyring daemon 이 있어야 동작한다. **secret-tool 미설치(ENOENT)만
- *    soft-fail** — yaml fallback + 강한 stderr 경고(wrong-account 위험 안내, #59). 단
- *    **ENOENT 아닌 spawn 실패(EACCES 등)·daemon-down/접근거부(code>0)는 명시 에러 유지**
- *    (os-keyring.ts, fail-closed — 미설치만 tooling 결손으로 보고, 권한·기타 spawn 실패와
- *    infra 결손은 부재로 오인하지 않게 throw, #73). entry 부재(exit 0+빈 출력)는 정상 skip → yaml fallback.
+ *    (libsecret-tools) + keyring daemon 이 있어야 동작한다. **secret-tool 미설치(ENOENT)도
+ *    fail-closed** — yaml fallback 으로 stale credential 을 쓰지 않게 명시 에러로 막는다 (#59/#73).
+ *    entry 부재(exit 0+빈 출력)는 정상 skip → yaml fallback.
  *  - **Linux/macOS (file backend)**: `GOOSE_DISABLE_KEYRING` 가 **존재하면**(값 무관,
  *    gooseUsesFileBackend) keyring source 를 **생략**하고 `secrets.yaml` + `config.yaml` 만
  *    swap. Goose 의 presence-only env 시맨틱에 맞춘 이유는 gooseUsesFileBackend 주석 참고 (#59).
@@ -66,10 +64,9 @@ function claudeSource(): Source {
  *
  * 한계 (README/ROADMAP 명시):
  *  - Linux 기본(keyring) 사용자는 secret-tool (libsecret-tools) + keyring daemon 이 필요하다.
- *    secret-tool 미설치(ENOENT)만 soft-fail 로 yaml fallback + 강한 경고(wrong-account 위험
- *    안내, #59) — file backend 면 `GOOSE_DISABLE_KEYRING=1` 로 os-keyring 을 끄면 stale 경고
- *    없이 yaml 로 swap 된다. ENOENT 아닌 spawn 실패(EACCES 등)·daemon-down/접근거부는 명시
- *    에러로 유지 (미설치 아님·infra 문제 구분, #73).
+ *    secret-tool 미설치(ENOENT)도 명시 에러다. file backend 면 `GOOSE_DISABLE_KEYRING=1` 로
+ *    os-keyring 을 끄면 yaml 로 swap 된다. ENOENT 아닌 spawn 실패(EACCES 등)·daemon-down/접근거부도
+ *    명시 에러로 유지 (tool/infra 문제를 항목 부재로 오인하지 않음, #73).
  *  - shell env (`GOOSE_*`, provider 별 `OPENAI_API_KEY` 등) 는 mat scope 밖.
  *  - project-local override 도 mat scope 밖.
  */
@@ -91,13 +88,12 @@ function claudeSource(): Source {
  * `secret-tool` CLI(`libsecret-tools`) 로 읽는다. 둘은 독립 패키지라 secret-tool CLI 없이도
  * Goose 가 keyring 을 활성 사용할 수 있다. CLI 부재를 file-backend 로 오인해 os-keyring 을
  * skip 하면 활성 keyring 사용자가 stale `secrets.yaml` 로 swap 되는 wrong-account 사고가 난다.
- * 따라서 확실한 disable 신호가 없으면 os-keyring 을 포함한다. 다만 secret-tool 미설치(ENOENT)
- * 자체는 source 포함/생략 판정에 쓰지 않고, 읽기 시점에 os-keyring.ts 가 soft-fail(yaml
- * fallback + 강한 wrong-account 경고)로 처리한다 (#59) — ENOENT 아닌 spawn 실패(EACCES 등)·
- * daemon-down/접근거부는 명시 에러 유지 (#73).
+ * 따라서 확실한 disable 신호가 없으면 os-keyring 을 포함한다. secret-tool 미설치(ENOENT)
+ * 자체는 source 포함/생략 판정에 쓰지 않고, 읽기 시점에 os-keyring.ts 가 fail-closed 로
+ * 처리한다 (#59/#73) — tool 부재를 file backend 신호로 오인하지 않는다.
  *
  * 한계: `~/.config/goose/config.yaml` 의 file-backend 설정은 자동 감지하지 않는다. 그 경우
- * `GOOSE_DISABLE_KEYRING=1` 을 함께 지정하거나, secret-tool 미설치 soft-fail 경고 안내를 따른다.
+ * `GOOSE_DISABLE_KEYRING=1` 을 함께 지정해 os-keyring source 를 명시적으로 끈다.
  */
 function gooseUsesFileBackend(): boolean {
   // Goose 와 동일하게 **presence-only** 판정 — base.rs 의

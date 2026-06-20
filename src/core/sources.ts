@@ -38,6 +38,9 @@ const KEYCHAIN_NOT_FOUND_CODE = 44;
 /** "could not be found" stderr 패턴 (코드 변동에 대비한 보조 매칭). */
 const KEYCHAIN_NOT_FOUND_RE = /could not be found/i;
 
+/** 레거시 호환이 필요할 때만 macOS Keychain all-app ACL(`security -A`)을 명시 허용. */
+const KEYCHAIN_ALLOW_ANY_APP_ENV = 'MAT_KEYCHAIN_ALLOW_ANY_APP';
+
 /**
  * discriminated union 의 모든 case 처리를 컴파일 타임에 강제하는 헬퍼.
  * switch 의 default 분기에서 호출하면 Source 에 새 type 이 추가될 때
@@ -86,6 +89,17 @@ function assertValidKeychainSource(src: KeychainSource): void {
   }
 }
 
+function keychainAllowAnyApp(): boolean {
+  const value = process.env[KEYCHAIN_ALLOW_ANY_APP_ENV];
+  return value === '1' || value?.toLowerCase() === 'true';
+}
+
+function keychainAddArgs(service: string, account: string, value: string): string[] {
+  const args = ['add-generic-password', '-s', service, '-a', account, '-w', value];
+  if (keychainAllowAnyApp()) args.push('-A');
+  return args;
+}
+
 /**
  * macOS Keychain 항목의 account (acct) 메타데이터 조회.
  * `expectedAccount` 가 주어지면 `-a` 인자로 lookup 을 scope — 동일 service 의
@@ -129,8 +143,9 @@ async function keychainGetValue(service: string, account?: string): Promise<stri
  * 제한 — 동일 service 의 타 account 항목은 건드리지 않는다 (multi-account 안전).
  * 미지정 시 단일-account 사용자 전제로 service-only lookup (기존 동작 유지).
  *
- * 보안 invariant (helper 도 보존): `-A` ACL (Claude 가 토큰을 못 읽는 회귀 방지),
- * argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
+ * 보안 invariant (helper 도 보존): 기본값은 `-A` all-app ACL 을 쓰지 않는다.
+ * 레거시 CLI 접근성 때문에 필요하면 `MAT_KEYCHAIN_ALLOW_ANY_APP=1` 로 명시 허용한다.
+ * `/usr/bin/security -w value` argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
  */
 async function keychainSet(
   service: string,
@@ -181,8 +196,9 @@ async function deleteKeychainEntry(service: string, account: string): Promise<vo
 /**
  * 새 keychain 항목 add + 실패 시 backup 복구 (PR-P 책임 3+4 — add + rollback).
  *
- * `-A` 로 동일 사용자 모든 앱 접근 가능한 ACL 사용 (Claude 가 토큰을 못 읽는 회귀 방지).
- * argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
+ * 기본값은 `-A` 로 동일 사용자 모든 앱 접근 가능한 ACL 을 부여하지 않는다.
+ * 필요 시 `MAT_KEYCHAIN_ALLOW_ANY_APP=1` 로 레거시 동작을 명시 허용한다.
+ * `/usr/bin/security -w value` argv 노출 trade-off 는 README 의 "보안" 섹션 참고.
  *
  * backup 이 있고 add 가 실패하면 backup 을 같은 명령으로 재기록 — rollback 도 실패하면
  * 양쪽 에러 동시 surface (단일 throw 에 rollbackNote append).
@@ -193,18 +209,14 @@ async function addKeychainEntryOrRollback(
   value: string,
   backup: KeychainBackup | null
 ): Promise<void> {
-  const addRes = await runCommand(SECURITY_BIN, [
-    'add-generic-password', '-s', service, '-a', account, '-w', value, '-A'
-  ]);
+  const addRes = await runCommand(SECURITY_BIN, keychainAddArgs(service, account, value));
   if (addRes.code === 0) return;
 
   // backup 이 있으면 자동 rollback 시도. KeychainBackup 의 invariant (account truthy) 는
   // loadKeychainBackup 이 KeychainAccountMissingError 로 이미 검증.
   let rollbackNote = '';
   if (backup) {
-    const rb = await runCommand(SECURITY_BIN, [
-      'add-generic-password', '-s', service, '-a', backup.account, '-w', backup.value, '-A'
-    ]);
+    const rb = await runCommand(SECURITY_BIN, keychainAddArgs(service, backup.account, backup.value));
     if (rb.code !== 0) {
       rollbackNote = ` / 백업 복구도 실패 (code=${rb.code}): ${redactMessage(rb.stderr)}`;
     }

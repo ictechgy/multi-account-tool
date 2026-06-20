@@ -64,6 +64,7 @@ import {
 } from './profile-store.js';
 import { getRecaptureTimeoutMs, withTimeout } from './timeout.js';
 import type { CliDef, SessionShareDir } from './types.js';
+import { redactSecretLikeText } from './redaction.js';
 
 const DEFAULT_SHARE_DIR_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_SHARE_DIR_MAX_FILES = 2000;
@@ -1253,6 +1254,64 @@ const SESSION_CHILD_CREDENTIAL_ENV_HARDENING: Record<string, string> = {
   NO_GCE_CHECK: 'true'
 };
 
+const SESSION_ARG_SECRET_MARKER = '[redacted-session-arg]';
+const SESSION_ARG_JWT_MARKER = '[redacted-jwt]';
+const TEST_SESSION_SHELL_ENV = 'MAT_TEST_SESSION_SHELL';
+const SESSION_ARG_SECRET_FLAG_RE =
+  /^-{1,2}[A-Za-z0-9._-]*(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|cookie|session[-_]?id|credential)[A-Za-z0-9._-]*(?:=.*)?$/i;
+
+function redactSessionRunArgs(args: readonly string[]): string[] {
+  let redactNext = false;
+  return args.map((arg) => {
+    if (redactNext) {
+      redactNext = false;
+      return SESSION_ARG_SECRET_MARKER;
+    }
+    if (SESSION_ARG_SECRET_FLAG_RE.test(arg)) {
+      const eq = arg.indexOf('=');
+      if (eq >= 0) return `${arg.slice(0, eq + 1)}${SESSION_ARG_SECRET_MARKER}`;
+      redactNext = true;
+      return arg;
+    }
+    return redactSecretLikeText(arg, {
+      secretMarker: SESSION_ARG_SECRET_MARKER,
+      jwtMarker: SESSION_ARG_JWT_MARKER,
+      longSecretMin: 24,
+      maxLength: 256
+    });
+  });
+}
+
+function resolveSessionShell(): string {
+  if (process.env.NODE_ENV === 'test') {
+    const testShell = process.env[TEST_SESSION_SHELL_ENV];
+    if (
+      typeof testShell === 'string' &&
+      testShell.length > 0 &&
+      isAbsolute(testShell) &&
+      !testShell.includes('\x00') &&
+      !/[\r\n]/.test(testShell)
+    ) {
+      return testShell;
+    }
+  }
+  try {
+    const shell = userInfo().shell;
+    if (
+      typeof shell === 'string' &&
+      shell.length > 0 &&
+      isAbsolute(shell) &&
+      !shell.includes('\x00') &&
+      !/[\r\n]/.test(shell)
+    ) {
+      return shell;
+    }
+  } catch {
+    // os.userInfo can fail in unusual NSS/container states; fall back to a fixed shell.
+  }
+  return '/bin/sh';
+}
+
 const GENERIC_CREDENTIAL_ENV_PATTERN =
   /(^|_)(API_KEY|ACCESS_TOKEN|AUTH_TOKEN|BEARER_TOKEN|SERVICE_KEY|CLIENT_SECRET|SECRET_KEY|TOKEN|PAT)$/i;
 
@@ -1521,7 +1580,7 @@ function makeSessionRunPreflightReport(opts: SessionCommandOptions): SessionRunP
     schemaVersion: 1,
     cliId: opts.cliId,
     profileName: opts.profileName,
-    args: opts.args.slice(),
+    args: redactSessionRunArgs(opts.args),
     ok: false,
     supported: false,
     profileExists: null,
@@ -2806,7 +2865,7 @@ function spawnSessionTarget(
   onSpawned?: (childPid: number, isChildAlive: () => boolean) => Promise<void>
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve, reject) => {
-    const command = target.kind === 'shell' ? (process.env.SHELL || '/bin/sh') : target.executable;
+    const command = target.kind === 'shell' ? resolveSessionShell() : target.executable;
     const args = target.kind === 'shell' ? [] : target.args;
     const env = buildSessionChildEnv(plan, target);
     const child = spawn(command, args, { stdio: 'inherit', env });

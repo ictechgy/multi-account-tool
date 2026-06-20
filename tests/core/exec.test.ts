@@ -724,73 +724,30 @@ describe('runExec', () => {
     }
   );
 
-  it('PR-I*: snapshotLiveToProfile 가 hang 하면 RECAPTURE_TIMEOUT_MS 후 timeout → stderr 안내 + restore 진행 (quad-review Strong MED fix)', async () => {
-    // quad-review iter 1 Strong MED (Codex-2 + Claude-2 합의): recapture 가 keychain
-    // prompt / NFS stall 등으로 hang 시 finally 전체 차단 → mat 종료 안 됨. timeout
-    // 도입으로 bounded — timeout 후 stderr 안내 + restore 정상 진행.
-    //
-    // fake timers 로 RECAPTURE_TIMEOUT_MS (10s default) advance. snapshotLiveToProfile
-    // mock 는 영원히 pending → withTimeout race 의 timeoutPromise 가 먼저 reject.
-    vi.useFakeTimers();
-    try {
-      mockSnapshot.mockImplementationOnce(() => new Promise(() => { /* never settle */ }));
-      mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
-      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  it('PR-I*: 재캡처 snapshot 이 pending 이면 restore 를 앞지르지 않음 (non-canceling timeout 금지)', async () => {
+    // withTimeout(Promise.race) 로 mutating snapshot 을 timeout 처리하면, restore 뒤에
+    // underlying snapshot 이 늦게 완료되어 복원된 live/profile 을 다시 덮어쓸 수 있다.
+    // 따라서 recapture 는 완료/실패 전 restore 로 넘어가지 않아야 한다.
+    let releaseSnapshot!: () => void;
+    mockSnapshot.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      releaseSnapshot = resolve;
+    }));
+    mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
 
-      const runPromise = runExec({
-        cliId: 'codex', profileName: 'work', command: 'sleep', args: []
-      });
-      // RECAPTURE_TIMEOUT_MS (10s) 충분히 초과해 timeout reject 유발.
-      await vi.advanceTimersByTimeAsync(11_000);
-      const result = await runPromise;
+    const runPromise = runExec({
+      cliId: 'codex', profileName: 'work', command: 'sleep', args: []
+    });
+    await new Promise((resolve) => setImmediate(resolve));
 
-      expect(result.code).toBe(0);
-      // restore 는 timeout 후에도 호출됨 — swap + restore = 2회.
-      expect(mockSwitch).toHaveBeenCalledTimes(2);
-      expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
+    expect(mockSnapshot).toHaveBeenCalledOnce();
+    expect(mockSwitch).toHaveBeenCalledTimes(1); // swap 만 완료, restore 는 snapshot 이후
 
-      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
-      expect(stderr).toMatch(/swap 프로필\(work\) 의 라이브 재캡처 실패/);
-      expect(stderr).toMatch(/timeout after 10000ms/);
-      expect(stderr).toMatch(/mat freshness codex/);
-      stderrSpy.mockRestore();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    releaseSnapshot();
+    const result = await runPromise;
 
-  it('PR-N: MAT_EXEC_RECAPTURE_TIMEOUT_MS 의 lazy 평가 — module-load 후 set 한 env 도 즉시 반영', async () => {
-    // 옛 코드: const RECAPTURE_TIMEOUT_MS = parseRecaptureTimeoutMs() 가 module load 시점
-    // 1회 평가 → test setup 이 env 변경해도 무효, 항상 default 10s 사용.
-    // PR-N: getRecaptureTimeoutMs() 호출 시점 평가 → env 변경 즉시 반영. daemon/TUI
-    // 통합 시 다음 mat exec 부터 새 timeout 적용.
-    vi.useFakeTimers();
-    const originalEnv = process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
-    process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = '500';
-    try {
-      mockSnapshot.mockImplementationOnce(() => new Promise(() => { /* never settle */ }));
-      mockSpawn.mockReturnValue(asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
-      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-
-      const runPromise = runExec({
-        cliId: 'codex', profileName: 'work', command: 'sleep', args: []
-      });
-      // override 한 500ms 만 지나도 timeout reject 가 발생해야 함 (옛 코드면 10s 까지 안 됨).
-      await vi.advanceTimersByTimeAsync(600);
-      const result = await runPromise;
-
-      expect(result.code).toBe(0);
-      const stderr = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
-      expect(stderr).toMatch(/timeout after 500ms/);
-      stderrSpy.mockRestore();
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS;
-      } else {
-        process.env.MAT_EXEC_RECAPTURE_TIMEOUT_MS = originalEnv;
-      }
-      vi.useRealTimers();
-    }
+    expect(result.code).toBe(0);
+    expect(mockSwitch).toHaveBeenCalledTimes(2);
+    expect(mockSwitch).toHaveBeenNthCalledWith(2, 'codex', 'default', { skipPreSwapSnapshot: true });
   });
 
   it('PR-I*: spawn error 후에도 재캡처 + restore 모두 시도됨 (rotation 손실 방지)', async () => {

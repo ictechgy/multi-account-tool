@@ -41,7 +41,6 @@ import { assertNoEnvSecretSources } from './env-secret-source.js';
 import { UsageError, errorMessage } from './errors.js';
 import { profileExists, validateProfileName } from './profile-store.js';
 import { snapshotLiveToProfile, switchProfile } from './switcher.js';
-import { getRecaptureTimeoutMs, withTimeout } from './timeout.js';
 import type { CliDef } from './types.js';
 
 export interface ExecOptions {
@@ -63,8 +62,8 @@ export interface ExecResult {
 /** 외부에서 잡고 자식에게 전달할 시그널 목록. */
 const FORWARD_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
-// 라이브 재캡처 단계(snapshotLiveToProfile)의 타임아웃·withTimeout 은 './timeout.js' 공유 모듈에서
-// import 한다 (PR #61 2회차 — session.ts 와의 중복 + 단일 env 가 두 default 를 제어하던 위험 제거).
+// 라이브 재캡처 단계는 mutating snapshot 이므로 non-canceling withTimeout 으로 감싸지 않는다.
+// 외부 credential helper hang 은 runCommand 의 cancel-safe process timeout 에서 경계한다.
 
 /**
  * mat exec 메인. 검증 실패는 UsageError throw, 자식 실행 결과는 ExecResult 로 반환.
@@ -268,22 +267,19 @@ async function recaptureAndRestoreBestEffort(
 }
 
 /**
- * swap-target profile 로 라이브 재캡처. 실패/타임아웃은 stderr 안내 후 swallow.
+ * swap-target profile 로 라이브 재캡처. 실패는 stderr 안내 후 swallow.
  *
- * timeout 도입 (quad-review iter 1 Strong MED): `snapshotLiveToProfile` 가 keychain
- * prompt / NFS stall 등으로 무한 대기하면 finally 전체가 막혀 mat 이 종료되지 않는
- * 문제. {@link getRecaptureTimeoutMs} 으로 bound (호출 시점 env 평가).
+ * 주의: `withTimeout(snapshotLiveToProfile(...))` 같은 non-canceling Promise race 는 금지한다.
+ * timeout 후 restore 가 진행된 뒤 underlying snapshot 이 늦게 끝나면 복원된 live/profile 을
+ * 다시 덮어써 자격증명 손실을 만들 수 있다. credential helper hang 은 `runCommand` 의
+ * process timeout 처럼 실제 자식을 종료할 수 있는 경계에서만 제한한다.
  *
  * 사용자 후속 action 안내 (quad-review iter 1 Split LOW): restore 실패 / stale
  * recovery 안내와 일관되게 `mat freshness <cli>` 권장을 stderr 에 명시.
  */
 async function recaptureLiveToTarget(cliId: string, swapTarget: string): Promise<void> {
   try {
-    await withTimeout(
-      snapshotLiveToProfile(cliId, swapTarget),
-      getRecaptureTimeoutMs(),
-      'recapture(snapshotLiveToProfile)'
-    );
+    await snapshotLiveToProfile(cliId, swapTarget);
   } catch (err) {
     process.stderr.write(
       `\n[mat] swap 프로필(${swapTarget}) 의 라이브 재캡처 실패: ${errorMessage(err)}\n` +

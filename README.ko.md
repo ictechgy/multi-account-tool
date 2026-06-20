@@ -442,7 +442,7 @@ mat explain agy
 
 ### 수용한 trade-off (의도된 한계)
 
-- **Keychain ACL 완화** — Keychain 기반 source(Claude Code credentials / Goose `goose`/`secrets` entry 등)는 보통 특정 바이너리만 접근하도록 Keychain ACL이 걸려 있다. `mat`은 swap 시 `security add-generic-password -A`로 항목을 다시 만들어 같은 사용자의 모든 프로세스가 접근할 수 있게 한다. 그렇지 않으면 swap 후 upstream CLI가 자기 토큰을 읽지 못한다. 같은 UID의 프로세스(악의적 `npm postinstall` 등)도 토큰을 읽을 수 있게 되는 점은 알고 있어야 한다. 추후 릴리스에서 opt-in restrictive 모드(`-T` 화이트리스트) 도입 예정.
+- **Keychain ACL 호환 모드** — 기본값에서 `mat`은 더 이상 `security add-generic-password -A`로 Keychain 항목을 다시 만들지 않는다. 따라서 swap된 자격증명에 같은 사용자 모든 프로세스가 조용히 접근하는 권한을 주지 않는다. 일부 legacy upstream CLI가 broad ACL 없이 다시 만든 항목을 읽지 못하면 해당 실행에 `MAT_KEYCHAIN_ALLOW_ANY_APP=1`을 설정해 이전 all-app `-A` 동작을 명시적으로 복원할 수 있다. 이 경우 같은 UID의 프로세스(악의적 `npm postinstall` 등)도 항목을 조용히 읽을 수 있다. 더 좁은 `-T <path>` 화이트리스트 모드는 향후 hardening 대상이다.
 
 - **OAuth 토큰 평문 백업** — `~/.multi-account-tool/profiles/` 아래 OAuth 토큰이 평문 JSON으로 저장된다. 파일 `0600`, 디렉토리 `0700` 권한이지만 디스크 백업/스냅샷에는 포함될 수 있다. **Time Machine / iCloud / 클라우드 동기화 폴더에서 제외하길 권장**:
 

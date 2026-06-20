@@ -442,7 +442,7 @@ Files are created with `0600`, directories with `0700`.
 
 ### Accepted trade-offs (by design)
 
-- **Keychain ACL relaxation** — All Keychain-backed sources (Claude Code credentials, Goose `goose`/`secrets` entry) are normally protected by a Keychain ACL that limits access to specific binaries. To avoid breaking the upstream CLI after a swap, `mat` rewrites the entry with `security add-generic-password -A`, which allows any process running as the same user to read it. Any process under your UID (including a malicious `npm postinstall`) could then read it silently. An opt-in `-T <path>` whitelist mode is planned for a future release.
+- **Keychain ACL compatibility mode** — By default, `mat` no longer rewrites Keychain items with `security add-generic-password -A`; this avoids granting every same-user process silent access to swapped credentials. If a legacy upstream CLI cannot read the rewritten item without the broad ACL, set `MAT_KEYCHAIN_ALLOW_ANY_APP=1` to restore the old all-app `-A` behavior for that run. Any process under your UID (including a malicious `npm postinstall`) could then read the item silently. A narrower `-T <path>` whitelist mode remains a future hardening target.
 
 - **Plaintext credential backups** — OAuth tokens are stored as plaintext JSON under `~/.multi-account-tool/profiles/`. Files are `0600` and directories `0700`, but they can still be picked up by disk backups. **Exclude the data directory from Time Machine / iCloud / cloud-synced folders**:
 

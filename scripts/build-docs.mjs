@@ -96,6 +96,8 @@ function addHeadingIds(html) {
 
 /** 링크 target 재작성 — 언어 전환 / 상대 .md·LICENSE → GitHub blob. fragment·query 보존. */
 function rewriteHref(url) {
+  const normalized = String(url).trim().replace(/[\u0000-\u001F\u007F\s]+/g, '');
+  if (/^(?:javascript|data|vbscript):/i.test(normalized)) return '#';
   if (/^(https?:|mailto:|#|\/\/)/.test(url)) return url;
   const hashIdx = url.indexOf('#');
   const queryIdx = url.indexOf('?');
@@ -141,6 +143,14 @@ function stripParagraphWith(html, needle) {
 /** HTML 속성/텍스트 escape. */
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function createMarkdownRenderer() {
+  const renderer = new marked.Renderer();
+  // README 원문에 raw HTML 이 들어와도 생성 사이트 본문에서 실행되지 않게 escape 한다.
+  // fenced code block 은 Marked 의 code renderer 를 그대로 타므로 영향이 없다.
+  renderer.html = ({ text }) => esc(text);
+  return renderer;
 }
 
 /** 본문을 히어로(첫 `<hr>` 이전)와 본문(이후)으로 분리. hr 없으면 전체가 본문. */
@@ -458,12 +468,13 @@ a:hover { color: var(--accent-strong); }
 
 async function build() {
   marked.setOptions({ gfm: true, breaks: false });
+  const renderer = createMarkdownRenderer();
   await fs.rm(OUT_DIR, { recursive: true, force: true });
   await fs.mkdir(OUT_DIR, { recursive: true });
 
   for (const page of PAGES) {
     const md = await fs.readFile(join(ROOT, page.src), 'utf8');
-    let body = rewriteLinks(addHeadingIds(marked.parse(md)));
+    let body = rewriteLinks(addHeadingIds(marked.parse(md, { renderer })));
     body = hideInlineLangSwitcher(body, page.switcher.other.href);
     body = stripParagraphWith(body, SITE_URL); // README 의 문서 사이트 링크 줄 제거 (사이트 자기참조)
     body = body.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, '</table></div>');
