@@ -442,7 +442,7 @@ mat explain agy
 
 ### 수용한 trade-off (의도된 한계)
 
-- **Keychain ACL 호환 모드** — 기본값에서 `mat`은 더 이상 `security add-generic-password -A`로 Keychain 항목을 다시 만들지 않는다. 따라서 swap된 자격증명에 같은 사용자 모든 프로세스가 조용히 접근하는 권한을 주지 않는다. 일부 legacy upstream CLI가 broad ACL 없이 다시 만든 항목을 읽지 못하면 해당 실행에 `MAT_KEYCHAIN_ALLOW_ANY_APP=1`을 설정해 이전 all-app `-A` 동작을 명시적으로 복원할 수 있다. 이 경우 같은 UID의 프로세스(악의적 `npm postinstall` 등)도 항목을 조용히 읽을 수 있다. 더 좁은 `-T <path>` 화이트리스트 모드는 향후 hardening 대상이다.
+- **Keychain ACL 호환 모드** — macOS built-in Keychain source는 Claude Code/Goose 같은 upstream CLI가 swap된 항목을 계속 읽을 수 있도록 기본적으로 `security add-generic-password -A`를 유지한다. 이 경우 같은 UID의 프로세스(악의적 `npm postinstall` 등)도 항목을 조용히 읽을 수 있다. 해당 실행에서 no-`-A` 쓰기를 강제하려면 `MAT_KEYCHAIN_RESTRICT_ACL=1`을 설정한다. 사용자/plugin Keychain source가 legacy broad ACL을 필요로 하면 `MAT_KEYCHAIN_ALLOW_ANY_APP=1`로 명시 허용할 수 있다. 더 좁은 `-T <path>` 화이트리스트 모드는 향후 hardening 대상이다.
 
 - **OAuth 토큰 평문 백업** — `~/.multi-account-tool/profiles/` 아래 OAuth 토큰이 평문 JSON으로 저장된다. 파일 `0600`, 디렉토리 `0700` 권한이지만 디스크 백업/스냅샷에는 포함될 수 있다. **Time Machine / iCloud / 클라우드 동기화 폴더에서 제외하길 권장**:
 

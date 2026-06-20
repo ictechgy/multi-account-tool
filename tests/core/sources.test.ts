@@ -238,6 +238,7 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
   let tmp: TmpHome;
   let originalPlatform: NodeJS.Platform;
   let originalAllowAnyApp: string | undefined;
+  let originalRestrictAcl: string | undefined;
 
   beforeEach(async () => {
     tmp = await setupTmpHome();
@@ -245,7 +246,9 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     // process.platform 을 darwin 으로 stub (sources.ts 는 함수 호출 시점에 검사).
     originalPlatform = process.platform;
     originalAllowAnyApp = process.env.MAT_KEYCHAIN_ALLOW_ANY_APP;
+    originalRestrictAcl = process.env.MAT_KEYCHAIN_RESTRICT_ACL;
     delete process.env.MAT_KEYCHAIN_ALLOW_ANY_APP;
+    delete process.env.MAT_KEYCHAIN_RESTRICT_ACL;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
   });
   afterEach(async () => {
@@ -253,13 +256,21 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
     Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     if (originalAllowAnyApp === undefined) delete process.env.MAT_KEYCHAIN_ALLOW_ANY_APP;
     else process.env.MAT_KEYCHAIN_ALLOW_ANY_APP = originalAllowAnyApp;
+    if (originalRestrictAcl === undefined) delete process.env.MAT_KEYCHAIN_RESTRICT_ACL;
+    else process.env.MAT_KEYCHAIN_RESTRICT_ACL = originalRestrictAcl;
     await tmp.cleanup();
   });
 
   const KEYCHAIN_SRC: KeychainSource = {
     type: 'keychain',
     service: 'Test Service',
+    allowAnyApp: true,
     saveAs: 'credentials.json'
+  };
+  const USER_PLUGIN_KEYCHAIN_SRC: KeychainSource = {
+    type: 'keychain',
+    service: 'Plugin Service',
+    saveAs: 'plugin-credentials.json'
   };
 
   describe('readSource(keychain)', () => {
@@ -329,7 +340,7 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
   });
 
   describe('writeSource(keychain) — backup → delete → add 시퀀스', () => {
-    it('신규 (기존 없음): backup null → delete skip → add 만 호출 (SECURITY_BIN + 기본 no -A ACL)', async () => {
+    it('신규 built-in 호환 source: backup null → delete skip → add 만 호출 (SECURITY_BIN + 기본 -A ACL)', async () => {
       mockSpawn
         // keychainGetValue (find -w) → not found
         .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
@@ -349,21 +360,41 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(addCall[1]).toContain('alice');
       expect(addCall[1]).toContain('-w');
       expect(addCall[1]).toContain('new-token');
-      // 기본값은 all-app ACL 금지. 필요 시 별도 opt-in 테스트에서만 -A 허용.
-      expect(addCall[1]).not.toContain('-A');
+      // built-in compatibility source 는 기존 upstream CLI 호환을 위해 -A 유지.
+      expect(addCall[1]).toContain('-A');
     });
 
-    it('MAT_KEYCHAIN_ALLOW_ANY_APP=1 일 때만 레거시 -A ACL 을 명시 허용', async () => {
+    it('사용자/plugin keychain source 는 기본 no -A 이고 MAT_KEYCHAIN_ALLOW_ANY_APP=1 로만 -A 명시 허용', async () => {
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      await writeSource(USER_PLUGIN_KEYCHAIN_SRC, JSON.stringify({ value: 'new-token', account: 'alice' }));
+      let [addCall] = findSpawnCallsByArg('add-generic-password');
+      expect(addCall[1]).not.toContain('-A');
+
+      vi.clearAllMocks();
       process.env.MAT_KEYCHAIN_ALLOW_ANY_APP = '1';
       mockSpawn
         .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
         .mockReturnValueOnce(fakeProc({ code: 0 }));
 
-      const stored: KeychainStored = { value: 'new-token', account: 'alice' };
-      await writeSource(KEYCHAIN_SRC, JSON.stringify(stored));
+      await writeSource(USER_PLUGIN_KEYCHAIN_SRC, JSON.stringify({ value: 'new-token', account: 'alice' }));
+
+      [addCall] = findSpawnCallsByArg('add-generic-password');
+      expect(addCall[1]).toContain('-A');
+    });
+
+    it('MAT_KEYCHAIN_RESTRICT_ACL=1 은 built-in allowAnyApp 도 no -A 로 강제한다', async () => {
+      process.env.MAT_KEYCHAIN_RESTRICT_ACL = '1';
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      await writeSource(KEYCHAIN_SRC, JSON.stringify({ value: 'new-token', account: 'alice' }));
 
       const [addCall] = findSpawnCallsByArg('add-generic-password');
-      expect(addCall[1]).toContain('-A');
+      expect(addCall[1]).not.toContain('-A');
     });
 
     it('기존 있음: backup value + account 조회 → 정확한 acct 로 delete → add', async () => {
@@ -451,8 +482,8 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(rollbackCall[0]).toBe('/usr/bin/security');
       expect(rollbackCall[1]).toContain('old-token');
       expect(rollbackCall[1]).toContain('bob');
-      // 롤백도 기본 no -A 정책을 보존한다.
-      expect(rollbackCall[1]).not.toContain('-A');
+      // 롤백도 built-in compatibility -A 정책을 보존한다.
+      expect(rollbackCall[1]).toContain('-A');
     });
 
     it('add 실패 + 롤백도 실패 → "백업 복구도 실패" note 포함', async () => {

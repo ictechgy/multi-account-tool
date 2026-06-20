@@ -79,9 +79,18 @@ describe('detectAll', () => {
     expect(mockSourceExists).toHaveBeenCalledTimes(totalSources);
   });
 
-  it('sourceExists 가 reject 하면 detectAll 도 reject (에러 무시 안 함)', async () => {
+  it('sourceExists 가 reject 하면 missing 으로 오분류하지 않고 unavailable 로 분류한다', async () => {
     mockSourceExists.mockRejectedValue(new Error('fs unavailable'));
-    await expect(detectAll()).rejects.toThrow('fs unavailable');
+    const results = await detectAll();
+    for (const r of results) {
+      expect(r.hasLiveCredentials).toBe(false);
+      expect(r.hasAnyLiveCredential).toBe(false);
+      expect(r.present).toEqual([]);
+      expect(r.missing).toEqual([]);
+      expect(r.unavailable).toEqual(
+        r.cli.sources.map((src) => ({ saveAs: src.saveAs, message: 'fs unavailable' }))
+      );
+    }
   });
 
   it('env-secret source 는 missing 으로 오분류하지 않고 unsupported metadata 로 제외한다', async () => {

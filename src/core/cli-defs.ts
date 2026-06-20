@@ -26,7 +26,7 @@ import type { CliDef, Source } from './types.js';
  */
 function claudeSource(): Source {
   if (process.platform === 'darwin') {
-    return { type: 'keychain', service: 'Claude Code-credentials', saveAs: 'credentials.json' };
+    return { type: 'keychain', service: 'Claude Code-credentials', allowAnyApp: true, saveAs: 'credentials.json' };
   }
   return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
 }
@@ -114,7 +114,7 @@ function gooseSources(): Source[] {
   // file backend 일 때 stale keychain 항목을 swap 하는 wrong-account 위험 차단 (Linux 와 대칭).
   if (process.platform === 'darwin' && !gooseUsesFileBackend()) {
     return [
-      { type: 'keychain', service: 'goose', account: 'secrets', saveAs: 'goose-keyring.json' },
+      { type: 'keychain', service: 'goose', account: 'secrets', allowAnyApp: true, saveAs: 'goose-keyring.json' },
       ...yamlSources
     ];
   }

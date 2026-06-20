@@ -6,9 +6,9 @@
  *
  * **os-keyring source 의 "부재" 의미 (#59/#73)**: `sourceExists` → `osKeyringExists` 는
  * 항목 부재(exit 0 + 빈 출력)만 `false` 로 반환한다. secret-tool(libsecret-tools) 미설치
- * (ENOENT), 실행 불가(EACCES 등), daemon-down 은 모두 throw 되어 detector 가 missing 으로
- * 집계하지 않는다. tool/infra 결손을 file backend 신호로 오인하면 stale credential
- * import/swap 위험이 있으므로 fail-closed 한다.
+ * (ENOENT), 실행 불가(EACCES 등), daemon-down 은 sourceExists 에서 throw 되며 detector 는
+ * 이를 `unavailable` 로 분류한다. tool/infra 결손을 missing/file-backend 신호로 오인하면
+ * stale credential import/swap 위험이 있으므로 first-import 후보에서 제외한다.
  */
 
 import { getAllCliDefs } from './cli-defs.js';
@@ -27,9 +27,14 @@ export interface DetectionResult {
   present: string[];
   /**
    * 라이브 위치에서 발견되지 않은 source 의 saveAs 명. os-keyring source 는 항목 부재만
-   * 여기로 분류되며 tool/daemon unavailable 은 throw 된다 — 모듈 상단 주석 참조 (#59/#73).
+   * 여기로 분류되며 tool/daemon unavailable 은 `unavailable` 로 분류된다 — 모듈 상단 주석 참조 (#59/#73).
    */
   missing: string[];
+  /**
+   * 감지 backend 가 실패해 존재/부재를 판정하지 못한 source. ordinary missing 이 아니므로
+   * first-import 후보로 쓰지 않는다.
+   */
+  unavailable?: Array<{ saveAs: string; message: string }>;
   /**
    * 감지는 지원하지 않지만 ordinary missing 으로 오분류하면 안 되는 source 의 saveAs 명.
    * env-secret 은 metadata-only hard-stop 상태이므로 first-import 후보에서 제외된다.
@@ -57,18 +62,28 @@ async function detect(cli: CliDef): Promise<DetectionResult> {
     };
   }
   const results = await Promise.all(
-    cli.sources.map(async (src) => ({ saveAs: src.saveAs, exists: await sourceExists(src) }))
+    cli.sources.map(async (src) => {
+      try {
+        return { saveAs: src.saveAs, exists: await sourceExists(src) };
+      } catch (err) {
+        return { saveAs: src.saveAs, exists: null, message: err instanceof Error ? err.message : String(err) };
+      }
+    })
   );
   const present: string[] = [];
   const missing: string[] = [];
-  for (const { saveAs, exists } of results) {
-    (exists ? present : missing).push(saveAs);
+  const unavailable: Array<{ saveAs: string; message: string }> = [];
+  for (const { saveAs, exists, message } of results) {
+    if (exists === true) present.push(saveAs);
+    else if (exists === false) missing.push(saveAs);
+    else unavailable.push({ saveAs, message: message ?? 'source existence check failed' });
   }
   return {
     cli,
-    hasLiveCredentials: missing.length === 0 && present.length > 0,
+    hasLiveCredentials: missing.length === 0 && unavailable.length === 0 && present.length > 0,
     hasAnyLiveCredential: present.length > 0,
     present,
-    missing
+    missing,
+    ...(unavailable.length > 0 ? { unavailable } : {})
   };
 }

@@ -183,6 +183,7 @@ describe('claudeSource — platform 별 분기 (양쪽 분기 검증)', () => {
     expect(src.type).toBe('keychain');
     if (src.type === 'keychain') {
       expect(src.service).toBe('Claude Code-credentials');
+      expect(src.allowAnyApp).toBe(true);
       expect(src.saveAs).toBe('credentials.json');
     }
   });
@@ -293,7 +294,7 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
     const goose = defs.find((c) => c.id === 'goose');
     expect(goose!.sources).toEqual([
-      { type: 'keychain', service: 'goose', account: 'secrets', saveAs: 'goose-keyring.json' },
+      { type: 'keychain', service: 'goose', account: 'secrets', allowAnyApp: true, saveAs: 'goose-keyring.json' },
       ...YAML_SOURCES
     ]);
   });
