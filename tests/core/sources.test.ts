@@ -86,17 +86,22 @@ function fakeProc(opts: {
   stdinError?: Error;
   /** stdin.write 시 동기 throw 할 에러 (write-after-end / destroyed 재현 — HIGH 결함 가드) */
   stdinThrowOnWrite?: Error;
+  /** close 를 자동 emit 하지 않고 열린 상태로 둔다 — runCommand timeout 검증용. */
+  holdOpen?: boolean;
 }): ChildProcessWithoutNullStreams {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter;
     stderr: EventEmitter;
     stdin: FakeStdin;
+    kill: ReturnType<typeof vi.fn>;
   };
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
   proc.stdin = new FakeStdin(opts.stdinError, opts.stdinThrowOnWrite);
+  proc.kill = vi.fn(() => true);
 
   setImmediate(() => {
+    if (opts.holdOpen) return;
     if (opts.error) {
       proc.emit('error', opts.error);
       if (opts.emitCloseAfterError) {
@@ -232,24 +237,40 @@ describe('sources — env-secret public schema hard-stop', () => {
 describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
   let tmp: TmpHome;
   let originalPlatform: NodeJS.Platform;
+  let originalAllowAnyApp: string | undefined;
+  let originalRestrictAcl: string | undefined;
 
   beforeEach(async () => {
     tmp = await setupTmpHome();
     vi.clearAllMocks();
     // process.platform 을 darwin 으로 stub (sources.ts 는 함수 호출 시점에 검사).
     originalPlatform = process.platform;
+    originalAllowAnyApp = process.env.MAT_KEYCHAIN_ALLOW_ANY_APP;
+    originalRestrictAcl = process.env.MAT_KEYCHAIN_RESTRICT_ACL;
+    delete process.env.MAT_KEYCHAIN_ALLOW_ANY_APP;
+    delete process.env.MAT_KEYCHAIN_RESTRICT_ACL;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
   });
   afterEach(async () => {
     vi.clearAllMocks();
     Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    if (originalAllowAnyApp === undefined) delete process.env.MAT_KEYCHAIN_ALLOW_ANY_APP;
+    else process.env.MAT_KEYCHAIN_ALLOW_ANY_APP = originalAllowAnyApp;
+    if (originalRestrictAcl === undefined) delete process.env.MAT_KEYCHAIN_RESTRICT_ACL;
+    else process.env.MAT_KEYCHAIN_RESTRICT_ACL = originalRestrictAcl;
     await tmp.cleanup();
   });
 
   const KEYCHAIN_SRC: KeychainSource = {
     type: 'keychain',
     service: 'Test Service',
+    allowAnyApp: true,
     saveAs: 'credentials.json'
+  };
+  const USER_PLUGIN_KEYCHAIN_SRC: KeychainSource = {
+    type: 'keychain',
+    service: 'Plugin Service',
+    saveAs: 'plugin-credentials.json'
   };
 
   describe('readSource(keychain)', () => {
@@ -319,7 +340,7 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
   });
 
   describe('writeSource(keychain) — backup → delete → add 시퀀스', () => {
-    it('신규 (기존 없음): backup null → delete skip → add 만 호출 (SECURITY_BIN + -A ACL 검증)', async () => {
+    it('신규 built-in 호환 source: backup null → delete skip → add 만 호출 (SECURITY_BIN + 기본 -A ACL)', async () => {
       mockSpawn
         // keychainGetValue (find -w) → not found
         .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
@@ -339,8 +360,41 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(addCall[1]).toContain('alice');
       expect(addCall[1]).toContain('-w');
       expect(addCall[1]).toContain('new-token');
-      // -A ACL 플래그 검증 (회귀 가드 — README "보안" 섹션의 의도된 trade-off).
+      // built-in compatibility source 는 기존 upstream CLI 호환을 위해 -A 유지.
       expect(addCall[1]).toContain('-A');
+    });
+
+    it('사용자/plugin keychain source 는 기본 no -A 이고 MAT_KEYCHAIN_ALLOW_ANY_APP=1 로만 -A 명시 허용', async () => {
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      await writeSource(USER_PLUGIN_KEYCHAIN_SRC, JSON.stringify({ value: 'new-token', account: 'alice' }));
+      let [addCall] = findSpawnCallsByArg('add-generic-password');
+      expect(addCall[1]).not.toContain('-A');
+
+      vi.clearAllMocks();
+      process.env.MAT_KEYCHAIN_ALLOW_ANY_APP = '1';
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      await writeSource(USER_PLUGIN_KEYCHAIN_SRC, JSON.stringify({ value: 'new-token', account: 'alice' }));
+
+      [addCall] = findSpawnCallsByArg('add-generic-password');
+      expect(addCall[1]).toContain('-A');
+    });
+
+    it('MAT_KEYCHAIN_RESTRICT_ACL=1 은 built-in allowAnyApp 도 no -A 로 강제한다', async () => {
+      process.env.MAT_KEYCHAIN_RESTRICT_ACL = '1';
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 44, stderr: 'not found' }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }));
+
+      await writeSource(KEYCHAIN_SRC, JSON.stringify({ value: 'new-token', account: 'alice' }));
+
+      const [addCall] = findSpawnCallsByArg('add-generic-password');
+      expect(addCall[1]).not.toContain('-A');
     });
 
     it('기존 있음: backup value + account 조회 → 정확한 acct 로 delete → add', async () => {
@@ -428,7 +482,7 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       expect(rollbackCall[0]).toBe('/usr/bin/security');
       expect(rollbackCall[1]).toContain('old-token');
       expect(rollbackCall[1]).toContain('bob');
-      // 롤백 add 도 -A 포함 (회귀 가드 — backup ACL 보존, Claude 토큰 접근 권한 유지).
+      // 롤백도 built-in compatibility -A 정책을 보존한다.
       expect(rollbackCall[1]).toContain('-A');
     });
 
@@ -833,6 +887,36 @@ describe('runCommand — stdin 주입 (PR-3a infra, secret-tool store 전제)', 
     expect(stdin.writes).toEqual([]);
     expect(stdin.ended).toBe(false);
     expect(result.stdout).toBe('plain');
+    expect(result.code).toBe(0);
+  });
+
+  it('(e) timeoutMs 초과 시 자식을 종료하고 timedOut 결과를 반환한다', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc({ holdOpen: true });
+      mockSpawn.mockReturnValueOnce(proc);
+
+      const resultPromise = runCommand('/usr/bin/secret-tool', ['search'], undefined, { timeoutMs: 25 });
+      await vi.advanceTimersByTimeAsync(1_025);
+      const result = await resultPromise;
+
+      expect((proc as unknown as { kill: ReturnType<typeof vi.fn> }).kill).toHaveBeenCalledWith('SIGTERM');
+      expect((proc as unknown as { kill: ReturnType<typeof vi.fn> }).kill).toHaveBeenCalledWith('SIGKILL');
+      expect(result.code).toBe(124);
+      expect(result.timedOut).toBe(true);
+      expect(result.stderr).toMatch(/timed out after 25ms/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('(f) maxOutputBytes 로 stdout 누적을 제한하고 outputTruncated 를 표시한다', async () => {
+    mockSpawn.mockReturnValueOnce(fakeProc({ code: 0, stdout: 'abcdef' }));
+
+    const result = await runCommand('/usr/bin/security', ['find-generic-password'], undefined, { maxOutputBytes: 3 });
+
+    expect(result.stdout).toBe('abc');
+    expect(result.outputTruncated).toBe(true);
     expect(result.code).toBe(0);
   });
 });

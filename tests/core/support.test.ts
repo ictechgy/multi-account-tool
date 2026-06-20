@@ -48,6 +48,25 @@ describe('support registry — support/explain reports', () => {
     expect(JSON.stringify(report)).toMatch(/forced --config/);
   });
 
+  it('explains Grok PR1 as auth.json profile-swap-only without full session isolation claims or raw secret values', () => {
+    const report = buildCliSupportReport('grok');
+    const serialized = JSON.stringify(report);
+
+    expect(report.cli).toMatchObject({ id: 'grok', name: 'Grok Build', builtin: true, kind: 'builtin' });
+    expect(report.sources).toEqual([{ type: 'file', saveAs: 'grok-auth.json' }]);
+    expect(report.capabilities.swap.status).toBe('supported');
+    expect(report.capabilities.freshness.status).toBe('partial');
+    expect(report.capabilities.sessionStart.status).toBe('unsupported');
+    expect(report.capabilities.sessionRun.status).toBe('unsupported');
+    expect(serialized).toMatch(/auth\.json profile swap|profile-swap|profile swap/i);
+    expect(serialized).toContain('XAI_API_KEY');
+    expect(serialized).toContain('GROK_*');
+    expect(serialized).toContain('project .grok/config.toml');
+    expect(serialized).toContain('MCP');
+    expect(serialized).not.toMatch(/full session|full account isolation/i);
+    expect(serialized).not.toContain('SECRET');
+  });
+
   it('explains known blocked CLIs such as Antigravity without requiring a CliDef', () => {
     const report = buildCliSupportReport('agy');
 

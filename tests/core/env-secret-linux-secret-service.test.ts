@@ -23,10 +23,8 @@ import {
   deleteResultToCleanupStatus,
   lssProofReport
 } from '../../src/core/env-secret-linux-secret-service.js';
-import * as osKeyringModule from '../../src/core/os-keyring.js';
 
 const mockSpawn = vi.mocked(spawn);
-const resetWarnForTest = osKeyringModule['reset' + 'SecretToolMissingWarnedForTest'];
 const VALUE = 'secret-value-alpha';
 const UPDATED = 'secret-value-bravo';
 const RAW_OUTPUT = 'raw-store-output';
@@ -132,7 +130,6 @@ afterEach(() => {
   mockSpawn.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  resetWarnForTest();
 });
 
 describe('Linux Secret Service env-secret backend spike', () => {

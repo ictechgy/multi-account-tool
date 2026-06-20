@@ -10,11 +10,49 @@ export interface CmdResult {
    *
    * **왜 필요한가** (#73 quad-review): spawn 실패는 모두 code=-1 로 settle 되지만,
    * 'secret-tool 미설치(ENOENT)' 와 '실행 권한 없음(EACCES)·기타' 는 의미가 다르다.
-   * os-keyring 읽기 soft-fail 은 ENOENT 만 대상이어야 하므로 (그 외 spawn 실패는
-   * fail-closed throw), 호출자가 errno 로 구분할 수 있도록 보존한다.
+   * os-keyring 등 credential backend 는 ENOENT/EACCES 를 서로 다른 사용자 안내로
+   * fail-closed 해야 하므로, 호출자가 errno 로 구분할 수 있도록 보존한다.
    * 기존 code=-1 반환은 그대로 유지해 다른 호출자(keychain 등)는 무영향이다.
    */
   spawnErrno?: string;
+  /** true 이면 제한 시간 초과로 자식 프로세스를 종료했다. */
+  timedOut?: boolean;
+  /** true 이면 stdout/stderr 중 하나가 maxOutputBytes 상한에 도달해 잘렸다. */
+  outputTruncated?: boolean;
+}
+
+export interface RunCommandOptions {
+  /** 명령 전체 제한 시간. 기본값은 30초. 0 이하이면 timeout 비활성화. */
+  timeoutMs?: number;
+  /** stdout/stderr 별 최대 누적 byte 수. 기본값은 1MiB. 0 이하이면 출력 누적 비활성화. */
+  maxOutputBytes?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
+
+function appendCapped(
+  current: string,
+  chunk: Buffer | string,
+  maxBytes: number
+): { value: string; truncated: boolean } {
+  if (maxBytes <= 0) return { value: current, truncated: false };
+  const text = chunk.toString();
+  const currentBytes = Buffer.byteLength(current);
+  if (currentBytes >= maxBytes) return { value: current, truncated: true };
+  const chunkBytes = Buffer.byteLength(text);
+  const remaining = maxBytes - currentBytes;
+  if (chunkBytes <= remaining) return { value: current + text, truncated: false };
+
+  let value = current;
+  let used = currentBytes;
+  for (const ch of text) {
+    const b = Buffer.byteLength(ch);
+    if (used + b > maxBytes) break;
+    value += ch;
+    used += b;
+  }
+  return { value, truncated: true };
 }
 
 /**
@@ -27,25 +65,75 @@ export interface CmdResult {
  * PR-3b 의 os-keyring 구현이 이 경로를 사용한다. `stdinData` 미주어지면 stdin 을
  * 전혀 건드리지 않아 기존 keychain/file 호출과 동작이 byte-동등하다.
  */
-export function runCommand(cmd: string, args: string[], stdinData?: string): Promise<CmdResult> {
+export function runCommand(
+  cmd: string,
+  args: string[],
+  stdinData?: string,
+  options: RunCommandOptions = {}
+): Promise<CmdResult> {
   return new Promise((resolve) => {
     const proc = spawn(cmd, args);
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timedOut = false;
+    let outputTruncated = false;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+    const timeout = timeoutMs > 0
+      ? setTimeout(() => {
+        if (settled) return;
+        timedOut = true;
+        try {
+          proc.kill('SIGTERM');
+        } catch {
+          // kill 실패는 close/error settle 경로에 맡긴다.
+        }
+        setTimeout(() => {
+          if (!settled) {
+            try {
+              proc.kill('SIGKILL');
+            } catch {
+              // best-effort escalation.
+            }
+            const suffix = stderr ? '\n' : '';
+            settle(124, `${stderr}${suffix}command timed out after ${timeoutMs}ms`);
+          }
+        }, 1_000).unref?.();
+      }, timeoutMs)
+      : null;
+    timeout?.unref?.();
+
     // spawnErrno 는 spawn 'error' 핸들러에서만 채워 호출자가 ENOENT(미설치)와
     // EACCES 등 다른 spawn 실패를 구분할 수 있게 한다 (#73). close 경로엔 미전달.
     const settle = (code: number, errMsg?: string, spawnErrno?: string): void => {
       if (settled) return;
       settled = true;
-      resolve({ code, stdout, stderr: errMsg ?? stderr, spawnErrno });
+      if (timeout) clearTimeout(timeout);
+      const finalStderr = errMsg ?? stderr;
+      resolve({ code, stdout, stderr: finalStderr, spawnErrno, timedOut, outputTruncated });
     };
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.stdout.on('data', (d) => {
+      const next = appendCapped(stdout, d, maxOutputBytes);
+      stdout = next.value;
+      outputTruncated ||= next.truncated;
+    });
+    proc.stderr.on('data', (d) => {
+      const next = appendCapped(stderr, d, maxOutputBytes);
+      stderr = next.value;
+      outputTruncated ||= next.truncated;
+    });
     // err.code 는 NodeJS.ErrnoException 의 errno 문자열 (예: 'ENOENT', 'EACCES').
     // code=-1 반환은 하위호환을 위해 유지하고, errno 만 추가로 보존한다.
     proc.on('error', (err) => settle(-1, err.message, (err as NodeJS.ErrnoException).code));
-    proc.on('close', (code) => settle(code ?? -1));
+    proc.on('close', (code) => {
+      if (timedOut) {
+        const suffix = stderr ? '\n' : '';
+        settle(code ?? 124, `${stderr}${suffix}command timed out after ${timeoutMs}ms`);
+        return;
+      }
+      settle(code ?? -1);
+    });
     // stdin 주입 — secret 을 argv (ps 등으로 관측 가능) 가 아니라 stdin 으로 전달 (PR-3b secret-tool store).
     // stdin 쪽 에러(EPIPE / write-after-end / destroyed)는 흡수만 한다 (빈 처리가 아니라 의도된 흡수):
     //   - settle 은 항상 proc 의 'close'/'error' 가 실제 exit code 로 수행한다.

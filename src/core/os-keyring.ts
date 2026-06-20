@@ -9,18 +9,18 @@
  *    `attribute.account`.
  *  - 부재 = **exit 0 + 빈 출력** (exit code 로 부재 판정 불가). exit code≠0 의 처리는
  *    읽기/쓰기 경로에서 갈린다 (#59, #73):
- *      · **미설치 (spawn ENOENT → code=-1, spawnErrno='ENOENT')**: 읽기(backup/exists)는
- *        **soft-fail** — 강한 stderr 경고 1회 후 null/false 반환 → yaml fallback 도달.
- *        쓰기(store/clear)는 조용히 넘기면 안 되므로 **throw 유지** (osKeyringErr).
- *        secret-tool CLI 만 미설치인 활성 keyring 사용자는 stale yaml swap(wrong-account)
- *        위험이 있어 경고로 안내한다.
+ *      · **미설치 (spawn ENOENT → code=-1, spawnErrno='ENOENT')**: 읽기/쓰기/exists 모두
+ *        **throw** (fail-closed). secret-tool CLI 만 미설치인 활성 keyring 사용자를 stale
+ *        yaml fallback 으로 보내면 wrong-account 위험이 크므로 README 보안 계약과 동일하게
+ *        즉시 실패시킨다.
  *      · **ENOENT 아닌 spawn 실패 (EACCES 등 → code=-1, spawnErrno!=='ENOENT')**: secret-tool
  *        이 있으나 실행 권한이 없는 등 '미설치 아님' 이라, 부재로 오인해 yaml swap 하면
  *        wrong-account 위험이 의도 이상으로 확대된다. 읽기/쓰기 모두 **throw** (fail-closed, #73).
  *      · **daemon-down / 접근 거부 (code>0)**: infra 가 깨진 경우라 읽기/쓰기 모두
  *        **throw 유지** (fail-closed). tooling 만 깨진 미설치(ENOENT)와 구분한다.
  *    Goose file-backend 사용자용 명시 skip 은 source 정의(cli-defs.ts gooseUsesFileBackend)에서
- *    GOOSE_DISABLE_KEYRING 양성 증거로 처리한다 — primitive 는 부재를 추정하지 않는다 (#59).
+ *    GOOSE_DISABLE_KEYRING 양성 증거로 처리한다 — primitive 는 tool 부재를 "항목 부재"로
+ *    추정하지 않는다 (#59/#73 보안 계약 강화).
  *  - `store` 는 **upsert**(덮어쓰기), value 는 **stdin**(argv 미노출, PR-3a).
  *  - `clear` 는 **deletes-all** — service+account 2-attribute 매칭은 실측상
  *    단일 삭제지만, backup 단계에서 N>1 을 거부해 sibling 파괴를 차단한다.
@@ -37,57 +37,16 @@ import type { KeychainStored, OsKeyringSource } from './types.js';
 const SECRET_TOOL_BIN = '/usr/bin/secret-tool';
 
 /**
- * `secret-tool` 이 **미설치(ENOENT)** 라서 읽기 soft-fail 대상인지 판정한다 (#73).
+ * `secret-tool` 이 **미설치(ENOENT)** 라서 별도 설치 안내를 붙일 대상인지 판정한다 (#73).
  *
  * runCommand 는 ENOENT 뿐 아니라 EACCES(실행 권한 없음)·ENOTDIR·실행포맷 오류 등
- * **모든 spawn 실패**에 code=-1 을 반환한다. 따라서 code=-1 만으로 soft-fail 하면
+ * **모든 spawn 실패**에 code=-1 을 반환한다. 따라서 code=-1 만으로 분기하면
  * 'secret-tool 은 있으나 실행 권한이 없는' 경우 등도 부재로 오인해 yaml swap →
- * wrong-account 위험이 의도 이상으로 확대된다. 사용자 결정은 **ENOENT(미설치)만
- * soft-fail** 이므로, spawnErrno 가 정확히 'ENOENT' 일 때만 true 를 반환한다.
- * 그 외 spawn 실패(EACCES 등)는 호출자가 fail-closed throw 한다.
+ * wrong-account 위험이 의도 이상으로 확대된다. 모든 spawn 실패는 fail-closed 이며,
+ * ENOENT 만 메시지에 설치 안내를 더하기 위해 구분한다.
  */
 function isSecretToolMissing(r: CmdResult): boolean {
   return r.code === -1 && r.spawnErrno === 'ENOENT';
-}
-
-/**
- * secret-tool 미설치(ENOENT) soft-fail 경고를 프로세스당 1회만 출력하기 위한 가드.
- * read 경로(backup/exists)가 source 순회마다 호출될 수 있어, 같은 경고가 반복 노출되는
- * 것을 막는다 (호출당 1회가 아니라 모듈 레벨 1회).
- */
-let secretToolMissingWarned = false;
-
-/**
- * secret-tool(libsecret-tools) 미설치로 OS keyring 읽기에 실패해 file backend
- * (secrets.yaml) 로 fallback 함을 stderr 로 강하게 경고한다 (#59).
- *
- * **왜 강한 경고인가**: ENOENT soft-fail 은 "keyring 을 실제 사용 중인데 secret-tool
- * CLI 만 미설치" 인 사용자에게 stale yaml 로 swap 되는 wrong-account 위험을 도입한다.
- * 이를 완화하기 위해, keyring 을 실제 쓰는 중이라면 `libsecret-tools` 설치 또는
- * `GOOSE_DISABLE_KEYRING=1` 설정을 명시 안내한다. best-effort — 프로세스당 1회만 출력.
- */
-function warnSecretToolMissing(): void {
-  if (secretToolMissingWarned) return;
-  secretToolMissingWarned = true;
-  process.stderr.write(
-    `[mat] 경고: secret-tool(libsecret-tools) 미설치로 OS keyring 을 읽지 못해 ` +
-    `file backend(secrets.yaml)로 fallback 합니다.\n` +
-    `      keyring 을 실제 사용 중이라면 stale 자격증명으로 swap 되어 wrong-account 가 될 수 있습니다. ` +
-    `정확한 swap 을 위해 'libsecret-tools' 를 설치하거나, file backend 를 쓴다면 ` +
-    `'GOOSE_DISABLE_KEYRING=1' 을 설정하세요.\n`
-  );
-}
-
-/**
- * `secretToolMissingWarned` 모듈 가드 초기화 — **테스트 전용** (resetCliDefCache 컨벤션 미러).
- *
- * 경고는 프로세스당 1회만 출력되는 모듈 레벨 가드라, 한 테스트가 ENOENT 를 트리거하면
- * 이후 테스트에서 같은 가드가 이미 true 라 경고 검증이 불안정해진다. 테스트가 가드를
- * 명시 리셋해 '1회 출력' 동작과 '경고 내용' 을 독립적으로 검증할 수 있게 한다.
- * production 에서는 호출하지 않는다.
- */
-export function resetSecretToolMissingWarnedForTest(): void {
-  secretToolMissingWarned = false;
 }
 
 /** search 결과 1건 backup — value + account(역조회, 없을 수 있음). */
@@ -141,12 +100,10 @@ function assertStrictOsKeyringSource(src: OsKeyringSource): void {
  * 다른 spawn 실패' 둘 다일 수 있어, 메시지를 errno 로 분기한다 (#73). 그 외 code≠0 은
  * daemon 미응답/접근 거부로 판정한다.
  *
- * **읽기 vs 쓰기** (#59, #73): 읽기 경로(backup/exists)는 **ENOENT(미설치)만** soft-fail 로
- * 가로채(warnSecretToolMissing → null/false) 이 함수에 도달하지 않는다. 따라서 이 함수의
- * code=-1 분기는 (a) **쓰기 경로(store/clear)의 ENOENT** — 쓰기 실패를 조용히 넘기면
- * 자격증명 손실이라 미설치도 명시 throw — 또는 (b) **읽기/쓰기 공통의 ENOENT 아닌 spawn
- * 실패(EACCES 등)** 에서 도달한다 (읽기에서도 fail-closed throw). daemon-down(code>0)은
- * 읽기/쓰기 모두 throw.
+ * **읽기 vs 쓰기** (#59, #73): 읽기/쓰기/exists 모두 ENOENT/EACCES/daemon-down 을
+ * fail-closed 로 surface 한다. ENOENT 를 항목 부재로 오인해 file backend 로 fallback 하면
+ * stale credential swap 위험이 있으므로 이 함수의 code=-1 분기는 읽기·쓰기 공통으로
+ * 구조적 에러를 만든다. daemon-down(code>0)도 모두 throw.
  */
 function osKeyringErr(stage: string, r: CmdResult): Error {
   // 메시지에 raw output 을 넣지 않는 게 1차 방어지만, redactMessage 로도 감싸
@@ -244,9 +201,9 @@ async function rawSearch(service: string, scopeAccount?: string): Promise<CmdRes
 
 /**
  * backup 로드 (loadKeychainBackup 미러). search --all 의 0/1/N 분기:
- *  - 미설치 (code=-1 && spawnErrno==='ENOENT') → **soft-fail**: 강한 stderr 경고 1회 후
- *    null 반환 → readOsKeyringSerialized null → switcher 가 다음 source(secrets.yaml)로
- *    fallback (#59).
+ *  - 미설치 (code=-1 && spawnErrno==='ENOENT') → throw (fail-closed).
+ *    secret-tool 부재를 항목 부재로 오인해 다음 file source(secrets.yaml)로 fallback 하면
+ *    stale yaml swap/wrong-account 위험이 있으므로 README 보안 계약과 동일하게 실패시킨다.
  *  - ENOENT 아닌 spawn 실패 (code=-1 && spawnErrno!=='ENOENT', EACCES 등) → throw
  *    (osKeyringErr, fail-closed — 미설치 아닌데 부재로 오인 시 wrong-account 위험, #73).
  *  - 그 외 code≠0 (daemon-down / 접근 거부) → throw (osKeyringErr, fail-closed).
@@ -254,23 +211,15 @@ async function rawSearch(service: string, scopeAccount?: string): Promise<CmdRes
  *  - N>1 → OsKeyringAccountMissingError (clear deletes-all 로 인한 data loss 차단).
  *  - N=1 → { value, account }. secret 추출 실패 시 raw output 미포함 구조적 throw.
  */
-type SecretToolMissingPolicy = 'soft-fail' | 'throw';
-
 async function osKeyringBackup(
   service: string,
-  scopeAccount?: string,
-  missingPolicy: SecretToolMissingPolicy = 'soft-fail'
+  scopeAccount?: string
 ): Promise<OsKeyringBackup | null> {
   const r = await rawSearch(service, scopeAccount);
-  // 미설치(ENOENT)만 tooling 이 깨진 경우 — yaml fallback 으로 진행하되 wrong-account
-  // 위험을 강한 경고로 안내한다 (#59). 그 외 spawn 실패(EACCES 등, code=-1 이지만
-  // spawnErrno!=='ENOENT')는 'secret-tool 이 있으나 실행 불가' 라 부재로 오인하면
-  // wrong-account 위험이 의도 이상 확대된다 → fail-closed throw (#73). daemon-down
-  // (code>0)도 infra 문제라 throw 유지.
+  // tool/daemon unavailable 은 모두 fail-closed. ENOENT 를 yaml fallback 으로 넘기면
+  // keyring 사용자에게 stale file credential 이 적용될 수 있어 wrong-account 위험이 크다.
   if (isSecretToolMissing(r)) {
-    if (missingPolicy === 'throw') throw osKeyringErr('조회', r);
-    warnSecretToolMissing();
-    return null;
+    throw osKeyringErr('조회', r);
   }
   if (r.code !== 0) throw osKeyringErr('조회', r);
   const count = blockCount(r.stdout);
@@ -309,8 +258,8 @@ async function osKeyringClear(service: string, account: string): Promise<void> {
  * 양쪽 에러를 동시 surface. 에러 메시지에 secret/raw output 은 포함하지 않는다.
  *
  * **쓰기는 모든 실패를 throw** (#73): store 가 spawn 실패(ENOENT 미설치 포함, code=-1)든
- * daemon-down(code>0)이든 `res.code !== 0` 이면 throw 한다. 읽기처럼 ENOENT 를 soft-fail
- * 하지 않는다 — 쓰기 실패를 조용히 넘기면 자격증명이 손실되기 때문이다.
+ * daemon-down(code>0)이든 `res.code !== 0` 이면 throw 한다. 쓰기 실패를 조용히
+ * 넘기면 자격증명이 손실되기 때문이다.
  */
 async function osKeyringStoreOrRollback(
   service: string,
@@ -343,14 +292,12 @@ export async function readOsKeyringSerialized(src: OsKeyringSource): Promise<str
 /**
  * env-secret 등 file fallback 이 안전하지 않은 호출자를 위한 strict read.
  *
- * 기존 `readOsKeyringSerialized` 는 secret-tool 미설치(ENOENT)를 null 로 soft-fail 해
- * Goose yaml fallback 을 보존한다. env-secret custody 에서는 backend unavailable 을
- * missing 으로 오인하거나 plaintext/file fallback 으로 흐르면 안 되므로 ENOENT 도
- * 구조적 throw 로 처리한다. raw search output 은 반환/에러에 포함하지 않는다.
+ * 일반 read 와 동일하게 backend unavailable(ENOENT/EACCES/daemon-down)을 missing 으로
+ * 오인하지 않고 구조적 throw 로 처리한다. raw search output 은 반환/에러에 포함하지 않는다.
  */
 export async function readOsKeyringSerializedStrict(src: OsKeyringSource): Promise<string | null> {
   assertStrictOsKeyringSource(src);
-  const backup = await osKeyringBackup(src.service, src.account, 'throw');
+  const backup = await osKeyringBackup(src.service, src.account);
   if (!backup) return null;
   const stored: KeychainStored = { value: backup.value, account: backup.account ?? undefined };
   return JSON.stringify(stored);
@@ -368,8 +315,7 @@ export async function readOsKeyringSerializedStrict(src: OsKeyringSource): Promi
  */
 async function writeOsKeyringWithPolicy(
   src: OsKeyringSource,
-  serialized: string,
-  missingPolicy: SecretToolMissingPolicy
+  serialized: string
 ): Promise<void> {
   assertValidOsKeyringSource(src);
   const stored = JSON.parse(serialized) as KeychainStored;
@@ -384,7 +330,7 @@ async function writeOsKeyringWithPolicy(
       ? stored.account
       : process.env.USER || 'default';
 
-  const backup = await osKeyringBackup(src.service, src.account, missingPolicy);
+  const backup = await osKeyringBackup(src.service, src.account);
   if (backup) {
     // clear/rollback 대상 account 확정: stderr 역조회 account → scope 된 src.account.
     // 둘 다 없으면 어떤 항목을 지울지 모르는 채 clear/rollback 을 건너뛰어 옛 항목이
@@ -401,26 +347,25 @@ async function writeOsKeyringWithPolicy(
 }
 
 export async function writeOsKeyringSerialized(src: OsKeyringSource, serialized: string): Promise<void> {
-  return writeOsKeyringWithPolicy(src, serialized, 'soft-fail');
+  return writeOsKeyringWithPolicy(src, serialized);
 }
 
 /**
  * env-secret 등 fallback 금지 custody 호출자를 위한 strict write.
  *
- * backup 조회 단계의 ENOENT 도 soft-fail 하지 않는다. store 자체 실패는 기존처럼
- * throw 되지만, strict write 는 미설치 상태에서 file/yaml fallback 경고를 출력하지 않고
- * 곧바로 fail-closed 한다.
+ * 일반 write 와 동일하게 backup 조회 단계의 ENOENT/EACCES/daemon-down 을 fail-closed 한다.
+ * raw backend output/secret value 는 반환하지 않는다.
  */
 export async function writeOsKeyringSerializedStrict(src: OsKeyringSource, serialized: string): Promise<void> {
   assertStrictOsKeyringSource(src);
-  return writeOsKeyringWithPolicy(src, serialized, 'throw');
+  return writeOsKeyringWithPolicy(src, serialized);
 }
 
 /**
  * os-keyring 항목의 존재 여부 (keychainExists 미러).
  *
- * 미설치(code=-1 && spawnErrno==='ENOENT') 는 `osKeyringBackup` 과 동일하게 soft-fail —
- * 강한 stderr 경고 1회 후 **false**(부재로 간주) 반환해 yaml fallback 을 막지 않는다 (#59).
+ * 미설치(code=-1 && spawnErrno==='ENOENT') 는 `osKeyringBackup` 과 동일하게 fail-closed
+ * throw 한다. tool 부재를 항목 부재로 간주하지 않는다 (#59/#73).
  * ENOENT 아닌 spawn 실패(EACCES 등)·daemon-down(code>0)은 throw 유지 (fail-closed, #73).
  *
  * N>1 (collision) 은 `osKeyringBackup` 과 동일하게 `OsKeyringAccountMissingError`
@@ -430,12 +375,6 @@ export async function writeOsKeyringSerializedStrict(src: OsKeyringSource, seria
 export async function osKeyringExists(src: OsKeyringSource): Promise<boolean> {
   assertValidOsKeyringSource(src);
   const r = await rawSearch(src.service, src.account);
-  // osKeyringBackup 과 동일 정책 — ENOENT(미설치)만 soft-fail(false), 그 외 spawn
-  // 실패(EACCES 등)·daemon-down 은 throw (#73). 부재(N=0)와 미설치를 혼동하지 않게.
-  if (isSecretToolMissing(r)) {
-    warnSecretToolMissing();
-    return false;
-  }
   if (r.code !== 0) throw osKeyringErr('조회', r);
   const count = blockCount(r.stdout);
   if (count > 1) throw new OsKeyringAccountMissingError(src.service, count);
@@ -445,9 +384,8 @@ export async function osKeyringExists(src: OsKeyringSource): Promise<boolean> {
 /**
  * env-secret custody 용 strict exists/probe.
  *
- * 기존 `osKeyringExists` 는 secret-tool ENOENT 를 false 로 soft-fail 해 file backend
- * fallback 을 막지 않는다. strict exists 는 ENOENT/EACCES/daemon-down 을 모두 throw
- * 해 backend unavailable/denied 상태를 missing 으로 오인하지 않게 한다.
+ * 일반 exists 와 동일하게 ENOENT/EACCES/daemon-down 을 모두 throw 해 backend
+ * unavailable/denied 상태를 missing 으로 오인하지 않게 한다.
  */
 export async function osKeyringExistsStrict(src: OsKeyringSource): Promise<boolean> {
   assertStrictOsKeyringSource(src);
@@ -470,7 +408,7 @@ export type OsKeyringDeleteResult = 'deleted' | 'missing';
  */
 export async function deleteOsKeyringSerializedStrict(src: OsKeyringSource): Promise<OsKeyringDeleteResult> {
   assertStrictOsKeyringSource(src);
-  const backup = await osKeyringBackup(src.service, src.account, 'throw');
+  const backup = await osKeyringBackup(src.service, src.account);
   if (!backup) return 'missing';
   const account = backup.account ?? (hasAccount(src.account) ? src.account : null);
   if (account == null) {

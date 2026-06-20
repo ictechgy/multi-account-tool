@@ -41,8 +41,8 @@ const { TRI_CLI, KEYRING_CLI, ENV_SECRET_CLI } = vi.hoisted(() => ({
     ]
   },
   // os-keyring(맨 앞) → file(yaml fallback) 2-source — Goose Linux 형상 모사.
-  // os-keyring 이 secret-tool 미설치 soft-fail 로 null 을 반환할 때 switcher 가
-  // 그 source 를 skip 하고 다음 file source(secrets.yaml)로 fallback 하는지 검증용 (#59).
+  // os-keyring backend unavailable 은 throw 로 fail-closed 되어 switcher 가 다음 file
+  // source(secrets.yaml)로 fallback 하지 않는지 검증용 (#59/#73).
   KEYRING_CLI: {
     id: 'keyring-cli',
     name: 'Keyring Then Yaml Test CLI',
@@ -170,6 +170,26 @@ describe('switcher', () => {
       expect(await readProfileFile('gemini', 'partial', 'google_accounts.json')).toBeNull();
     });
 
+    it('grok profile capture 는 ~/.grok/auth.json 값을 grok-auth.json 으로 저장하고 raw secret 을 metadata 에 남기지 않는다', async () => {
+      const rawSecret = 'grok-secret-token-abcdefghijklmnopqrstuvwxyz0123456789';
+      mockReadSource.mockResolvedValue(rawSecret);
+
+      const result = await snapshotLiveToProfile('grok', 'work');
+      const meta = await readMeta('grok', 'work');
+
+      expect(result).toMatchObject({
+        cliId: 'grok',
+        profileName: 'work',
+        captured: ['grok-auth.json'],
+        empty: []
+      });
+      expect(await readProfileFile('grok', 'work', 'grok-auth.json')).toBe(rawSecret);
+      expect(JSON.stringify(meta)).not.toContain(rawSecret);
+      expect(meta?.identity?.warnings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'unsupported' })
+      ]));
+    });
+
     it('readSource 가 throw → 에러 전파 (snapshot 중단)', async () => {
       mockReadSource.mockRejectedValue(new Error('keychain locked'));
 
@@ -182,20 +202,15 @@ describe('switcher', () => {
       await expect(snapshotLiveToProfile('unknown-cli', 'p')).rejects.toThrow(/알 수 없는 CLI/);
     });
 
-    it('os-keyring soft-fail(null) → 그 source skip 하고 yaml(file) source 로 fallback 캡처 (#59)', async () => {
-      // secret-tool 미설치 시 os-keyring.readOsKeyringSerialized 가 null 을 반환한다(soft-fail).
-      // switcher 는 value==null 인 source 를 empty 로 skip 하고 다음 file source(secrets.yaml)를
-      // 정상 캡처해야 한다 — 미설치로 swap 전체가 죽지 않고 yaml fallback 에 도달함을 입증.
+    it('os-keyring tool unavailable throw → yaml(file) fallback 으로 진행하지 않고 fail-closed (#59/#73)', async () => {
+      // secret-tool 미설치/daemon-down은 readSource throw 로 surface 되어야 하며,
+      // switcher 가 다음 file source(secrets.yaml)로 fallback 하면 stale credential swap 위험이 있다.
       mockReadSource.mockImplementation(async (s: Source) =>
-        s.saveAs === 'goose-keyring.json' ? null : 'yaml-creds'
+        s.saveAs === 'goose-keyring.json' ? Promise.reject(new Error('secret-tool missing')) : 'yaml-creds'
       );
 
-      const result = await snapshotLiveToProfile('keyring-cli', 'work');
-
-      // os-keyring 은 skip(empty), yaml 은 캡처(captured) — fallback 도달.
-      expect(result.empty).toEqual(['goose-keyring.json']);
-      expect(result.captured).toEqual(['goose-secrets.yaml']);
-      expect(await readProfileFile('keyring-cli', 'work', 'goose-secrets.yaml')).toBe('yaml-creds');
+      await expect(snapshotLiveToProfile('keyring-cli', 'work')).rejects.toThrow('secret-tool missing');
+      expect(await readProfileFile('keyring-cli', 'work', 'goose-secrets.yaml')).toBeNull();
     });
 
     it('env-secret source 는 snapshot 전 metadata-only hard-stop (live read/profile 생성 없음)', async () => {

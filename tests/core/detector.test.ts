@@ -64,6 +64,37 @@ describe('detectAll', () => {
     expect(gemini!.missing).toEqual(['google_accounts.json']);
   });
 
+  it('grok auth.json 부재 → ordinary missing 으로 보고 unavailable 로 오분류하지 않는다', async () => {
+    mockSourceExists.mockImplementation(async (src: Source) =>
+      src.saveAs !== 'grok-auth.json'
+    );
+
+    const results = await detectAll();
+    const grok = results.find((r) => r.cli.id === 'grok');
+
+    expect(grok).toBeDefined();
+    expect(grok!.hasLiveCredentials).toBe(false);
+    expect(grok!.hasAnyLiveCredential).toBe(false);
+    expect(grok!.present).toEqual([]);
+    expect(grok!.missing).toEqual(['grok-auth.json']);
+    expect(grok!.unavailable).toBeUndefined();
+  });
+
+  it('grok auth.json 존재 → present 에 grok-auth.json 만 기록한다', async () => {
+    mockSourceExists.mockImplementation(async (src: Source) =>
+      src.saveAs === 'grok-auth.json'
+    );
+
+    const results = await detectAll();
+    const grok = results.find((r) => r.cli.id === 'grok');
+
+    expect(grok).toBeDefined();
+    expect(grok!.hasLiveCredentials).toBe(true);
+    expect(grok!.hasAnyLiveCredential).toBe(true);
+    expect(grok!.present).toEqual(['grok-auth.json']);
+    expect(grok!.missing).toEqual([]);
+  });
+
   it('결과는 BUILTIN_CLI_DEFS 순서를 보존', async () => {
     mockSourceExists.mockResolvedValue(true);
     const results = await detectAll();
@@ -79,9 +110,18 @@ describe('detectAll', () => {
     expect(mockSourceExists).toHaveBeenCalledTimes(totalSources);
   });
 
-  it('sourceExists 가 reject 하면 detectAll 도 reject (에러 무시 안 함)', async () => {
+  it('sourceExists 가 reject 하면 missing 으로 오분류하지 않고 unavailable 로 분류한다', async () => {
     mockSourceExists.mockRejectedValue(new Error('fs unavailable'));
-    await expect(detectAll()).rejects.toThrow('fs unavailable');
+    const results = await detectAll();
+    for (const r of results) {
+      expect(r.hasLiveCredentials).toBe(false);
+      expect(r.hasAnyLiveCredential).toBe(false);
+      expect(r.present).toEqual([]);
+      expect(r.missing).toEqual([]);
+      expect(r.unavailable).toEqual(
+        r.cli.sources.map((src) => ({ saveAs: src.saveAs, message: 'fs unavailable' }))
+      );
+    }
   });
 
   it('env-secret source 는 missing 으로 오분류하지 않고 unsupported metadata 로 제외한다', async () => {

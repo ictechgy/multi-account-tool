@@ -39,9 +39,15 @@ const PAGES = [
     src: 'README.md',
     out: 'index.html',
     title: 'multi-account-tool (mat)',
-    description: 'Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini, Aider, Kimi, Qwen, Crush, OpenCode, Goose) from one TUI — safe-by-default credential switching.',
+    description: 'Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini, Aider, Kimi, Qwen, Crush, OpenCode, Goose) in a single TUI — safe-by-default credential switching.',
     eyebrow: 'AI CLI account switcher',
     tocTitle: 'On this page',
+    skipLabel: 'Skip to content',
+    navLabel: 'Site',
+    languageLabel: 'Language',
+    themeToggleLabel: 'Toggle theme',
+    githubLabel: 'GitHub repository',
+    footerGenerated: 'Generated from',
     cta: { install: 'Install', github: 'GitHub' },
     switcher: { current: 'EN', other: { label: 'KO', href: 'ko.html' } }
   },
@@ -50,9 +56,15 @@ const PAGES = [
     src: 'README.ko.md',
     out: 'ko.html',
     title: 'multi-account-tool (mat)',
-    description: '여러 AI CLI 계정을 단일 TUI 에서 전환 — 안전 기본값 자격증명 스위처.',
+    description: '여러 AI CLI 계정을 하나의 TUI에서 전환 — 기본이 안전한 자격증명 스위처.',
     eyebrow: 'AI CLI 계정 스위처',
     tocTitle: '이 페이지에서',
+    skipLabel: '본문으로 건너뛰기',
+    navLabel: '사이트',
+    languageLabel: '언어',
+    themeToggleLabel: '테마 전환',
+    githubLabel: 'GitHub 저장소',
+    footerGenerated: '생성 원본',
     cta: { install: '설치', github: 'GitHub' },
     switcher: { current: 'KO', other: { label: 'EN', href: 'index.html' } }
   }
@@ -84,6 +96,8 @@ function addHeadingIds(html) {
 
 /** 링크 target 재작성 — 언어 전환 / 상대 .md·LICENSE → GitHub blob. fragment·query 보존. */
 function rewriteHref(url) {
+  const normalized = String(url).trim().replace(/[\u0000-\u001F\u007F\s]+/g, '');
+  if (/^(?:javascript|data|vbscript):/i.test(normalized)) return '#';
   if (/^(https?:|mailto:|#|\/\/)/.test(url)) return url;
   const hashIdx = url.indexOf('#');
   const queryIdx = url.indexOf('?');
@@ -129,6 +143,14 @@ function stripParagraphWith(html, needle) {
 /** HTML 속성/텍스트 escape. */
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function createMarkdownRenderer() {
+  const renderer = new marked.Renderer();
+  // README 원문에 raw HTML 이 들어와도 생성 사이트 본문에서 실행되지 않게 escape 한다.
+  // fenced code block 은 Marked 의 code renderer 를 그대로 타므로 영향이 없다.
+  renderer.html = ({ text }) => esc(text);
+  return renderer;
 }
 
 /** 본문을 히어로(첫 `<hr>` 이전)와 본문(이후)으로 분리. hr 없으면 전체가 본문. */
@@ -206,15 +228,15 @@ function renderPage(page, heroHtml, mainHtml, tocHtml) {
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<a class="skip-link" href="#main">Skip to content</a>
+<a class="skip-link" href="#main">${esc(page.skipLabel)}</a>
 <header class="topbar">
   <a class="brand" href="${home}"><span class="brand-mark">mat</span> <span class="brand-sub">multi-account-tool</span></a>
-  <nav class="topnav" aria-label="site">
-    <span class="langswitch" aria-label="language">${langNav}</span>
-    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle dark mode" title="Toggle theme">
+  <nav class="topnav" aria-label="${esc(page.navLabel)}">
+    <span class="langswitch" aria-label="${esc(page.languageLabel)}">${langNav}</span>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="${esc(page.themeToggleLabel)}" title="${esc(page.themeToggleLabel)}">
       <span class="i-moon" aria-hidden="true">☾</span><span class="i-sun" aria-hidden="true">☀</span>
     </button>
-    <a class="icon-btn gh" href="${REPO_URL}" aria-label="GitHub repository" title="GitHub">
+    <a class="icon-btn gh" href="${REPO_URL}" aria-label="${esc(page.githubLabel)}" title="GitHub">
       <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
     </a>
   </nav>
@@ -240,7 +262,7 @@ ${mainHtml}
 <footer class="site-footer">
   <div class="footer-inner">
     <span><a href="${REPO_URL}">${REPO}</a> · MIT</span>
-    <span class="gen">Generated from <code>${esc(page.src)}</code> · <code>scripts/build-docs.mjs</code></span>
+    <span class="gen">${esc(page.footerGenerated)} <code>${esc(page.src)}</code> · <code>scripts/build-docs.mjs</code></span>
   </div>
 </footer>
 <script>
@@ -446,12 +468,13 @@ a:hover { color: var(--accent-strong); }
 
 async function build() {
   marked.setOptions({ gfm: true, breaks: false });
+  const renderer = createMarkdownRenderer();
   await fs.rm(OUT_DIR, { recursive: true, force: true });
   await fs.mkdir(OUT_DIR, { recursive: true });
 
   for (const page of PAGES) {
     const md = await fs.readFile(join(ROOT, page.src), 'utf8');
-    let body = rewriteLinks(addHeadingIds(marked.parse(md)));
+    let body = rewriteLinks(addHeadingIds(marked.parse(md, { renderer })));
     body = hideInlineLangSwitcher(body, page.switcher.other.href);
     body = stripParagraphWith(body, SITE_URL); // README 의 문서 사이트 링크 줄 제거 (사이트 자기참조)
     body = body.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, '</table></div>');

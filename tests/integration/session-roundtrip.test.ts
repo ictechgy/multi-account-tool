@@ -6,7 +6,8 @@
  *  2) 동시 2세션: 각 세션이 서로 다른 격리본을 봄(env 분리) + 세션 id 상이.
  *  3) base 비-secret/자격증명 무손상 (copy-isolate — 세션은 복사본만 수정).
  *
- * runSession 은 `$SHELL` 을 spawn 하므로 SHELL 을 실행 가능한 fake-cli 로 지정한다.
+ * production runSession 은 poisoned `$SHELL` 을 무시하므로, 테스트에서만 허용되는
+ * MAT_TEST_SESSION_SHELL 로 실행 가능한 fake-cli 를 지정한다.
  * 그 외(findCliDef/profile-store/paths)는 모두 실제 — 진짜 파일 격리를 검증.
  */
 
@@ -28,19 +29,24 @@ const FAKE_CLI_GEMINI = join(FIXTURES, 'fake-cli-gemini.mjs');
 
 let tmp: TmpHome;
 let originalShell: string | undefined;
+let originalTestShell: string | undefined;
 let originalExpectCodexSkill: string | undefined;
 
 beforeEach(async () => {
   tmp = await setupTmpHome();
   await fs.chmod(FAKE_CLI, 0o755); // git +x 미보존 환경 대비
   originalShell = process.env.SHELL;
+  originalTestShell = process.env.MAT_TEST_SESSION_SHELL;
   originalExpectCodexSkill = process.env.EXPECT_CODEX_SKILL;
   delete process.env.EXPECT_CODEX_SKILL;
-  process.env.SHELL = FAKE_CLI; // runSession 이 spawn 할 "subshell"
+  process.env.SHELL = '/tmp/mat-poisoned-shell-should-be-ignored';
+  process.env.MAT_TEST_SESSION_SHELL = FAKE_CLI; // runSession 이 spawn 할 테스트 "subshell"
 });
 afterEach(async () => {
   if (originalShell === undefined) delete process.env.SHELL;
   else process.env.SHELL = originalShell;
+  if (originalTestShell === undefined) delete process.env.MAT_TEST_SESSION_SHELL;
+  else process.env.MAT_TEST_SESSION_SHELL = originalTestShell;
   if (originalExpectCodexSkill === undefined) delete process.env.EXPECT_CODEX_SKILL;
   else process.env.EXPECT_CODEX_SKILL = originalExpectCodexSkill;
   await tmp.cleanup();
@@ -125,7 +131,7 @@ describe('session 통합 — 라운드트립 + 동시 격리', () => {
 describe('session 통합 — 동시 같은-프로필 multi-cred 직렬화 (Qwen, #62)', () => {
   beforeEach(async () => {
     await fs.chmod(FAKE_CLI_MULTICRED, 0o755); // git +x 미보존 환경 대비
-    process.env.SHELL = FAKE_CLI_MULTICRED; // multi-cred fake-cli 로 교체
+    process.env.MAT_TEST_SESSION_SHELL = FAKE_CLI_MULTICRED; // multi-cred fake-cli 로 교체
   });
   // afterEach 는 상위 describe 밖 전역 afterEach 가 SHELL 복원 + tmp cleanup 수행.
 
@@ -168,7 +174,7 @@ describe('session 통합 — 동시 같은-프로필 multi-cred 직렬화 (Qwen,
 describe('session 통합 — gemini 2-cred 라운드트립 (envSubdir, PR-3)', () => {
   beforeEach(async () => {
     await fs.chmod(FAKE_CLI_GEMINI, 0o755); // git +x 미보존 환경 대비
-    process.env.SHELL = FAKE_CLI_GEMINI; // gemini fake-cli 로 교체
+    process.env.MAT_TEST_SESSION_SHELL = FAKE_CLI_GEMINI; // gemini fake-cli 로 교체
   });
   // afterEach 는 상위 describe 밖 전역 afterEach 가 SHELL 복원 + tmp cleanup 수행.
 

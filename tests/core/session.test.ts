@@ -66,6 +66,7 @@ import {
 } from '../../src/core/profile-store.js';
 import {
   buildSessionListReport,
+  formatSessionRunPreflightReport,
   listSessions,
   materializeSession,
   planSession,
@@ -463,6 +464,7 @@ beforeEach(async () => {
       ...OPENCODE_FIXED_TEST_ENV_KEYS,
       ...AIDER_FIXED_TEST_ENV_KEYS,
       ...SESSION_CHILD_FIXED_TEST_ENV_KEYS,
+      'SHELL',
       ...Object.keys(process.env).filter((name) =>
         name.startsWith('AIDER_') ||
         isOpenCodeProviderCredentialEnvForTest(name) ||
@@ -526,6 +528,18 @@ describe('runSession', () => {
     expect(mockStage).toHaveBeenCalledWith('codex', 'work', 'auth.json', 'TOK');
     expect(mockCommit).toHaveBeenCalled();
     await expect(fs.readdir(sessionsDir())).resolves.toEqual([]);
+  });
+
+  it('runSession: process.env.SHELL 이 오염되어도 session child 는 OS account shell/fixed fallback 만 사용한다', async () => {
+    process.env.SHELL = '/tmp/mat-evil-shell';
+    mockSpawn.mockImplementation(() => asChildProcess(fakeChild({ exit: { code: 0, signal: null } })));
+
+    await runSession({ cliId: 'codex', profileName: 'work' });
+
+    const [cmd, args] = mockSpawn.mock.calls[0];
+    expect(cmd).not.toBe('/tmp/mat-evil-shell');
+    expect(typeof cmd).toBe('string');
+    expect(args).toEqual([]);
   });
 
   it('runSession: session lifecycle audit JSONL 을 best-effort 로 기록하고 raw profile/session id 를 남기지 않는다', async () => {
@@ -791,6 +805,26 @@ describe('runSessionCommand', () => {
     expect(mockCommit).not.toHaveBeenCalled();
     expect(mockWriteFileAtomic).not.toHaveBeenCalled();
     await expect(sessionDirEntriesIfAny()).resolves.toEqual([]);
+  });
+
+  it('preflight report 는 secret-like argv 를 JSON/text 출력 전에 redaction 한다', async () => {
+    const report = await preflightSessionRunCommand({
+      cliId: 'codex',
+      profileName: 'work',
+      args: ['--api-key=sk-live-secret-123456789', '--token', 'short-secret', '--message', 'hello']
+    });
+
+    expect(report.args).toEqual([
+      '--api-key=[redacted-session-arg]',
+      '--token',
+      '[redacted-session-arg]',
+      '--message',
+      'hello'
+    ]);
+    const text = formatSessionRunPreflightReport(report);
+    expect(text).toContain('[redacted-session-arg]');
+    expect(text).not.toContain('sk-live-secret-123456789');
+    expect(text).not.toContain('short-secret');
   });
 
   it('preflight blocked report: profile exists but missing credential file returns blocker without spawn', async () => {

@@ -47,6 +47,12 @@ export interface KeychainSource {
    * fallback 으로 multi-account scope 가 silent 하게 깨지는 사고를 차단.
    */
   account?: string;
+  /**
+   * macOS `security add-generic-password -A` compatibility flag. Built-in Keychain
+   * sources that upstream CLIs are known to read directly may set this true; user
+   * plugin sources default to false unless explicitly supported later.
+   */
+  allowAnyApp?: boolean;
   /** 프로필 디렉토리 내 저장될 파일명. */
   saveAs: string;
 }
