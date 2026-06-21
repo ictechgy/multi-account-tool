@@ -54,7 +54,7 @@ Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refre
 | OpenCode | OAuth per provider (`provider.refresh`, `provider.accountId`) | 🔴 High | Same as Codex |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 Mitigated — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec`, and `mat freshness claude` (PR-H adapter, high-confidence rotation classification) |
 | Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider-routed) | 🟢 Mitigated — identity-aware adapter (provider key matrix + keychain account) | `mat freshness goose` reports per-source result, identity-aware |
-| Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ Unknown — fallback byte-diff only, no identity adapter yet | `mat switch grok <profile>` only; review config/env/project overrides before relying on the selected profile |
+| Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ Unknown — fallback byte-diff only, no identity adapter yet | TUI profile switch only (select `grok` then the profile); review config/env/project overrides before relying on the selected profile |
 | Aider / Kimi / Qwen / Crush | Static API key | 🟢 None | Standard swap suffices — but environment variables or project-local config can bypass `mat` (see "Platform support" below) |
 
 Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live credentials versus the active profile before you swap. Exit code 0 means safe, exit code 1 means `mat` detected `stale` (identity changed or profile missing). For long-running sessions prefer `mat exec`, which automatically restores the previous profile after the command finishes — note that a `SIGKILL` to `mat` itself bypasses restore (see Security section).
@@ -87,7 +87,7 @@ During foreground profile switching and `mat exec`, `mat` warns about high-confi
 
 Grok Build support is intentionally **profile-swap-only** in PR1. xAI's public Build docs ([Getting Started](https://docs.x.ai/build/overview), [Enterprise Deployments](https://docs.x.ai/build/enterprise)) describe multiple credential, config, and account-selection channels: browser OIDC/device auth, external auth-provider commands, direct API-key auth via `XAI_API_KEY`, model-level `api_key` / `env_key` in `~/.grok/config.toml`, managed/requirements config layers, project-visible instructions/plugins/hooks/MCP servers, and `grok inspect` for the combined discovery view. Because `~/.grok/auth.json` is only one credential channel, copying or redirecting that file alone would not prove that a `mat session` child is using **only** the selected profile.
 
-A future `mat session run grok` needs a separate design that either (1) creates an API-key-only boundary and hard-stops browser/OIDC, config, env, project, plugin, hook, and MCP override channels, or (2) relies on an upstream-supported Grok credential/config-root redirect with clear recapture semantics. Until then, use `mat switch grok <profile>` and unset/review the listed override sources before trusting the active profile.
+A future `mat session run grok` needs a separate design that either (1) creates an API-key-only boundary and hard-stops browser/OIDC, config, env, project, plugin, hook, and MCP override channels, or (2) relies on an upstream-supported Grok credential/config-root redirect with clear recapture semantics. Until then, switch Grok profiles through the TUI (select `grok`, then the target profile) and unset/review the listed override sources before trusting the active profile.
 
 ### Switch flow (lossless)
 
