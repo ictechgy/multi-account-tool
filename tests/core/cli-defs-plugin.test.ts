@@ -33,6 +33,14 @@ import {
 import { dataDir } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
+const BUILTIN_IDS = BUILTIN_CLI_DEFS.map((def) => def.id);
+
+function expectBuiltinDefinitionPreserved(id: string): void {
+  const builtin = BUILTIN_CLI_DEFS.find((def) => def.id === id);
+  expect(builtin, `${id} builtin fixture`).toBeDefined();
+  expect(findCliDef(id)).toEqual(builtin);
+}
+
 function cliDefsDir(): string {
   return join(dataDir(), 'cli-defs');
 }
@@ -780,6 +788,25 @@ describe('getAllCliDefs / findCliDef — builtin + plugin 통합', () => {
     expect(findCliDef('my-cli')?.name).toBe('My CLI');
   });
 
+  it('모든 builtin id 충돌은 builtin 정의 전체(name/source/session metadata)를 보존하고 warning 을 낸다', async () => {
+    for (const id of BUILTIN_IDS) {
+      await writePlugin(`${id}.json`, {
+        id,
+        name: `Custom ${id}`,
+        sources: [{ type: 'file', path: `/custom-${id}`, saveAs: `custom-${id}.json` }]
+      });
+    }
+
+    const defs = getAllCliDefs();
+    const warnings = getCliDefsWarnings();
+
+    for (const id of BUILTIN_IDS) {
+      expect(defs.filter((def) => def.id === id)).toHaveLength(1);
+      expectBuiltinDefinitionPreserved(id);
+      expect(warnings.some((warning) => warning.includes(id) && warning.includes('builtin'))).toBe(true);
+    }
+  });
+
   it('aider plugin 도 builtin 과 충돌 → 무시 + warning (v0.3 회귀 가드)', async () => {
     // v0.3 부터 aider 는 builtin. plugin 의 동일 id 는 skip 되어야 (builtin 우선).
     await writePlugin('aider.json', {
@@ -908,12 +935,12 @@ describe('getAllCliDefs / findCliDef — builtin + plugin 통합', () => {
   it('module-level 캐시: 두 번째 호출은 fs 재읽지 않음 (resetCliDefCache 로만 갱신)', async () => {
     // 1) 처음 호출: plugin 없음 → builtin 만
     const first = getAllCliDefs();
-    expect(first.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose', 'grok']);
+    expect(first.map(d => d.id)).toEqual(BUILTIN_IDS);
 
     // 2) 캐시 후 plugin 추가 → getAllCliDefs 는 여전히 캐시 반환
     await writePlugin('late.json', { id: 'late', name: 'Late', sources: [{ type: 'file', path: '/l', saveAs: 'l.json' }] });
     const second = getAllCliDefs();
-    expect(second.map(d => d.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose', 'grok']);  // 캐시
+    expect(second.map(d => d.id)).toEqual(BUILTIN_IDS);  // 캐시
 
     // 3) resetCliDefCache 후 호출 → 새로 로드
     resetCliDefCache();

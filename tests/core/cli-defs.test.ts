@@ -18,6 +18,20 @@ import { join } from 'node:path';
 import { BUILTIN_CLI_DEFS, findCliDef } from '../../src/core/cli-defs.js';
 import { expandTilde } from '../../src/core/paths.js';
 
+const EXPECTED_BUILTIN_NAMES = [
+  ['claude', 'Claude Code'],
+  ['codex', 'Codex CLI'],
+  ['gemini', 'Gemini CLI'],
+  ['aider', 'Aider'],
+  ['kimi', 'Kimi CLI'],
+  ['qwen', 'Qwen Code CLI'],
+  ['crush', 'Crush'],
+  ['opencode', 'OpenCode'],
+  ['goose', 'Goose'],
+  ['grok', 'Grok Build']
+] as const;
+const EXPECTED_BUILTIN_IDS = EXPECTED_BUILTIN_NAMES.map(([id]) => id);
+
 function expectedOpenCodeDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   const dataHome = env.XDG_DATA_HOME && env.XDG_DATA_HOME.length > 0
     ? env.XDG_DATA_HOME
@@ -27,21 +41,10 @@ function expectedOpenCodeDataRoot(env: NodeJS.ProcessEnv = process.env): string 
 
 describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
   it('claude/codex/gemini/aider/kimi/qwen/crush/opencode/goose/grok 10개 정의를 정확히 포함', () => {
-    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose', 'grok']);
+    expect(BUILTIN_CLI_DEFS.map((c) => c.id)).toEqual(EXPECTED_BUILTIN_IDS);
   });
 
-  it.each([
-    ['claude', 'Claude Code'],
-    ['codex', 'Codex CLI'],
-    ['gemini', 'Gemini CLI'],
-    ['aider', 'Aider'],
-    ['kimi', 'Kimi CLI'],
-    ['qwen', 'Qwen Code CLI'],
-    ['crush', 'Crush'],
-    ['opencode', 'OpenCode'],
-    ['goose', 'Goose'],
-    ['grok', 'Grok Build']
-  ])('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
+  it.each(EXPECTED_BUILTIN_NAMES)('%s 정의는 사용자 표시 이름 %s 를 가진다', (id, expectedName) => {
     expect(BUILTIN_CLI_DEFS.find((c) => c.id === id)?.name).toBe(expectedName);
   });
 
@@ -156,7 +159,7 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
 });
 
 describe('findCliDef', () => {
-  it.each(['claude', 'codex', 'gemini', 'aider', 'kimi', 'qwen', 'crush', 'opencode', 'goose', 'grok'])('정의된 id %s 는 해당 CliDef 반환', (id) => {
+  it.each(EXPECTED_BUILTIN_IDS)('정의된 id %s 는 해당 CliDef 반환', (id) => {
     const def = findCliDef(id);
     expect(def).toBeDefined();
     expect(def?.id).toBe(id);
