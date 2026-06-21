@@ -35,8 +35,8 @@
 <h1 id="multi-account-tool-mat">multi-account-tool (<code>mat</code>)</h1>
 <p class="inline-lang" aria-hidden="true"><a href="ko.html">한국어</a> | English</p>
 
-<p>Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build) in a single TUI. Save one profile per account, then switch with a keystroke instead of repeating <code>logout</code> / <code>login</code>.</p>
-<p><code>mat</code> takes a conservative path by default: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, documents plaintext-credential backup risks, and detects OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks you to recapture, discard, or cancel.</p>
+<p>Use one TUI to switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build). Store one profile per account and switch with a keystroke instead of cycling through <code>logout</code> / <code>login</code>.</p>
+<p>By default, <code>mat</code> takes the conservative path: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, calls out plaintext-credential backup risks, and checks for OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks whether to recapture, discard, or cancel before it swaps.</p>
 <div class="hero-cta"><a class="btn btn-primary" href="#install">Install</a><a class="btn" href="https://github.com/ictechgy/multi-account-tool">GitHub <span aria-hidden="true">↗</span></a></div>
 <pre><code>╭ Multi-Account Tool ────────────────────────────────╮
 │  AI CLI account switcher                           │
@@ -62,12 +62,12 @@
 
 <h2 id="why">Why</h2>
 <ul>
-<li>You use Claude Code, Codex, Gemini, and friends, each with multiple accounts (personal / work / team)</li>
-<li>You&#39;re tired of running <code>logout</code> → <code>login</code> every time you change context</li>
-<li>You lose track of which account is currently active</li>
+<li>You use Claude Code, Codex, Gemini, or similar CLIs with multiple accounts (personal / work / team)</li>
+<li>You are tired of running <code>logout</code> → <code>login</code> every time you change context</li>
+<li>You want the currently active account to be explicit before you start work</li>
 </ul>
 <h2 id="how-it-works">How it works</h2>
-<p><code>mat</code> swaps <strong>only the credentials</strong>. Everything else — hooks, agents, <code>CLAUDE.md</code>, conversation history, settings — stays untouched.</p>
+<p><code>mat</code> swaps <strong>only credentials</strong>. Everything else — hooks, agents, <code>CLAUDE.md</code>, conversation history, settings — stays untouched.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -124,7 +124,7 @@
 <tr>
 <td>Grok Build</td>
 <td><code>~/.grok/auth.json</code></td>
-<td>File swap (PR1 profile-swap-only)</td>
+<td>File swap (profile-swap-only)</td>
 </tr>
 </tbody></table></div>
 <h3 id="oauth-rotation-safety-matrix">OAuth Rotation Safety Matrix</h3>
@@ -160,7 +160,7 @@
 <td>Claude Code</td>
 <td>macOS Keychain (Anthropic OAuth)</td>
 <td>🟢 Mitigated — identity-aware adapter (<code>subscriptionType</code> + macOS keychain account)</td>
-<td><code>mat exec</code>, and <code>mat freshness claude</code> (PR-H adapter, high-confidence rotation classification)</td>
+<td><code>mat exec</code>, and <code>mat freshness claude</code> (high-confidence rotation classification)</td>
 </tr>
 <tr>
 <td>Goose</td>
@@ -172,7 +172,7 @@
 <td>Grok Build</td>
 <td>Browser/OIDC <code>~/.grok/auth.json</code></td>
 <td>⚠️ Unknown — fallback byte-diff only, no identity adapter yet</td>
-<td>TUI profile switch only (select <code>grok</code> then the profile); review config/env/project overrides before relying on the selected profile</td>
+<td>Use only the TUI profile switch (select <code>grok</code>, then the profile); review config/env/project overrides before relying on the selected profile</td>
 </tr>
 <tr>
 <td>Aider / Kimi / Qwen / Crush</td>
@@ -183,7 +183,7 @@
 </tbody></table></div>
 <p>Use <code>mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]</code> to inspect the live credentials versus the active profile before you swap. Exit code 0 means safe: every source is <code>fresh</code> or adapter-confirmed <code>rotated</code> with high/medium confidence. Exit code 1 means <code>mat</code> found an unsafe pre-swap state: <code>stale</code>, low-confidence <code>rotated</code> from fallback/byte-diff classification, <code>inflight</code>, or a missing profile/source. For long-running sessions prefer <code>mat exec</code>, which automatically restores the previous profile after the command finishes — note that a <code>SIGKILL</code> to <code>mat</code> itself bypasses restore (see Security section).</p>
 <blockquote>
-<p><strong>OAuth rotation handling (PR-G/PR-I*/PR-H all landed):</strong> the TUI swap path detects freshness drift before swapping and shows an interactive <strong>Recapture / Discard / Cancel</strong> dialog (PR-G). Recapture saves the live credentials into the active profile via <code>snapshotLiveToProfile</code> then swaps; Discard skips the auto-snapshot (data loss); Cancel aborts. <code>mat exec</code> re-captures the live credentials on exit (PR-I*) so rotation triggered during the command is preserved in the swap-target profile before restore — protected against <code>SIGINT</code>/<code>SIGTERM</code>/<code>SIGHUP</code> (<code>SIGKILL</code> is OS-level untrappable and falls back to stale-recovery on the next <code>mat</code> call). Claude/Goose identity-aware adapters (PR-H) classify rotation vs identity change with <code>high</code>/<code>medium</code> confidence — no more <code>[low conf]</code> dialog noise on safe swaps.</p>
+<p><strong>OAuth rotation handling:</strong> the TUI swap path checks freshness before swapping and shows an interactive <strong>Recapture / Discard / Cancel</strong> dialog when it detects drift. Recapture saves the live credentials into the active profile via <code>snapshotLiveToProfile</code> before the swap; Discard skips the auto-snapshot (data loss); Cancel aborts. <code>mat exec</code> re-captures live credentials on exit so rotation triggered during the command is preserved in the swap-target profile before restore — protected against <code>SIGINT</code>/<code>SIGTERM</code>/<code>SIGHUP</code> (<code>SIGKILL</code> is OS-level untrappable and falls back to stale-recovery on the next <code>mat</code> call). Claude/Goose identity-aware adapters classify rotation vs identity change with <code>high</code>/<code>medium</code> confidence, removing <code>[low conf]</code> dialog noise on safe swaps.</p>
 </blockquote>
 <h3 id="platform-support">Platform support</h3>
 <div class="table-wrap"><table>
@@ -271,14 +271,14 @@
 <td>✅</td>
 <td>✅</td>
 <td>⚠️ untested</td>
-<td>PR1 swaps only the primary signed-in browser/OIDC token file <code>~/.grok/auth.json</code> as <code>grok-auth.json</code>. <code>mat session start/run grok</code> is unsupported. <code>~/.grok/config.toml</code> model <code>api_key</code>/<code>env_key</code>, <code>XAI_API_KEY</code>, <code>GROK_*</code> auth/model env, <code>GROK_HOME</code>, project <code>.grok/config.toml</code>, and MCP credentials can override or bypass <code>auth.json</code>; unset/review those before relying on a selected profile.</td>
+<td>Current support swaps only the primary signed-in browser/OIDC token file <code>~/.grok/auth.json</code> as <code>grok-auth.json</code>. <code>mat session start/run grok</code> is unsupported. <code>~/.grok/config.toml</code> model <code>api_key</code>/<code>env_key</code>, <code>XAI_API_KEY</code>, <code>GROK_*</code> auth/model env, <code>GROK_HOME</code>, project <code>.grok/config.toml</code>, and MCP credentials can override or bypass <code>auth.json</code>; unset/review those before relying on a selected profile.</td>
 </tr>
 </tbody></table></div>
 <p>&quot;⚠️ untested&quot; = swap logic is platform-agnostic file I/O, but the project&#39;s CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI&#39;s documentation, not exercised. Patches and bug reports welcome.</p>
 <p>For the exact support boundary of one CLI, run <code>mat support &lt;cli&gt;</code> (or <code>mat explain &lt;cli&gt;</code>). The report shows the current swap, freshness, and session support; caveats; ambient override risks; and the last upstream assumptions <code>mat</code> verified.</p>
 <p>During foreground profile switching and <code>mat exec</code>, <code>mat</code> warns about high-confidence ambient bypass channels such as provider API-key env vars or project-local config files. The warning is informational: <code>mat</code> does <strong>not</strong> block or scrub those channels yet. If the override is intentional, continue; otherwise unset or remove the named env/config source before relying on the selected profile.</p>
 <h4 id="why-grok-session-isolation-is-not-enabled-yet">Why Grok session isolation is not enabled yet</h4>
-<p>Grok Build support is intentionally <strong>profile-swap-only</strong> in PR1. xAI&#39;s public Build docs (<a href="https://docs.x.ai/build/overview">Getting Started</a>, <a href="https://docs.x.ai/build/enterprise">Enterprise Deployments</a>) describe multiple credential, config, and account-selection channels: browser OIDC/device auth, external auth-provider commands, direct API-key auth via <code>XAI_API_KEY</code>, model-level <code>api_key</code> / <code>env_key</code> in <code>~/.grok/config.toml</code>, managed/requirements config layers, project-visible instructions/plugins/hooks/MCP servers, and <code>grok inspect</code> for the combined discovery view. Because <code>~/.grok/auth.json</code> is only one credential channel, copying or redirecting that file alone would not prove that a <code>mat session</code> child is using <strong>only</strong> the selected profile.</p>
+<p>Grok Build support is intentionally <strong>profile-swap-only</strong> for now. xAI&#39;s public Build docs (<a href="https://docs.x.ai/build/overview">Getting Started</a>, <a href="https://docs.x.ai/build/enterprise">Enterprise Deployments</a>) describe multiple credential, config, and account-selection channels: browser OIDC/device auth, external auth-provider commands, direct API-key auth via <code>XAI_API_KEY</code>, model-level <code>api_key</code> / <code>env_key</code> in <code>~/.grok/config.toml</code>, managed/requirements config layers, project-visible instructions/plugins/hooks/MCP servers, and <code>grok inspect</code> for the combined discovery view. Because <code>~/.grok/auth.json</code> is only one credential channel, copying or redirecting that file alone would not prove that a <code>mat session</code> child is using <strong>only</strong> the selected profile.</p>
 <p>A future <code>mat session run grok</code> needs a separate design that either (1) creates an API-key-only boundary and hard-stops browser/OIDC, config, env, project, plugin, hook, and MCP override channels, or (2) relies on an upstream-supported Grok credential/config-root redirect with clear recapture semantics. Until then, switch Grok profiles through the TUI (select <code>grok</code>, then the target profile) and unset/review the listed override sources before trusting the active profile.</p>
 <h3 id="switch-flow-lossless">Switch flow (lossless)</h3>
 <ol start="0">
@@ -559,7 +559,7 @@ style = &#39;cyan&#39;
 <td><code>XDG_DATA_HOME</code> (<code>opencode</code> envSubdir; broad XDG side effects)</td>
 </tr>
 </tbody></table></div>
-<p><strong>Not supported by <code>mat session start</code></strong> (no safe credential-relocating env var; <code>session start</code> errors out): <code>claude</code> on macOS (Keychain service name is not env-overridable), <code>aider</code> (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file; use the narrower <code>mat session run aider</code> partial support instead), <code>goose</code> (keychain/OS-keyring credentials cannot be env-redirected), <code>grok</code> PR1 (profile-swap-only <code>~/.grok/auth.json</code>; config/env/project/MCP bypasses need a separate session-isolation design), Google Antigravity / <code>agy</code> (native keyring plus no stable CLI-specific credential redirect; <code>HOME</code> redirect is too broad), and any user <strong>plugin</strong> CLI (built-in only trust boundary).</p>
+<p><strong>Not supported by <code>mat session start</code></strong> (no safe credential-relocating env var; <code>session start</code> errors out): <code>claude</code> on macOS (Keychain service name is not env-overridable), <code>aider</code> (credential channels include provider env vars / CLI args / project-local config, not a session-relocatable home file; use the narrower <code>mat session run aider</code> partial support instead), <code>goose</code> (keychain/OS-keyring credentials cannot be env-redirected), <code>grok</code> (profile-swap-only <code>~/.grok/auth.json</code>; config/env/project/MCP bypasses need a separate session-isolation design), Google Antigravity / <code>agy</code> (native keyring plus no stable CLI-specific credential redirect; <code>HOME</code> redirect is too broad), and any user <strong>plugin</strong> CLI (built-in only trust boundary).</p>
 <p>Exit codes mirror <code>mat exec</code>: <code>0</code> success, <code>2</code> usage error, <code>74</code> re-capture failed, <code>128+N</code> child signal <code>N</code> (self-raised), child&#39;s own non-zero code propagated otherwise.</p>
 <p><strong>Limitations (read before relying on it):</strong></p>
 <ul>

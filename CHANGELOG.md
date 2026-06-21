@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-22
+
+Docs-only patch release for README and generated site copy polish.
+
+### Changed
+
+- Polished English/Korean README opening copy and generated site HTML for clearer onboarding.
+- Removed internal PR labels from user-facing Grok/OAuth support wording while preserving the support boundaries.
+
 ## [0.7.0] - 2026-06-20
 
 Grok Build profile-swap support plus credential-source hardening, Windows/env-secret groundwork, and Copilot proof-gate safety work since v0.6.0.

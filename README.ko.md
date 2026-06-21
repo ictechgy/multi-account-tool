@@ -4,9 +4,9 @@
 
 📖 **문서 사이트:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build)을 하나의 TUI에서 전환한다. 계정마다 프로필을 하나씩 저장해 두고, 매번 `logout` → `login`을 반복하는 대신 키 한 번으로 전환한다.
+하나의 TUI에서 여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build)을 전환한다. 계정마다 프로필을 하나씩 저장해 두고, 매번 `logout` → `login`을 반복하는 대신 키 한 번으로 바꾼다.
 
-`mat`은 보수적으로 동작한다. macOS Keychain 항목을 백업하고, 부분 실패는 롤백하며, 파일은 원자적으로 쓴다. 평문 자격증명 백업 위험을 문서화하고, swap 전 OAuth refresh-token rotation도 감지한다. 라이브 자격증명이 drift된 경우 TUI에서 재캡처 / 폐기 / 취소 중 하나를 선택하게 한다.
+`mat`은 보수적으로 동작한다. macOS Keychain 항목을 백업하고, 부분 실패는 롤백하며, 파일은 원자적으로 쓴다. 평문 자격증명 백업 위험을 분명히 알리고, swap 전 OAuth refresh-token rotation도 점검한다. 라이브 자격증명이 drift된 경우 실제 swap 전에 재캡처 / 폐기 / 취소 중 하나를 선택하게 한다.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
@@ -22,13 +22,13 @@
 
 ## 왜 만들었나
 
-- Claude Code, Codex, Gemini 등 여러 AI CLI를 동시에 쓰면서 각 CLI마다 계정이 여러 개일 때
-- 매번 `logout` / `login` 반복이 귀찮을 때
-- "지금 어느 계정으로 로그인돼 있더라?" 헷갈릴 때
+- Claude Code, Codex, Gemini 같은 CLI를 여러 계정(개인 / 회사 / 팀)으로 쓸 때
+- 컨텍스트를 바꿀 때마다 `logout` / `login`을 반복하기 지쳤을 때
+- 작업을 시작하기 전에 현재 활성 계정을 명확히 확인하고 싶을 때
 
 ## 어떻게 동작하나
 
-`mat`은 각 CLI의 **자격증명만 정밀하게 swap**한다. hooks, agents, `CLAUDE.md`, 대화 이력, 설정 같은 나머지는 그대로 둔다.
+`mat`은 각 CLI의 **자격증명만** swap한다. hooks, agents, `CLAUDE.md`, 대화 이력, 설정 같은 나머지는 그대로 둔다.
 
 | CLI | 자격증명 위치 | 전환 방식 |
 | --- | --- | --- |
@@ -41,7 +41,7 @@
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | 파일 swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) | 파일 swap |
 | Goose | macOS Keychain / Linux Secret Service (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain/os-keyring; Linux는 `secret-tool`로 swap — 아래 참고) |
-| Grok Build | `~/.grok/auth.json` | 파일 swap (PR1 profile-swap-only) |
+| Grok Build | `~/.grok/auth.json` | 파일 swap (profile-swap-only) |
 
 ### OAuth Rotation 안전성 매트릭스
 
@@ -52,14 +52,14 @@
 | Codex CLI | OAuth (`tokens.refresh_token`, `tokens.account_id`) | 🔴 높음 — token revoke 재현됨 | swap 전 `mat freshness codex` 점검 / 일회성 명령은 `mat exec` |
 | Gemini CLI | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 높음 | Codex와 동일 |
 | OpenCode | provider별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex와 동일 |
-| Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (PR-H adapter, high-confidence rotation 분류) |
+| Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (high-confidence rotation 분류) |
 | Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider 라우팅) | 🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account) | `mat freshness goose`가 source별 결과 보고, identity-aware |
 | Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용 | TUI 프로필 전환만 사용(`grok` 선택 후 대상 프로필 선택); 선택한 프로필을 신뢰하기 전 config/env/project override를 검토 |
 | Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap으로 충분 — 단 환경변수 / project-local 설정이 `mat`의 swap을 우회할 수 있음 (아래 "플랫폼 지원" 참고) |
 
 `mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전: 모든 source가 `fresh`이거나 adapter가 high/medium confidence로 identity 유지 `rotated`를 확인한 경우다. exit code 1 = swap 전 조치가 필요한 상태: `stale`, fallback/byte-diff 기반 low-confidence `rotated`, `inflight`, 또는 프로필/source 부재를 뜻한다. 장기 실행 세션에는 `mat exec`를 권장한다. 명령 종료 후 자동으로 이전 프로필을 복원하지만, `mat` 자체가 `SIGKILL`을 받으면 복원이 일어나지 않는다(보안 섹션 참고).
 
-> **OAuth rotation 대응 (PR-G/PR-I\*/PR-H 모두 머지):** TUI의 swap 흐름은 swap 직전 라이브 freshness를 점검하고, 차이를 감지하면 **재캡처 / 폐기 / 취소** 3옵션 dialog를 표시한다(PR-G). 재캡처는 라이브 자격증명을 `snapshotLiveToProfile`로 활성 프로필에 저장한 뒤 swap하고, 폐기는 자동 snapshot을 건너뛰고 swap한다(데이터 손실). 취소는 swap을 실행하지 않는다. `mat exec`는 종료 시 라이브 자격증명을 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원한다(PR-I\*) — `SIGINT`/`SIGTERM`/`SIGHUP`까지 보호한다. `SIGKILL`은 OS 보장상 trap이 불가능하므로 다음 `mat` 호출의 stale-recovery가 사용자에게 안내한다. Claude/Goose identity-aware adapter(PR-H)는 `high`/`medium` confidence로 rotation과 다른 계정을 구분해, 안전한 swap에서 `[low conf]` dialog noise를 제거한다.
+> **OAuth rotation 대응:** TUI의 swap 흐름은 swap 직전 라이브 freshness를 점검하고, 차이를 감지하면 **재캡처 / 폐기 / 취소** 3옵션 dialog를 표시한다. 재캡처는 라이브 자격증명을 `snapshotLiveToProfile`로 활성 프로필에 저장한 뒤 swap하고, 폐기는 자동 snapshot을 건너뛰고 swap한다(데이터 손실). 취소는 swap을 실행하지 않는다. `mat exec`는 종료 시 라이브 자격증명을 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원하므로, 명령 실행 중 발생한 rotation도 보존된다 — `SIGINT`/`SIGTERM`/`SIGHUP`까지 보호한다. `SIGKILL`은 OS 보장상 trap이 불가능하므로 다음 `mat` 호출의 stale-recovery가 사용자에게 안내한다. Claude/Goose identity-aware adapter는 `high`/`medium` confidence로 rotation과 다른 계정을 구분해, 안전한 swap에서 `[low conf]` dialog noise를 제거한다.
 
 ### 플랫폼 지원
 
@@ -75,7 +75,7 @@
 | Crush | ✅ | ✅ | ⚠️ 미검증 | **project-local override**: CWD의 `./.crush.json` / `./crush.json`이 `~/.config/crush/*`보다 우선; `CRUSH_GLOBAL_*` env도 우선 |
 | OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로(`$XDG_DATA_HOME/opencode/auth.json`, 기본 `~/.local/share/opencode/auth.json`). `mat session start`는 broad `XDG_DATA_HOME` 기반 **EXPERIMENTAL**; `mat session run opencode`는 command-scoped로 알려진 local env/config 우회를 hard-stop |
 | Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service(`goose`/`secrets`, `secret-tool` 경유) + `~/.config/goose/*.yaml`. Linux는 기본적으로 os-keyring을 포함하며 `secret-tool`(libsecret-tools) + keyring daemon이 필요 — 미설치/daemon-down 시 stale YAML로 조용히 swap하지 않고 **명시 에러**를 낸다. Goose는 libsecret *라이브러리*로 keyring에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않는다. file backend라면 `GOOSE_DISABLE_KEYRING=1` 설정 시 `mat`이 os-keyring을 생략하고 `secrets.yaml`을 swap한다. Windows Credential Manager 미지원 |
-| Grok Build | ✅ | ✅ | ⚠️ 미검증 | PR1은 기본 signed-in browser/OIDC 토큰 파일 `~/.grok/auth.json`만 `grok-auth.json`으로 swap한다. `mat session start/run grok`은 미지원이다. `~/.grok/config.toml`의 model `api_key`/`env_key`, `XAI_API_KEY`, `GROK_*` auth/model env, `GROK_HOME`, project `.grok/config.toml`, MCP credentials는 `auth.json`을 override/우회할 수 있으므로 선택한 프로필을 신뢰하기 전에 unset/검토해야 한다. |
+| Grok Build | ✅ | ✅ | ⚠️ 미검증 | 현재 지원은 기본 signed-in browser/OIDC 토큰 파일 `~/.grok/auth.json`만 `grok-auth.json`으로 swap한다. `mat session start/run grok`은 미지원이다. `~/.grok/config.toml`의 model `api_key`/`env_key`, `XAI_API_KEY`, `GROK_*` auth/model env, `GROK_HOME`, project `.grok/config.toml`, MCP credentials는 `auth.json`을 override/우회할 수 있으므로 선택한 프로필을 신뢰하기 전에 unset/검토해야 한다. |
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O라 동작 가능성이 있지만, 본 프로젝트 CI는 macOS + Ubuntu만 검증한다. Windows 경로는 각 CLI의 공식 문서 기반 추정이며 실제 실행은 검증하지 않았다. patch / 버그 리포트 환영.
 
@@ -85,7 +85,7 @@ foreground 프로필 전환이나 `mat exec` 중 provider API-key env var, proje
 
 #### 왜 Grok session isolation은 아직 켜지 않았나
 
-Grok Build 지원은 PR1에서 의도적으로 **profile-swap-only**다. xAI 공개 Build 문서([Getting Started](https://docs.x.ai/build/overview), [Enterprise Deployments](https://docs.x.ai/build/enterprise))는 여러 자격증명·config·계정 선택 채널을 설명한다: browser OIDC/device auth, external auth-provider command, `XAI_API_KEY` 직접 API-key 인증, `~/.grok/config.toml`의 model-level `api_key` / `env_key`, managed/requirements config layer, project-visible instructions/plugins/hooks/MCP server, 그리고 이 모든 discovery view를 보여주는 `grok inspect`. 즉 `~/.grok/auth.json`은 여러 채널 중 하나일 뿐이므로, 그 파일만 세션 디렉토리로 복사하거나 redirect해도 `mat session` 자식이 선택한 profile만 사용한다고 증명할 수 없다.
+Grok Build 지원은 현재 의도적으로 **profile-swap-only**다. xAI 공개 Build 문서([Getting Started](https://docs.x.ai/build/overview), [Enterprise Deployments](https://docs.x.ai/build/enterprise))는 여러 자격증명·config·계정 선택 채널을 설명한다: browser OIDC/device auth, external auth-provider command, `XAI_API_KEY` 직접 API-key 인증, `~/.grok/config.toml`의 model-level `api_key` / `env_key`, managed/requirements config layer, project-visible instructions/plugins/hooks/MCP server, 그리고 이 모든 discovery view를 보여주는 `grok inspect`. 즉 `~/.grok/auth.json`은 여러 채널 중 하나일 뿐이므로, 그 파일만 세션 디렉토리로 복사하거나 redirect해도 `mat session` 자식이 선택한 profile만 사용한다고 증명할 수 없다.
 
 향후 `mat session run grok`은 별도 설계가 필요하다. 가능한 방향은 (1) API-key-only 경계를 만들고 browser/OIDC, config, env, project, plugin, hook, MCP override 채널을 hard-stop하거나, (2) upstream이 명확한 recapture semantics를 가진 Grok credential/config-root redirect를 제공하는 것이다. 그 전까지는 TUI에서 Grok 프로필을 전환하고(`grok` 선택 후 대상 프로필 선택), 활성 profile을 신뢰하기 전에 위 override source를 unset/검토하라.
 
@@ -326,7 +326,7 @@ style = 'cyan'
 | Claude Code (Linux 전용) | `CLAUDE_CONFIG_DIR` |
 | OpenCode (**EXPERIMENTAL**) | `XDG_DATA_HOME` (`opencode` envSubdir; broad XDG side effect) |
 
-**`mat session start` 미지원** (안전한 자격증명 재배치 env 없음; `session start`가 명시 에러): macOS `claude`(Keychain service name env override 불가), `aider`(provider env / CLI args / project-local config 등 세션 재배치 불가 채널; 대신 더 좁은 `mat session run aider` partial support 사용), `goose`(keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), `grok` PR1(profile-swap-only `~/.grok/auth.json`; config/env/project/MCP 우회는 별도 session-isolation 설계 필요), Google Antigravity / `agy`(native keyring + 안정적인 CLI 전용 credential redirect 부재; `HOME` redirect는 너무 광범위), 그리고 사용자 **플러그인** CLI(빌트인 전용 신뢰경계).
+**`mat session start` 미지원** (안전한 자격증명 재배치 env 없음; `session start`가 명시 에러): macOS `claude`(Keychain service name env override 불가), `aider`(provider env / CLI args / project-local config 등 세션 재배치 불가 채널; 대신 더 좁은 `mat session run aider` partial support 사용), `goose`(keychain/OS-keyring 자격증명은 env 디렉토리 리다이렉트 불가), `grok`(profile-swap-only `~/.grok/auth.json`; config/env/project/MCP 우회는 별도 session-isolation 설계 필요), Google Antigravity / `agy`(native keyring + 안정적인 CLI 전용 credential redirect 부재; `HOME` redirect는 너무 광범위), 그리고 사용자 **플러그인** CLI(빌트인 전용 신뢰경계).
 
 종료 코드는 `mat exec`와 동형: `0` 성공, `2` 사용법 에러, `74` 재캡처 실패, `128+N` 자식 시그널 `N` (self-raise), 그 외 자식 종료 코드 전달.
 
