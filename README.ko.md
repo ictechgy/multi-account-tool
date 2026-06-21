@@ -512,7 +512,7 @@ mat plugin validate --json   # 설치된 ~/.multi-account-tool/cli-defs/*.json �
 
 `mat plugin validate`는 **정적** JSON/schema/lint 검사다. credential 파일을 읽거나 Keychain/Secret Service secret 값을 조회하지 않고, upstream CLI가 의도한 credential source를 우선 사용할지 증명하지도 않는다. 통과했다는 뜻은 **정적 검증 통과**이지 security-certified라는 의미가 아니다. JSON report는 `schemaVersion: 1`이며 exit code는 error 없음 `0`, validation/read/parse error `1`, 사용법 오류 `2`다. 너무 넓은 file path나 `account` 없는 generic keychain service 같은 위험하지만 호환되는 패턴은 warning으로 보고한다.
 
-`mat`은 시작 시 해당 디렉토리의 모든 `*.json`을 로드한다. 잘못된 plugin은 경고 후 skip되며, `mat` 본체는 정상 동작한다. 빌트인 CLI(`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) id와 충돌하면 plugin이 무시된다(보안).
+`mat`은 시작 시 해당 디렉토리의 모든 `*.json`을 로드한다. 잘못된 plugin은 경고 후 skip되며, `mat` 본체는 정상 동작한다. 빌트인 CLI(`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`, `grok`) id와 충돌하면 plugin이 무시된다(보안).
 
 필드 규칙:
 - `id`: 영문 시작 + 영숫자/`_`/`-`, 1~32자(빌트인 id와 중복 불가).

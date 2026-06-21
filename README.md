@@ -512,7 +512,7 @@ mat plugin validate --json   # validate every installed ~/.multi-account-tool/cl
 
 `mat plugin validate` is a **static** JSON/schema/lint check. It does not read credential files, query Keychain/Secret Service/Windows Credential Manager secrets, or prove that an upstream CLI will prefer the intended credential source. A passing report means **static validation passed**, not that the plugin is security-certified. The JSON report is `schemaVersion: 1`; exit codes are `0` when there are no errors, `1` for validation/read/parse errors, and `2` for usage errors. Risky-but-compatible patterns (for example broad file paths or generic keychain services without `account`) are warnings.
 
-`mat` loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped, and `mat` keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`) cannot be overridden — id collision is rejected.
+`mat` loads every `*.json` in that directory at startup. Invalid plugins are warned and skipped, and `mat` keeps working. Built-in CLIs (`claude`, `codex`, `gemini`, `aider`, `kimi`, `qwen`, `crush`, `opencode`, `goose`, `grok`) cannot be overridden — id collision is rejected.
 
 Field rules:
 - `id`: ASCII letter start, then letters/digits/`_`/`-`, 1~32 chars (must not collide with built-ins).

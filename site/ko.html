@@ -717,7 +717,7 @@ mat plugin validate ~/.multi-account-tool/cli-defs/my-cli.json
 mat plugin validate --json   # 설치된 ~/.multi-account-tool/cli-defs/*.json 전체 검증
 </code></pre>
 <p><code>mat plugin validate</code>는 <strong>정적</strong> JSON/schema/lint 검사다. credential 파일을 읽거나 Keychain/Secret Service secret 값을 조회하지 않고, upstream CLI가 의도한 credential source를 우선 사용할지 증명하지도 않는다. 통과했다는 뜻은 <strong>정적 검증 통과</strong>이지 security-certified라는 의미가 아니다. JSON report는 <code>schemaVersion: 1</code>이며 exit code는 error 없음 <code>0</code>, validation/read/parse error <code>1</code>, 사용법 오류 <code>2</code>다. 너무 넓은 file path나 <code>account</code> 없는 generic keychain service 같은 위험하지만 호환되는 패턴은 warning으로 보고한다.</p>
-<p><code>mat</code>은 시작 시 해당 디렉토리의 모든 <code>*.json</code>을 로드한다. 잘못된 plugin은 경고 후 skip되며, <code>mat</code> 본체는 정상 동작한다. 빌트인 CLI(<code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>aider</code>, <code>kimi</code>, <code>qwen</code>, <code>crush</code>, <code>opencode</code>, <code>goose</code>) id와 충돌하면 plugin이 무시된다(보안).</p>
+<p><code>mat</code>은 시작 시 해당 디렉토리의 모든 <code>*.json</code>을 로드한다. 잘못된 plugin은 경고 후 skip되며, <code>mat</code> 본체는 정상 동작한다. 빌트인 CLI(<code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>aider</code>, <code>kimi</code>, <code>qwen</code>, <code>crush</code>, <code>opencode</code>, <code>goose</code>, <code>grok</code>) id와 충돌하면 plugin이 무시된다(보안).</p>
 <p>필드 규칙:</p>
 <ul>
 <li><code>id</code>: 영문 시작 + 영숫자/<code>_</code>/<code>-</code>, 1~32자(빌트인 id와 중복 불가).</li>
