@@ -869,6 +869,30 @@ describe('getAllCliDefs / findCliDef — builtin + plugin 통합', () => {
     expect(warnings.some(w => w.includes('grok') && w.includes('builtin'))).toBe(true);
   });
 
+  it('README plugin collision guidance lists every builtin id', async () => {
+    const builtinIds = BUILTIN_CLI_DEFS.map((d) => d.id);
+    const readmeExpectations = [
+      {
+        path: join(process.cwd(), 'README.md'),
+        anchor: 'Built-in CLIs'
+      },
+      {
+        path: join(process.cwd(), 'README.ko.md'),
+        anchor: '빌트인 CLI'
+      }
+    ];
+
+    for (const { path, anchor } of readmeExpectations) {
+      const readme = await fs.readFile(path, 'utf8');
+      const line = readme.split('\n').find((candidate) => candidate.includes(anchor) && candidate.includes('`mat`'));
+
+      expect(line, `${path} plugin collision guidance`).toBeDefined();
+      for (const id of builtinIds) {
+        expect(line).toContain(`\`${id}\``);
+      }
+    }
+  });
+
   it('id 가 builtin 과 충돌 → plugin 무시 + warning', async () => {
     // 'claude' 는 builtin id — plugin 의 동일 id 는 skip.
     await writePlugin('claude.json', {
