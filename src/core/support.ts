@@ -294,7 +294,7 @@ const REGISTRY: Record<string, SupportMetadata> = {
       }
     ],
     nextSteps: [
-      'Use `mat switch grok <profile>` only for browser/OIDC auth.json account switching.',
+      'Use the TUI profile switch only for Grok browser/OIDC auth.json account switching (select `grok`, then the target profile).',
       'Unset XAI_API_KEY/GROK_* overrides and review ~/.grok/config.toml or project .grok/config.toml before relying on the selected profile.',
       'Do not use `mat session run grok` until a future explicit session-isolation PR lands.'
     ]

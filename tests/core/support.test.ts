@@ -63,6 +63,8 @@ describe('support registry — support/explain reports', () => {
     expect(serialized).toContain('GROK_*');
     expect(serialized).toContain('project .grok/config.toml');
     expect(serialized).toContain('MCP');
+    expect(serialized).toContain('TUI profile switch');
+    expect(serialized).not.toContain('mat switch grok');
     expect(serialized).not.toMatch(/full session|full account isolation/i);
     expect(serialized).not.toContain('SECRET');
   });

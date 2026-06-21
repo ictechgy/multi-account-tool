@@ -54,7 +54,7 @@
 | OpenCode | provider별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex와 동일 |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (PR-H adapter, high-confidence rotation 분류) |
 | Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider 라우팅) | 🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account) | `mat freshness goose`가 source별 결과 보고, identity-aware |
-| Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용 | `mat switch grok <profile>`만 사용; 선택한 프로필을 신뢰하기 전 config/env/project override를 검토 |
+| Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용 | TUI 프로필 전환만 사용(`grok` 선택 후 대상 프로필 선택); 선택한 프로필을 신뢰하기 전 config/env/project override를 검토 |
 | Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap으로 충분 — 단 환경변수 / project-local 설정이 `mat`의 swap을 우회할 수 있음 (아래 "플랫폼 지원" 참고) |
 
 `mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = `stale` 감지(identity 변경 또는 프로필 부재)를 뜻한다. 장기 실행 세션에는 `mat exec`를 권장한다. 명령 종료 후 자동으로 이전 프로필을 복원하지만, `mat` 자체가 `SIGKILL`을 받으면 복원이 일어나지 않는다(보안 섹션 참고).
@@ -87,7 +87,7 @@ foreground 프로필 전환이나 `mat exec` 중 provider API-key env var, proje
 
 Grok Build 지원은 PR1에서 의도적으로 **profile-swap-only**다. xAI 공개 Build 문서([Getting Started](https://docs.x.ai/build/overview), [Enterprise Deployments](https://docs.x.ai/build/enterprise))는 여러 자격증명·config·계정 선택 채널을 설명한다: browser OIDC/device auth, external auth-provider command, `XAI_API_KEY` 직접 API-key 인증, `~/.grok/config.toml`의 model-level `api_key` / `env_key`, managed/requirements config layer, project-visible instructions/plugins/hooks/MCP server, 그리고 이 모든 discovery view를 보여주는 `grok inspect`. 즉 `~/.grok/auth.json`은 여러 채널 중 하나일 뿐이므로, 그 파일만 세션 디렉토리로 복사하거나 redirect해도 `mat session` 자식이 선택한 profile만 사용한다고 증명할 수 없다.
 
-향후 `mat session run grok`은 별도 설계가 필요하다. 가능한 방향은 (1) API-key-only 경계를 만들고 browser/OIDC, config, env, project, plugin, hook, MCP override 채널을 hard-stop하거나, (2) upstream이 명확한 recapture semantics를 가진 Grok credential/config-root redirect를 제공하는 것이다. 그 전까지는 `mat switch grok <profile>`만 사용하고, 활성 profile을 신뢰하기 전에 위 override source를 unset/검토하라.
+향후 `mat session run grok`은 별도 설계가 필요하다. 가능한 방향은 (1) API-key-only 경계를 만들고 browser/OIDC, config, env, project, plugin, hook, MCP override 채널을 hard-stop하거나, (2) upstream이 명확한 recapture semantics를 가진 Grok credential/config-root redirect를 제공하는 것이다. 그 전까지는 TUI에서 Grok 프로필을 전환하고(`grok` 선택 후 대상 프로필 선택), 활성 profile을 신뢰하기 전에 위 override source를 unset/검토하라.
 
 ### 전환 흐름 (데이터 손실 없음)
 
