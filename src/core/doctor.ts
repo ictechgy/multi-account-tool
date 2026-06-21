@@ -61,7 +61,7 @@ export interface DoctorCliReport {
   sources: DoctorSourceStatus[];
   session: {
     start: 'supported' | 'unsupported' | 'experimental';
-    run: 'supported' | 'unsupported';
+    run: 'supported' | 'partial' | 'experimental' | 'unsupported' | 'blocked' | 'unknown';
   };
   freshness: DoctorFreshnessStatus;
   issues: DoctorIssue[];

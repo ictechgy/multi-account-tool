@@ -56,7 +56,7 @@ export interface CliSupportReport {
 
 export interface DoctorSessionSupport {
   start: 'supported' | 'unsupported' | 'experimental';
-  run: 'supported' | 'unsupported';
+  run: SupportStatus;
 }
 
 type CapabilityName = keyof CliSupportReport['capabilities'];
@@ -594,11 +594,7 @@ export function doctorSessionSupportForCli(cli: CliDef): DoctorSessionSupport {
   const report = buildFromCliDef(cli, BUILTIN_IDS.has(cli.id) ? 'builtin' : 'plugin');
   return {
     start: doctorStartStatus(report.capabilities.sessionStart.status),
-    run: (
-      report.capabilities.sessionRun.status === 'supported' ||
-      report.capabilities.sessionRun.status === 'partial' ||
-      report.capabilities.sessionRun.status === 'experimental'
-    ) ? 'supported' : 'unsupported'
+    run: report.capabilities.sessionRun.status
   };
 }
 
