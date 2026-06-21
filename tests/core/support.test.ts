@@ -54,6 +54,7 @@ describe('support registry — support/explain reports', () => {
 
     expect(report.cli).toMatchObject({ id: 'grok', name: 'Grok Build', builtin: true, kind: 'builtin' });
     expect(report.sources).toEqual([{ type: 'file', saveAs: 'grok-auth.json' }]);
+    expect(report.sources).not.toEqual(expect.arrayContaining([expect.objectContaining({ path: expect.any(String) })]));
     expect(report.capabilities.swap.status).toBe('supported');
     expect(report.capabilities.freshness.status).toBe('partial');
     expect(report.capabilities.sessionStart.status).toBe('unsupported');
@@ -65,6 +66,7 @@ describe('support registry — support/explain reports', () => {
     expect(serialized).toContain('MCP');
     expect(serialized).toContain('TUI profile switch');
     expect(serialized).not.toContain('mat switch grok');
+    expect(serialized).not.toContain('custom-token');
     expect(serialized).not.toMatch(/full session|full account isolation/i);
     expect(serialized).not.toContain('SECRET');
   });
@@ -130,7 +132,7 @@ describe('support registry — support/explain reports', () => {
       expect(report.capabilities.sessionStart.status).toBe('unsupported');
       expect(report.capabilities.sessionRun.status).toBe('unsupported');
     } finally {
-      BUILTIN_CLI_DEFS.splice(insertAt, 1);
+      BUILTIN_CLI_DEFS.splice(insertAt, BUILTIN_CLI_DEFS.length - insertAt);
     }
   });
 
