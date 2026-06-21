@@ -477,7 +477,7 @@ function defaultNextSteps(cliId: string, caps: CliSupportReport['capabilities'])
 }
 
 function buildFromCliDef(def: CliDef, kind: 'builtin' | 'plugin'): CliSupportReport {
-  const metadata = kind === 'builtin' ? REGISTRY[def.id] : pluginMetadata();
+  const metadata: SupportMetadata = kind === 'builtin' ? (REGISTRY[def.id] ?? {}) : pluginMetadata();
   const hasEnvSecret = def.sources.some(isEnvSecretSource);
   const hasWindowsCredential = def.sources.some(isWindowsCredentialSource);
   const start = mergeCapability(deriveSessionStart(def), metadata.capabilities?.sessionStart);
@@ -576,10 +576,11 @@ function redactDriftContract(contract: DriftContract): DriftContract {
 }
 
 export function buildCliSupportReport(cliId: string): CliSupportReport {
-  const def = findCliDef(cliId);
-  if (def && BUILTIN_IDS.has(def.id)) return buildFromCliDef(def, 'builtin');
+  const builtin = BUILTIN_CLI_DEFS.find((def) => def.id === cliId);
+  if (builtin) return buildFromCliDef(builtin, 'builtin');
   const known = KNOWN_BLOCKED[cliId];
   if (known) return buildKnownBlocked(cliId, known);
+  const def = findCliDef(cliId);
   if (def) return buildFromCliDef(def, 'plugin');
   throw new UnknownCliError(cliId);
 }
