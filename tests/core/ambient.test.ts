@@ -47,6 +47,25 @@ describe('ambient warnings — shared detector', () => {
     expect(JSON.stringify(warnings)).toContain('OPENAI_API_KEY');
   });
 
+  it('detects Grok env bypass channels without reading values or duplicating GROK_HOME', async () => {
+    const env = {
+      XAI_API_KEY: 'xai-secret-value-must-not-appear',
+      GROK_HOME: '/tmp/grok-home-secret-value-must-not-appear',
+      GROK_OIDC_TOKEN: 'oidc-secret-value-must-not-appear'
+    };
+
+    const warnings = await detectAmbientWarnings('grok', { cwd: tmp.home, env });
+    const serialized = JSON.stringify(warnings);
+
+    expect(warnings.map((w) => w.name)).toEqual(
+      expect.arrayContaining(['XAI_API_KEY', 'GROK_HOME', 'GROK_OIDC_TOKEN'])
+    );
+    expect(warnings.filter((w) => w.name === 'GROK_HOME')).toHaveLength(1);
+    expect(serialized).not.toContain('xai-secret-value-must-not-appear');
+    expect(serialized).not.toContain('grok-home-secret-value-must-not-appear');
+    expect(serialized).not.toContain('oidc-secret-value-must-not-appear');
+  });
+
   it('detects env prefixes and redacts long env names', async () => {
     const longKey = 'AIDER_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz';
     const warnings = await detectAmbientWarnings('aider', {
@@ -69,6 +88,20 @@ describe('ambient warnings — shared detector', () => {
     expect(serialized).toContain('.env');
     expect(serialized).toContain('symlink');
     expect(serialized).not.toContain('secret-file-content-must-not-appear');
+  });
+
+  it('detects project-local Grok config directory by metadata only', async () => {
+    const secretTarget = join(tmp.home, 'grok-secret-target');
+    await fs.writeFile(secretTarget, 'grok-project-secret-must-not-appear');
+    await fs.symlink(secretTarget, join(tmp.home, '.grok'));
+
+    const warnings = await detectAmbientWarnings('grok', { cwd: tmp.home, env: {} });
+    const serialized = JSON.stringify(warnings);
+
+    expect(warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'ambient.cwd', cliId: 'grok', name: '.grok', detail: 'symlink' })
+    ]));
+    expect(serialized).not.toContain('grok-project-secret-must-not-appear');
   });
 
   it('returns no warnings for unknown CLIs', async () => {
