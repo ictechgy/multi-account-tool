@@ -43,6 +43,25 @@ vi.mock('../../src/core/cli-defs.js', () => ({
       name: 'Aider',
       sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }],
       sessionRun: { executable: 'aider' }
+    },
+    {
+      id: 'opencode',
+      name: 'OpenCode',
+      sources: [{ type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }],
+      session: {
+        roots: [{
+          env: 'XDG_DATA_HOME',
+          base: '~/.local/share/opencode',
+          envSubdir: 'opencode',
+          warning: 'EXPERIMENTAL OpenCode session start'
+        }]
+      },
+      sessionRun: { executable: 'opencode' }
+    },
+    {
+      id: 'grok',
+      name: 'Grok Build',
+      sources: [{ type: 'file', path: '~/.grok/auth.json', saveAs: 'grok-auth.json' }]
     }
   ],
   getAllCliDefs: mocks.getAllCliDefs,
@@ -110,6 +129,43 @@ describe('doctor — read-only safety report', () => {
     expect(report.clis[0].session).toEqual({ start: 'supported', run: 'supported' });
     expect(JSON.stringify(report)).not.toContain('sk-should-not-appear');
     expect(mocks.sourceExists).not.toHaveBeenCalled();
+  });
+
+  it('preserves doctor JSON session-run capability boundaries for Aider, OpenCode, and Grok', async () => {
+    mocks.getAllCliDefs.mockReturnValue([
+      {
+        id: 'aider',
+        name: 'Aider',
+        sources: [{ type: 'file', path: '~/.aider.conf.yml', saveAs: 'aider.yml' }],
+        sessionRun: { executable: 'aider' }
+      },
+      {
+        id: 'opencode',
+        name: 'OpenCode',
+        sources: [{ type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' }],
+        session: {
+          roots: [{
+            env: 'XDG_DATA_HOME',
+            base: '~/.local/share/opencode',
+            envSubdir: 'opencode',
+            warning: 'EXPERIMENTAL OpenCode session start'
+          }]
+        },
+        sessionRun: { executable: 'opencode' }
+      },
+      {
+        id: 'grok',
+        name: 'Grok Build',
+        sources: [{ type: 'file', path: '~/.grok/auth.json', saveAs: 'grok-auth.json' }]
+      }
+    ]);
+
+    const report = await runDoctor({ cwd: tmp.home, env: {}, now: new Date('2026-06-14T00:00:00Z') });
+    const byId = Object.fromEntries(report.clis.map((cli) => [cli.id, cli]));
+
+    expect(byId.aider.session).toEqual({ start: 'unsupported', run: 'partial' });
+    expect(byId.opencode.session).toEqual({ start: 'experimental', run: 'partial' });
+    expect(byId.grok.session).toEqual({ start: 'unsupported', run: 'unsupported' });
   });
 
   it('surfaces only normalized active profile identity from metadata', async () => {
