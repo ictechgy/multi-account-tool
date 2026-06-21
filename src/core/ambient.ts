@@ -58,6 +58,11 @@ const AMBIENT_RULES: Record<string, AmbientRule> = {
   },
   goose: {
     envNames: ['GOOSE_DISABLE_KEYRING', 'GOOSE_PROVIDER', 'GOOSE_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']
+  },
+  grok: {
+    envNames: ['XAI_API_KEY'],
+    envPrefixes: ['GROK_'],
+    cwdEntries: ['.grok']
   }
 };
 
