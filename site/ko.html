@@ -181,7 +181,7 @@
 <td>일반 swap으로 충분 — 단 환경변수 / project-local 설정이 <code>mat</code>의 swap을 우회할 수 있음 (아래 &quot;플랫폼 지원&quot; 참고)</td>
 </tr>
 </tbody></table></div>
-<p><code>mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]</code> 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = <code>stale</code> 감지(identity 변경 또는 프로필 부재)를 뜻한다. 장기 실행 세션에는 <code>mat exec</code>를 권장한다. 명령 종료 후 자동으로 이전 프로필을 복원하지만, <code>mat</code> 자체가 <code>SIGKILL</code>을 받으면 복원이 일어나지 않는다(보안 섹션 참고).</p>
+<p><code>mat freshness [&lt;cli&gt;] [--profile &lt;name&gt;] [--json]</code> 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전: 모든 source가 <code>fresh</code>이거나 adapter가 high/medium confidence로 identity 유지 <code>rotated</code>를 확인한 경우다. exit code 1 = swap 전 조치가 필요한 상태: <code>stale</code>, fallback/byte-diff 기반 low-confidence <code>rotated</code>, <code>inflight</code>, 또는 프로필/source 부재를 뜻한다. 장기 실행 세션에는 <code>mat exec</code>를 권장한다. 명령 종료 후 자동으로 이전 프로필을 복원하지만, <code>mat</code> 자체가 <code>SIGKILL</code>을 받으면 복원이 일어나지 않는다(보안 섹션 참고).</p>
 <blockquote>
 <p><strong>OAuth rotation 대응 (PR-G/PR-I*/PR-H 모두 머지):</strong> TUI의 swap 흐름은 swap 직전 라이브 freshness를 점검하고, 차이를 감지하면 <strong>재캡처 / 폐기 / 취소</strong> 3옵션 dialog를 표시한다(PR-G). 재캡처는 라이브 자격증명을 <code>snapshotLiveToProfile</code>로 활성 프로필에 저장한 뒤 swap하고, 폐기는 자동 snapshot을 건너뛰고 swap한다(데이터 손실). 취소는 swap을 실행하지 않는다. <code>mat exec</code>는 종료 시 라이브 자격증명을 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원한다(PR-I*) — <code>SIGINT</code>/<code>SIGTERM</code>/<code>SIGHUP</code>까지 보호한다. <code>SIGKILL</code>은 OS 보장상 trap이 불가능하므로 다음 <code>mat</code> 호출의 stale-recovery가 사용자에게 안내한다. Claude/Goose identity-aware adapter(PR-H)는 <code>high</code>/<code>medium</code> confidence로 rotation과 다른 계정을 구분해, 안전한 swap에서 <code>[low conf]</code> dialog noise를 제거한다.</p>
 </blockquote>
@@ -585,7 +585,7 @@ mat freshness codex --profile work --json
 # statusline/dashboard 모드: 같은 보고서를 출력하되 unsafe 상태여도 실패하지 않음
 mat freshness --check-only
 </code></pre>
-<p>각 source는 4-state로 분류한다 — <code>fresh</code>(byte 동일), <code>rotated</code>(토큰 회전됐지만 identity 유지, swap 안전), <code>stale</code>(identity 변경 — 다른 계정, <strong>swap 시 revoke 위험</strong>), <code>inflight</code>(multi-source CLI의 부분 갱신 race — 잠시 후 재시도).</p>
+<p>각 source는 4-state로 분류한다 — <code>fresh</code>(byte 동일), <code>rotated</code>(토큰 회전), <code>stale</code>(identity 변경 — 다른 계정, <strong>swap 시 revoke 위험</strong>), <code>inflight</code>(multi-source CLI의 부분 갱신 race — 잠시 후 재시도). <code>rotated</code>는 adapter가 high/medium confidence로 identity 유지를 확인할 때만 swap 안전이다. fallback byte-diff 결과나 parser 실패는 &quot;바이트가 달라졌다&quot;까지만 말할 수 있으므로, low-confidence <code>rotated</code>는 exit-code 기준 unsafe로 취급되어 <code>--check-only</code>가 아니면 <code>1</code>을 반환한다.</p>
 <p><code>--check-only</code>는 read-only 모니터링 모드다. <code>stale</code> / low-confidence <code>rotated</code> / <code>inflight</code> 결과를 그대로 출력하지만 exit code는 <code>0</code>으로 유지해 프롬프트, statusline, dashboard가 경고를 표시하면서도 shell 흐름을 끊지 않게 한다. 사용 오류나 source 읽기 실패는 숨기지 않는다.</p>
 <p>종료 코드:</p>
 <div class="table-wrap"><table>

@@ -57,7 +57,7 @@
 | Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용 | TUI 프로필 전환만 사용(`grok` 선택 후 대상 프로필 선택); 선택한 프로필을 신뢰하기 전 config/env/project override를 검토 |
 | Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap으로 충분 — 단 환경변수 / project-local 설정이 `mat`의 swap을 우회할 수 있음 (아래 "플랫폼 지원" 참고) |
 
-`mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전, exit code 1 = `stale` 감지(identity 변경 또는 프로필 부재)를 뜻한다. 장기 실행 세션에는 `mat exec`를 권장한다. 명령 종료 후 자동으로 이전 프로필을 복원하지만, `mat` 자체가 `SIGKILL`을 받으면 복원이 일어나지 않는다(보안 섹션 참고).
+`mat freshness [<cli>] [--profile <name>] [--json]` 명령으로 swap 전 라이브와 활성 프로필의 자격증명을 비교한다. exit code 0 = 안전: 모든 source가 `fresh`이거나 adapter가 high/medium confidence로 identity 유지 `rotated`를 확인한 경우다. exit code 1 = swap 전 조치가 필요한 상태: `stale`, fallback/byte-diff 기반 low-confidence `rotated`, `inflight`, 또는 프로필/source 부재를 뜻한다. 장기 실행 세션에는 `mat exec`를 권장한다. 명령 종료 후 자동으로 이전 프로필을 복원하지만, `mat` 자체가 `SIGKILL`을 받으면 복원이 일어나지 않는다(보안 섹션 참고).
 
 > **OAuth rotation 대응 (PR-G/PR-I\*/PR-H 모두 머지):** TUI의 swap 흐름은 swap 직전 라이브 freshness를 점검하고, 차이를 감지하면 **재캡처 / 폐기 / 취소** 3옵션 dialog를 표시한다(PR-G). 재캡처는 라이브 자격증명을 `snapshotLiveToProfile`로 활성 프로필에 저장한 뒤 swap하고, 폐기는 자동 snapshot을 건너뛰고 swap한다(데이터 손실). 취소는 swap을 실행하지 않는다. `mat exec`는 종료 시 라이브 자격증명을 swap-target 프로필로 재캡처한 뒤 원래 활성 프로필로 복원한다(PR-I\*) — `SIGINT`/`SIGTERM`/`SIGHUP`까지 보호한다. `SIGKILL`은 OS 보장상 trap이 불가능하므로 다음 `mat` 호출의 stale-recovery가 사용자에게 안내한다. Claude/Goose identity-aware adapter(PR-H)는 `high`/`medium` confidence로 rotation과 다른 계정을 구분해, 안전한 swap에서 `[low conf]` dialog noise를 제거한다.
 
@@ -360,7 +360,7 @@ mat freshness codex --profile work --json
 mat freshness --check-only
 ```
 
-각 source는 4-state로 분류한다 — `fresh`(byte 동일), `rotated`(토큰 회전됐지만 identity 유지, swap 안전), `stale`(identity 변경 — 다른 계정, **swap 시 revoke 위험**), `inflight`(multi-source CLI의 부분 갱신 race — 잠시 후 재시도).
+각 source는 4-state로 분류한다 — `fresh`(byte 동일), `rotated`(토큰 회전), `stale`(identity 변경 — 다른 계정, **swap 시 revoke 위험**), `inflight`(multi-source CLI의 부분 갱신 race — 잠시 후 재시도). `rotated`는 adapter가 high/medium confidence로 identity 유지를 확인할 때만 swap 안전이다. fallback byte-diff 결과나 parser 실패는 "바이트가 달라졌다"까지만 말할 수 있으므로, low-confidence `rotated`는 exit-code 기준 unsafe로 취급되어 `--check-only`가 아니면 `1`을 반환한다.
 
 `--check-only`는 read-only 모니터링 모드다. `stale` / low-confidence `rotated` / `inflight` 결과를 그대로 출력하지만 exit code는 `0`으로 유지해 프롬프트, statusline, dashboard가 경고를 표시하면서도 shell 흐름을 끊지 않게 한다. 사용 오류나 source 읽기 실패는 숨기지 않는다.
 
