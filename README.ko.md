@@ -6,7 +6,7 @@
 
 하나의 TUI에서 여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build)을 전환한다. 계정마다 프로필을 하나씩 저장해 두고, 매번 `logout` → `login`을 반복하는 대신 키 한 번으로 바꾼다.
 
-`mat`은 보수적으로 동작한다. macOS Keychain 항목을 백업하고, 부분 실패는 롤백하며, 파일은 원자적으로 쓴다. 평문 자격증명 백업 위험을 분명히 알리고, swap 전 OAuth refresh-token rotation도 점검한다. 라이브 자격증명이 drift된 경우 실제 swap 전에 재캡처 / 폐기 / 취소 중 하나를 선택하게 한다.
+`mat`은 보수적으로 동작한다. macOS Keychain 항목을 백업하고, 부분 실패는 롤백하며, 파일은 원자적으로 쓴다. 평문 자격증명 백업 위험을 분명히 알리고, swap 전 자격증명 freshness(OAuth refresh-token rotation 포함)도 점검한다. 라이브 자격증명이 저장된 프로필과 불일치한 경우 실제 swap 전에 재캡처 / 폐기 / 취소 중 하나를 선택하게 한다.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮

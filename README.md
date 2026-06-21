@@ -4,9 +4,9 @@
 
 📖 **Documentation:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
-Use one TUI to switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build). Store one profile per account and switch with a keystroke instead of cycling through `logout` / `login`.
+Use one TUI to switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build). Store one profile per account and switch with a keystroke instead of cycling through `logout` → `login`.
 
-By default, `mat` takes the conservative path: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, calls out plaintext-credential backup risks, and checks for OAuth refresh-token rotation before a swap. When live credentials have drifted, the TUI asks whether to recapture, discard, or cancel before it swaps.
+By default, `mat` takes the conservative path: it backs up macOS Keychain entries, rolls back partial failures, writes files atomically, calls out plaintext-credential backup risks, and checks credential freshness (including OAuth refresh-token rotation) before a swap. When live credentials have drifted, the TUI asks whether to Recapture, Discard, or Cancel before it swaps.
 
 ```
 ╭ Multi-Account Tool ────────────────────────────────╮
