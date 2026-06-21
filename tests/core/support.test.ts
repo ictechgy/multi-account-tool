@@ -92,6 +92,48 @@ describe('support registry — support/explain reports', () => {
     expect(JSON.stringify(report)).toMatch(/mat-safe auth-store or redirect contract/);
   });
 
+  it('resolves builtin and known-blocked reports without loading user plugins', async () => {
+    const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
+    await fs.mkdir(dir, { recursive: true });
+    const samplePath = join(dir, 'sample.json');
+    await fs.writeFile(
+      samplePath,
+      JSON.stringify({
+        id: 'sample',
+        name: 'Sample CLI',
+        sources: [{ type: 'file', path: '~/.sample/auth.json', saveAs: 'sample-auth.json' }]
+      })
+    );
+    resetCliDefCache();
+
+    expect(buildCliSupportReport('grok').cli.kind).toBe('builtin');
+    expect(buildCliSupportReport('agy').cli.kind).toBe('known-blocked');
+
+    await fs.unlink(samplePath);
+    expect(() => buildCliSupportReport('sample')).toThrow(UnknownCliError);
+  });
+
+  it('falls back to derived builtin support when registry metadata is absent', () => {
+    const synthetic = {
+      id: 'synthetic-builtin',
+      name: 'Synthetic Builtin',
+      sources: [{ type: 'file' as const, path: '~/.synthetic/auth.json', saveAs: 'auth.json' }]
+    };
+    const insertAt = BUILTIN_CLI_DEFS.length;
+    BUILTIN_CLI_DEFS.push(synthetic);
+    try {
+      const report = buildCliSupportReport('synthetic-builtin');
+
+      expect(report.cli).toMatchObject({ id: 'synthetic-builtin', builtin: true, kind: 'builtin' });
+      expect(report.capabilities.swap.status).toBe('supported');
+      expect(report.capabilities.freshness.status).toBe('partial');
+      expect(report.capabilities.sessionStart.status).toBe('unsupported');
+      expect(report.capabilities.sessionRun.status).toBe('unsupported');
+    } finally {
+      BUILTIN_CLI_DEFS.splice(insertAt, 1);
+    }
+  });
+
   it('reports plugin CLIs as swap-only with fallback-only freshness', async () => {
     const dir = join(tmp.home, '.multi-account-tool', 'cli-defs');
     await fs.mkdir(dir, { recursive: true });
