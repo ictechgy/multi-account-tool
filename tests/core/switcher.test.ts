@@ -20,9 +20,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { promises as fs } from 'node:fs';
 
 vi.mock('../../src/core/sources.js', () => ({
   readSource: vi.fn(),
+  removeSource: vi.fn(),
   writeSource: vi.fn(),
   sourceExists: vi.fn()
 }));
@@ -83,6 +85,7 @@ vi.mock('../../src/core/cli-defs.js', async (importOriginal) => {
 import { getActiveProfile, setActiveProfile } from '../../src/core/config.js';
 import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import {
+  __setProfileStoreFsOpsForTests,
   createProfile,
   deleteProfile,
   profileExists,
@@ -90,7 +93,8 @@ import {
   readProfileFile,
   writeProfileFile
 } from '../../src/core/profile-store.js';
-import { readSource, writeSource } from '../../src/core/sources.js';
+import { profileMetaPath } from '../../src/core/paths.js';
+import { readSource, removeSource, writeSource } from '../../src/core/sources.js';
 import {
   restoreProfileToLive,
   snapshotLiveToProfile,
@@ -100,6 +104,7 @@ import type { Source } from '../../src/core/types.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
 const mockReadSource = vi.mocked(readSource);
+const mockRemoveSource = vi.mocked(removeSource);
 const mockWriteSource = vi.mocked(writeSource);
 
 /** 프로필 빠른 setup — cliId + profileName 모두 명시. helper 시그니처 일관성 유지. */
@@ -114,6 +119,7 @@ describe('switcher', () => {
     vi.clearAllMocks();
   });
   afterEach(async () => {
+    __setProfileStoreFsOpsForTests(null);
     vi.clearAllMocks();
     await tmp.cleanup();
   });
@@ -195,7 +201,26 @@ describe('switcher', () => {
 
       await expect(snapshotLiveToProfile('codex', 'failing'))
         .rejects.toThrow('keychain locked');
-      // production 의 의도된 동작: 부분 capture 보장 안 함, 에러 그대로 전파.
+      expect(await profileExists('codex', 'failing')).toBe(false);
+    });
+
+    it('multi-entry/meta commit failure restores prior bytes and prior absence without leaking injected data', async () => {
+      await setupProfile('tri-cli', 'capture-fault');
+      await writeProfileFile('tri-cli', 'capture-fault', 'a.json', 'old-a-secret');
+      await writeProfileFile('tri-cli', 'capture-fault', 'c.json', 'old-c-secret');
+      const metaPath = profileMetaPath('tri-cli', 'capture-fault'); const oldMeta = await fs.readFile(metaPath);
+      mockReadSource.mockImplementation(async src => `new-${src.saveAs}-credential`);
+      __setProfileStoreFsOpsForTests({ rename: async (from, to) => {
+        if (String(from).includes('meta.json.recap-') && to === metaPath) throw Object.assign(new Error(`${metaPath} new-b.json-credential`), { code: 'EIO' });
+        return fs.rename(from, to);
+      }} as Partial<typeof fs>);
+      const error = await snapshotLiveToProfile('tri-cli', 'capture-fault').catch(err => err as Error);
+      expect(error.message).toBe('snapshot failed (EIO)');
+      expect(error.message).not.toMatch(/new-b|credential|meta\.json|\/Users\//);
+      expect(await readProfileFile('tri-cli', 'capture-fault', 'a.json')).toBe('old-a-secret');
+      expect(await readProfileFile('tri-cli', 'capture-fault', 'b.json')).toBeNull();
+      expect(await readProfileFile('tri-cli', 'capture-fault', 'c.json')).toBe('old-c-secret');
+      expect(await fs.readFile(metaPath)).toEqual(oldMeta);
     });
 
     it('알 수 없는 cli → throw', async () => {
@@ -294,8 +319,8 @@ describe('switcher', () => {
       mockReadSource.mockImplementation(async (src: Source) =>
         src.saveAs === 'oauth_creds.json' ? 'old-oauth-live' : 'old-accounts-live'
       );
-      mockWriteSource.mockImplementation(async (src: Source) => {
-        if (src.saveAs === 'google_accounts.json') {
+      mockWriteSource.mockImplementation(async (src: Source, value: string) => {
+        if (src.saveAs === 'google_accounts.json' && value === 'new-accounts') {
           throw new Error('write failed at google_accounts');
         }
       });
@@ -312,7 +337,7 @@ describe('switcher', () => {
       expect(oauthCalls[1][1]).toBe('old-oauth-live');
     });
 
-    it('롤백 시 liveBackup 이 null 인 source 는 skip (best-effort split-state)', async () => {
+    it('롤백 시 liveBackup 이 null 인 source 는 guarded removeSource 로 부재 상태를 복원한다', async () => {
       await setupProfile('gemini', 'null-backup');
       await writeProfileFile('gemini', 'null-backup', 'oauth_creds.json', 'new-oauth');
       await writeProfileFile('gemini', 'null-backup', 'google_accounts.json', 'new-accounts');
@@ -326,14 +351,13 @@ describe('switcher', () => {
 
       await expect(restoreProfileToLive('gemini', 'null-backup')).rejects.toThrow();
 
-      // oauth: 새 값 적용만 1회 호출 (롤백 skip — liveBackup null).
-      // 결과적으로 oauth 는 new-oauth 가 live 에 남음 → split-state.
-      // production 의 의도된 best-effort 동작 (cleanup 실패 무시).
+      // oauth: 새 값 적용 뒤, 원래 부재였던 live state로 guarded removal.
       const oauthCalls = mockWriteSource.mock.calls.filter(
         (c) => (c[0] as Source).saveAs === 'oauth_creds.json'
       );
       expect(oauthCalls).toHaveLength(1);
       expect(oauthCalls[0][1]).toBe('new-oauth');
+      expect(mockRemoveSource).toHaveBeenCalledWith(expect.objectContaining({ saveAs: 'oauth_creds.json' }));
     });
 
     it('rollback reverse-order (3-source tri-cli): 3rd source throw → b → a 역순으로 liveBackup 복원', async () => {
@@ -353,8 +377,8 @@ describe('switcher', () => {
         return map[src.saveAs] ?? null;
       });
 
-      mockWriteSource.mockImplementation(async (src: Source) => {
-        if (src.saveAs === 'c.json') {
+      mockWriteSource.mockImplementation(async (src: Source, value: string) => {
+        if (src.saveAs === 'c.json' && value === 'stored-c') {
           throw new Error('3rd source write failed');
         }
       });
@@ -366,10 +390,11 @@ describe('switcher', () => {
       //  0. (a, 'stored-a') — apply 1
       //  1. (b, 'stored-b') — apply 2
       //  2. (c, 'stored-c') — apply 3 (throw)
-      //  3. (b, 'live-b')   — rollback (appliedIdx.reverse() 의 첫 번째)
-      //  4. (a, 'live-a')   — rollback (appliedIdx.reverse() 의 두 번째)
+      //  3. (c, 'live-c')   — currently failing source rollback
+      //  4. (b, 'live-b')   — rollback (appliedIdx.reverse() 의 첫 번째)
+      //  5. (a, 'live-a')   — rollback (appliedIdx.reverse() 의 두 번째)
       const calls = mockWriteSource.mock.calls;
-      expect(calls).toHaveLength(5);
+      expect(calls).toHaveLength(6);
       expect((calls[0][0] as Source).saveAs).toBe('a.json');
       expect(calls[0][1]).toBe('stored-a');
       expect((calls[1][0] as Source).saveAs).toBe('b.json');
@@ -377,10 +402,12 @@ describe('switcher', () => {
       expect((calls[2][0] as Source).saveAs).toBe('c.json');
       expect(calls[2][1]).toBe('stored-c');
       // 핵심: reverse-order — b 먼저, 그다음 a (a 가 먼저 적용됐으므로 가장 마지막 rollback).
-      expect((calls[3][0] as Source).saveAs).toBe('b.json');
-      expect(calls[3][1]).toBe('live-b');
-      expect((calls[4][0] as Source).saveAs).toBe('a.json');
-      expect(calls[4][1]).toBe('live-a');
+      expect((calls[3][0] as Source).saveAs).toBe('c.json');
+      expect(calls[3][1]).toBe('live-c');
+      expect((calls[4][0] as Source).saveAs).toBe('b.json');
+      expect(calls[4][1]).toBe('live-b');
+      expect((calls[5][0] as Source).saveAs).toBe('a.json');
+      expect(calls[5][1]).toBe('live-a');
     });
 
     it('env-secret source 는 restore 전 metadata-only hard-stop (profile/live read-write 없음)', async () => {
@@ -520,7 +547,7 @@ describe('switcher', () => {
       await writeProfileFile('codex', 'home', 'auth.json', 'home-stored');
 
       mockReadSource.mockResolvedValue('live');
-      mockWriteSource.mockRejectedValue(new Error('keychain locked'));
+      mockWriteSource.mockRejectedValueOnce(new Error('keychain locked')).mockResolvedValueOnce(undefined);
 
       await expect(switchProfile('codex', 'home')).rejects.toThrow('keychain locked');
       expect(await getActiveProfile('codex')).toBe('work');

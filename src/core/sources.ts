@@ -12,11 +12,13 @@
  * - 에러 메시지는 errors.ts 의 redactMessage 로 토큰 누설 방지.
  */
 
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
+import { dirname } from 'node:path';
 import { expandTilde } from './paths.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import { unsupportedEnvSecretSource } from './env-secret-source.js';
 import { writeFileAtomic } from './io-atomic.js';
+import { directorySourceExists, readDirectorySource, removeDirectorySource, writeDirectorySource } from './directory-source.js';
 import { readOsKeyringSerialized, writeOsKeyringSerialized, osKeyringExists } from './os-keyring.js';
 import { runCommand, type CmdResult } from './run-command.js';
 import {
@@ -24,7 +26,7 @@ import {
   windowsCredentialSourceExists,
   writeWindowsCredentialSourceSerialized
 } from './windows-credential-source.js';
-import type { KeychainSource, KeychainStored, Source } from './types.js';
+import type { DirectorySource, FileSource, KeychainSource, KeychainStored, Source } from './types.js';
 
 export { runCommand };
 export type { CmdResult };
@@ -312,11 +314,38 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+function isGooseProviderFile(src: FileSource): boolean {
+  return src.path.startsWith('~/.config/goose/providers/');
+}
+
+async function checkedProviderRead(src: FileSource): Promise<string | null> {
+  const path = expandTilde(src.path);
+  try {
+    const st = await fs.lstat(path);
+    if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache file');
+    const fd = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try { const opened = await fd.stat(); if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== st.dev || opened.ino !== st.ino) throw new Error('Goose provider cache identity changed'); return await fd.readFile('utf8'); } finally { await fd.close(); }
+  } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
+}
+
+async function checkedProviderWrite(src: FileSource, value: string): Promise<void> {
+  const path = expandTilde(src.path); const parent = dirname(path);
+  const home = process.env.HOME;
+  if (!home || !parent.startsWith(home)) throw new Error('unsafe Goose provider cache parent');
+  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+  const existing = await checkedProviderRead(src);
+  void existing;
+  await writeFileAtomic(path, value);
+  const st = await fs.lstat(path); if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache activation');
+}
+
 /** 임의 source 의 현재 라이브 값을 캡처해 문자열로 반환 (저장 가능한 형태). */
 export async function readSource(src: Source): Promise<string | null> {
   switch (src.type) {
     case 'file':
-      return readFileOrNull(src.path);
+      return isGooseProviderFile(src) ? checkedProviderRead(src) : readFileOrNull(src.path);
+    case 'directory':
+      return readDirectorySource(src);
     case 'keychain':
       return readKeychainSerialized(src);
     case 'os-keyring':
@@ -334,7 +363,9 @@ export async function readSource(src: Source): Promise<string | null> {
 export async function writeSource(src: Source, value: string): Promise<void> {
   switch (src.type) {
     case 'file':
-      return writeFileAtomic(expandTilde(src.path), value);
+      return isGooseProviderFile(src) ? checkedProviderWrite(src, value) : writeFileAtomic(expandTilde(src.path), value);
+    case 'directory':
+      return writeDirectorySource(src, value);
     case 'keychain':
       return writeKeychainSerialized(src, value);
     case 'os-keyring':
@@ -353,6 +384,8 @@ export async function sourceExists(src: Source): Promise<boolean> {
   switch (src.type) {
     case 'file':
       return fileExists(src.path);
+    case 'directory':
+      return directorySourceExists(src);
     case 'keychain':
       assertValidKeychainSource(src);
       return keychainExists(src.service, src.account);
@@ -364,5 +397,20 @@ export async function sourceExists(src: Source): Promise<boolean> {
       return windowsCredentialSourceExists(src);
     default:
       return assertNever(src);
+  }
+}
+
+/** Restore rollback to a source that was absent before a failed transaction. */
+export async function removeSource(src: Source): Promise<void> {
+  switch (src.type) {
+    case 'file': {
+      const path = expandTilde(src.path);
+      const st = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+      if (st == null) return;
+      if (st.isSymbolicLink() || !st.isFile() || (isGooseProviderFile(src) && st.nlink !== 1)) throw new Error('unsafe source removal');
+      await fs.unlink(path); return;
+    }
+    case 'directory': return removeDirectorySource(src);
+    default: throw new Error(`cannot rollback absence for ${src.type} source`);
   }
 }

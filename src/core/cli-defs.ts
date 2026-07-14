@@ -18,6 +18,7 @@ import { join } from 'node:path';
 
 import { loadUserCliDefs } from './cli-defs-plugin.js';
 import type { CliDef, Source } from './types.js';
+import { assertValidSourceList } from './validators.js';
 
 /**
  * Claude Code 의 자격증명 source.
@@ -369,6 +370,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     ]
   }
 ];
+
+for (const def of BUILTIN_CLI_DEFS) assertValidSourceList(def.sources);
 
 let cachedAllDefs: CliDef[] | null = null;
 let cachedWarnings: string[] = [];

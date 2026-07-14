@@ -53,7 +53,8 @@ vi.mock('../../src/core/lockfile.js', async () => {
 vi.mock('../../src/core/cli-mutation-lock.js', () => ({
   withCliMutationLock: mockWithCliMutationLock
 }));
-vi.mock('node:child_process', () => ({
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
   spawn: vi.fn()
 }));
 

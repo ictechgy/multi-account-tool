@@ -15,12 +15,16 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __setProfileStoreFsOpsForTests,
   createProfile,
+  commitProfileCaptureTransaction,
   deleteProfile,
   listProfiles,
   profileExists,
   readMeta,
   readProfileFile,
+  recoverProfileCaptureTransaction,
+  stageProfileFile,
   renameProfile,
   touchProfile,
   validateProfileFileName,
@@ -38,7 +42,7 @@ import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 describe('profile-store', () => {
   let tmp: TmpHome;
   beforeEach(async () => { tmp = await setupTmpHome(); });
-  afterEach(async () => { await tmp.cleanup(); });
+  afterEach(async () => { __setProfileStoreFsOpsForTests(null); await tmp.cleanup(); });
 
   describe('validateProfileName', () => {
     it.each([
@@ -612,6 +616,158 @@ describe('profile-store', () => {
       await createProfile('codex', 'work');
       await expect(writeProfileFile('codex', 'work', '../../../tmp/leaked', 'secret'))
         .rejects.toThrow();
+    });
+  });
+
+  describe('durable capture transaction', () => {
+    it('commits every staged artifact and meta.json together', async () => {
+      await createProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'old-auth');
+      const metaBefore = await fs.readFile(profileMetaPath('codex', 'work'), 'utf8');
+      const authStage = await stageProfileFile('codex', 'work', 'auth.json', 'new-auth');
+      const metaStage = await stageProfileFile('codex', 'work', 'meta.json', `${metaBefore}\n`);
+      await commitProfileCaptureTransaction('codex', 'work', [
+        { fileName: 'auth.json', stagingPath: authStage },
+        { fileName: 'meta.json', stagingPath: metaStage }
+      ]);
+      expect(await readProfileFile('codex', 'work', 'auth.json')).toBe('new-auth');
+      expect(await fs.readFile(profileMetaPath('codex', 'work'), 'utf8')).toBe(`${metaBefore}\n`);
+      await expect(fs.access(join(profileDir('codex', 'work'), '.mat-capture-txn.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('recovers an interrupted later-source commit byte-identically, including meta.json', async () => {
+      await createProfile('codex', 'work');
+      await writeProfileFile('codex', 'work', 'auth.json', 'old-auth');
+      const metaPath = profileMetaPath('codex', 'work');
+      const oldMeta = await fs.readFile(metaPath, 'utf8');
+      const authTarget = profileFilePath('codex', 'work', 'auth.json');
+      const authStage = await stageProfileFile('codex', 'work', 'auth.json', 'new-auth');
+      const metaStage = await stageProfileFile('codex', 'work', 'meta.json', 'new-meta');
+      const authBackup = `${authTarget}.mat-capture-backup-abcdef123456`;
+      const metaBackup = `${metaPath}.mat-capture-backup-abcdef123456`;
+      await fs.rename(authTarget, authBackup);
+      await fs.rename(authStage, authTarget); // interruption after first source activation
+      await fs.writeFile(join(profileDir('codex', 'work'), '.mat-capture-txn.json'), JSON.stringify({
+        version: 1,
+        phase: 'applying',
+        entries: [
+          { fileName: 'auth.json', stagingPath: authStage, backupPath: authBackup, existed: true },
+          { fileName: 'meta.json', stagingPath: metaStage, backupPath: metaBackup, existed: true }
+        ]
+      }), { mode: 0o600 });
+      await recoverProfileCaptureTransaction('codex', 'work');
+      expect(await fs.readFile(authTarget, 'utf8')).toBe('old-auth');
+      expect(await fs.readFile(metaPath, 'utf8')).toBe(oldMeta);
+      await expect(fs.access(authStage)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(metaStage)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('recovers prepared, backed-up, and activated entry boundaries including previously absent artifacts', async () => {
+      const profile = profileDir('codex', 'matrix');
+      const marker = join(profile, '.mat-capture-txn.json');
+      const writeMarker = async (entries: unknown[]) => fs.writeFile(marker, JSON.stringify({ version: 1, phase: 'applying', entries }), { mode: 0o600 });
+
+      await createProfile('codex', 'matrix');
+      await writeProfileFile('codex', 'matrix', 'a.json', 'old-a');
+      const meta = profileMetaPath('codex', 'matrix'); const oldMeta = await fs.readFile(meta);
+      let aStage = await stageProfileFile('codex', 'matrix', 'a.json', 'new-a');
+      let bStage = await stageProfileFile('codex', 'matrix', 'b.json', 'new-b');
+      let metaStage = await stageProfileFile('codex', 'matrix', 'meta.json', 'new-meta');
+      const a = profileFilePath('codex', 'matrix', 'a.json'); const b = profileFilePath('codex', 'matrix', 'b.json');
+      const aBackup = `${a}.mat-capture-backup-abcdef123456`; const bBackup = `${b}.mat-capture-backup-abcdef123456`; const metaBackup = `${meta}.mat-capture-backup-abcdef123456`;
+      await writeMarker([
+        { fileName: 'a.json', stagingPath: aStage, backupPath: aBackup, existed: true },
+        { fileName: 'b.json', stagingPath: bStage, backupPath: bBackup, existed: false },
+        { fileName: 'meta.json', stagingPath: metaStage, backupPath: metaBackup, existed: true }
+      ]);
+      await recoverProfileCaptureTransaction('codex', 'matrix');
+      expect(await fs.readFile(a, 'utf8')).toBe('old-a'); await expect(fs.access(b)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await fs.readFile(meta)).toEqual(oldMeta);
+
+      aStage = await stageProfileFile('codex', 'matrix', 'a.json', 'new-a'); bStage = await stageProfileFile('codex', 'matrix', 'b.json', 'new-b'); metaStage = await stageProfileFile('codex', 'matrix', 'meta.json', 'new-meta');
+      await fs.rename(a, aBackup);
+      await writeMarker([
+        { fileName: 'a.json', stagingPath: aStage, backupPath: aBackup, existed: true },
+        { fileName: 'b.json', stagingPath: bStage, backupPath: bBackup, existed: false },
+        { fileName: 'meta.json', stagingPath: metaStage, backupPath: metaBackup, existed: true }
+      ]);
+      await recoverProfileCaptureTransaction('codex', 'matrix');
+      expect(await fs.readFile(a, 'utf8')).toBe('old-a'); await expect(fs.access(b)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await fs.readFile(meta)).toEqual(oldMeta);
+
+      aStage = await stageProfileFile('codex', 'matrix', 'a.json', 'new-a'); bStage = await stageProfileFile('codex', 'matrix', 'b.json', 'new-b'); metaStage = await stageProfileFile('codex', 'matrix', 'meta.json', 'new-meta');
+      await fs.rename(a, aBackup); await fs.rename(aStage, a);
+      await fs.rename(bStage, b); // activated entry that was absent before capture
+      await fs.rename(meta, metaBackup); await fs.rename(metaStage, meta);
+      await writeMarker([
+        { fileName: 'a.json', stagingPath: aStage, backupPath: aBackup, existed: true },
+        { fileName: 'b.json', stagingPath: bStage, backupPath: bBackup, existed: false },
+        { fileName: 'meta.json', stagingPath: metaStage, backupPath: metaBackup, existed: true }
+      ]);
+      await recoverProfileCaptureTransaction('codex', 'matrix');
+      expect(await fs.readFile(a, 'utf8')).toBe('old-a'); await expect(fs.access(b)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await fs.readFile(meta)).toEqual(oldMeta);
+      expect((await fs.readdir(profile)).filter(name => name.includes('.recap-') || name.includes('.mat-capture-'))).toEqual([]);
+    });
+
+    it('rolls back a multi-entry commit failure byte-identically, including absence and meta.json', async () => {
+      await createProfile('codex', 'fault');
+      await writeProfileFile('codex', 'fault', 'a.json', 'old-a-secret');
+      const a = profileFilePath('codex', 'fault', 'a.json'); const b = profileFilePath('codex', 'fault', 'b.json'); const meta = profileMetaPath('codex', 'fault');
+      const oldA = await fs.readFile(a); const oldMeta = await fs.readFile(meta);
+      const aStage = await stageProfileFile('codex', 'fault', 'a.json', 'new-a-secret');
+      const bStage = await stageProfileFile('codex', 'fault', 'b.json', 'new-b-secret');
+      const metaStage = await stageProfileFile('codex', 'fault', 'meta.json', 'new-meta-secret');
+      __setProfileStoreFsOpsForTests({ rename: async (from, to) => {
+        if (String(from).includes('meta.json.recap-') && to === meta) throw Object.assign(new Error(`EIO ${meta} new-meta-secret`), { code: 'EIO' });
+        return fs.rename(from, to);
+      }} as Partial<typeof fs>);
+      await expect(commitProfileCaptureTransaction('codex', 'fault', [
+        { fileName: 'a.json', stagingPath: aStage }, { fileName: 'b.json', stagingPath: bStage }, { fileName: 'meta.json', stagingPath: metaStage }
+      ])).rejects.toMatchObject({ code: 'EIO' });
+      expect(await fs.readFile(a)).toEqual(oldA); await expect(fs.access(b)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await fs.readFile(meta)).toEqual(oldMeta);
+      expect((await fs.readdir(profileDir('codex', 'fault'))).filter(name => name.includes('.recap-') || name.includes('.mat-capture-'))).toEqual([]);
+    });
+
+    it('surfaces rollback failure structurally without credential or path leakage and retains recovery evidence', async () => {
+      await createProfile('codex', 'rollback-fault');
+      await writeProfileFile('codex', 'rollback-fault', 'a.json', 'old-secret');
+      const meta = profileMetaPath('codex', 'rollback-fault');
+      const aStage = await stageProfileFile('codex', 'rollback-fault', 'a.json', 'new-secret');
+      const metaStage = await stageProfileFile('codex', 'rollback-fault', 'meta.json', 'new-meta-secret');
+      __setProfileStoreFsOpsForTests({ rename: async (from, to) => {
+        if (String(from).includes('meta.json.recap-') && to === meta) throw Object.assign(new Error(`primary ${meta} new-secret`), { code: 'EIO' });
+        if (String(from).includes('.mat-capture-backup-')) throw Object.assign(new Error(`rollback ${from} old-secret`), { code: 'EACCES' });
+        return fs.rename(from, to);
+      }} as Partial<typeof fs>);
+      const error = await commitProfileCaptureTransaction('codex', 'rollback-fault', [
+        { fileName: 'a.json', stagingPath: aStage }, { fileName: 'meta.json', stagingPath: metaStage }
+      ]).catch(err => err as Error);
+      expect(error.message).toBe('profile capture commit failed; rollback also failed');
+      expect(error.message).not.toMatch(/old-secret|new-secret|meta\.json|\/Users\//);
+      const names = await fs.readdir(profileDir('codex', 'rollback-fault'));
+      expect(names).toContain('.mat-capture-txn.json');
+      expect(names.some(name => name.includes('.mat-capture-backup-'))).toBe(true);
+    });
+
+    it('finishes a committed cleanup after an earlier backup was deleted and a later deletion was interrupted', async () => {
+      await createProfile('codex', 'cleanup-interrupt');
+      await writeProfileFile('codex', 'cleanup-interrupt', 'a.json', 'old-a');
+      const a = profileFilePath('codex', 'cleanup-interrupt', 'a.json'); const meta = profileMetaPath('codex', 'cleanup-interrupt');
+      const aStage = await stageProfileFile('codex', 'cleanup-interrupt', 'a.json', 'new-a');
+      const metaStage = await stageProfileFile('codex', 'cleanup-interrupt', 'meta.json', 'new-meta');
+      let interrupted = false;
+      __setProfileStoreFsOpsForTests({ unlink: async (path) => {
+        if (!interrupted && String(path).startsWith(`${meta}.mat-capture-backup-`)) {
+          interrupted = true;
+          throw Object.assign(new Error('cleanup interruption with credential/path'), { code: 'EIO' });
+        }
+        return fs.unlink(path);
+      }} as Partial<typeof fs>);
+      await expect(commitProfileCaptureTransaction('codex', 'cleanup-interrupt', [
+        { fileName: 'a.json', stagingPath: aStage }, { fileName: 'meta.json', stagingPath: metaStage }
+      ])).resolves.toBeUndefined();
+      expect(interrupted).toBe(true);
+      expect(await fs.readFile(a, 'utf8')).toBe('new-a');
+      expect(await fs.readFile(meta, 'utf8')).toBe('new-meta');
+      expect((await fs.readdir(profileDir('codex', 'cleanup-interrupt'))).filter(name => name.includes('.mat-capture-') || name.includes('.recap-'))).toEqual([]);
     });
   });
 });

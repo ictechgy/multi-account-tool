@@ -144,6 +144,16 @@ async function inspectFileSource(src: Extract<Source, { type: 'file' }>): Promis
   }
 }
 
+async function inspectDirectorySource(src: Extract<Source, { type: 'directory' }>): Promise<DoctorSourceStatus> {
+  try {
+    // sourceExists validates topology without returning bytes, names, or values.
+    const exists = await sourceExists(src);
+    return { saveAs: redactMessage(src.saveAs), type: src.type, status: exists ? 'present' : 'missing', detail: exists ? 'bounded directory source (metadata-only)' : undefined };
+  } catch (err) {
+    return { saveAs: redactMessage(src.saveAs), type: src.type, status: 'error', error: errorMessage(err) };
+  }
+}
+
 async function inspectKeychainSource(src: Extract<Source, { type: 'keychain' }>): Promise<DoctorSourceStatus> {
   try {
     const exists = await sourceExists(src);
@@ -214,6 +224,8 @@ async function inspectSource(src: Source): Promise<DoctorSourceStatus> {
   switch (src.type) {
     case 'file':
       return inspectFileSource(src);
+    case 'directory':
+      return inspectDirectorySource(src);
     case 'keychain':
       return inspectKeychainSource(src);
     case 'os-keyring':

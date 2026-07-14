@@ -32,7 +32,7 @@ vi.mock('../../src/core/profile-store.js', () => ({
   removeProfileFile: vi.fn(),
   recordProfileCapture: vi.fn()
 }));
-vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
+vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), spawn: vi.fn() }));
 vi.mock('../../src/core/switcher.js', () => ({ switchProfile: vi.fn(), snapshotLiveToProfile: vi.fn() }));
 vi.mock('../../src/core/config.js', () => ({ getActiveProfile: vi.fn(), setActiveProfile: vi.fn() }));
 vi.mock('../../src/core/lockfile.js', async () => {

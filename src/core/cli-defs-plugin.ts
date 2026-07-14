@@ -22,6 +22,7 @@ import { validatePublicEnvSecretSource } from './env-secret-source.js';
 import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
 import { redactSecretLikeText } from './redaction.js';
 import { validateWindowsCredentialBinding } from './windows-credential-manager.js';
+import { assertValidSourceList } from './validators.js';
 import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source, WindowsCredentialSource } from './types.js';
 
 /** plugin 파일이 모이는 디렉토리: `~/.multi-account-tool/cli-defs/`. */
@@ -77,7 +78,7 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     raw.type !== 'env-secret' &&
     raw.type !== 'win-credential'
   ) {
-    return { error: `sources[${idx}].type 는 'file', 'keychain', 'os-keyring', 'env-secret' 또는 'win-credential' 이어야 합니다.` };
+    return { error: `sources[${idx}].type 는 'file', 'keychain', 'os-keyring', 'env-secret' 또는 'win-credential' 이어야 합니다. directory 는 builtin 전용입니다.` };
   }
   if (typeof raw.saveAs !== 'string') return { error: `sources[${idx}].saveAs 는 문자열이어야 합니다.` };
   let safeSaveAs: string;
@@ -230,6 +231,7 @@ export function validateCliDefRaw(raw: unknown): ValidateCliDefResult {
     if (r.error) return { error: r.error };
     sources.push(r.source!);
   }
+  try { assertValidSourceList(sources); } catch (err) { return { error: (err as Error).message }; }
   return { def: { id: safeId, name: raw.name, sources } };
 }
 
@@ -383,6 +385,9 @@ function lintPluginDefinition(raw: unknown, def: CliDef, context: PluginValidati
     if (source.type === 'win-credential') {
       continue;
     }
+    // DirectorySource is internal-only and cannot be produced by parseSource;
+    // retain an exhaustive guard if a future internal caller passes one here.
+    if (source.type === 'directory') continue;
     if (source.account == null && isGenericCredentialService(source.service)) {
       diagnostics.push(diagnostic({
         severity: 'warning',

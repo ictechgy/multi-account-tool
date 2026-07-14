@@ -5,7 +5,7 @@
  * - os-keyring: Linux Secret Service (secret-tool) 기반 자격증명 항목
  * - win-credential: Windows Credential Manager generic credential 항목
  */
-export type SourceType = 'file' | 'keychain' | 'os-keyring' | 'env-secret' | 'win-credential';
+export type SourceType = 'file' | 'directory' | 'keychain' | 'os-keyring' | 'env-secret' | 'win-credential';
 
 /**
  * 파일 기반 자격증명 source.
@@ -17,6 +17,20 @@ export interface FileSource {
   path: string;
   /** 프로필 디렉토리 내 저장될 파일명. */
   saveAs: string;
+}
+
+/**
+ * Builtin-only, bounded credential cache tree.  This is deliberately not
+ * accepted by the plugin schema: recursive credential capture must be tied to
+ * a reviewed fixed path and explicit resource limits.
+ */
+export interface DirectorySource {
+  type: 'directory';
+  path: string;
+  saveAs: string;
+  maxEntries: number;
+  maxBytes: number;
+  maxDepth: number;
 }
 
 /**
@@ -141,7 +155,7 @@ export interface WindowsCredentialSource {
   saveAs: string;
 }
 
-export type Source = FileSource | KeychainSource | OsKeyringSource | EnvSecretSource | WindowsCredentialSource;
+export type Source = FileSource | DirectorySource | KeychainSource | OsKeyringSource | EnvSecretSource | WindowsCredentialSource;
 
 /**
  * 세션 시작 시 base 하위 디렉토리를 세션 root 로 재귀 복사할 allow-list 항목.

@@ -21,14 +21,23 @@ import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
 import { buildProfileIdentity, type IdentitySourceInput } from './profile-identity.js';
 import {
   createProfile,
+  commitProfileCaptureTransaction,
+  deleteProfile,
+  discardStagedFile,
   profileExists,
-  recordProfileCapture,
+  removeProfileFile,
   readProfileFile,
+  readMeta,
+  readProfileMetaRaw,
+  recoverProfileCaptureTransaction,
   touchProfile,
+  stageProfileFile,
+  writeProfileMetaRaw,
   writeProfileFile
 } from './profile-store.js';
-import { readSource, writeSource } from './sources.js';
+import { readSource, removeSource, writeSource } from './sources.js';
 import type { CliDef, Source } from './types.js';
+import { assertValidSourceList } from './validators.js';
 
 export interface SnapshotResult {
   cliId: string;
@@ -59,15 +68,18 @@ async function snapshotLiveToProfileUnlocked(
   profileName: string
 ): Promise<SnapshotResult> {
   const def = mustFindCli(cliId);
+  assertValidSourceList(def.sources);
   assertNoEnvSecretSources(def.sources, 'snapshot');
-  if (!(await profileExists(cliId, profileName))) {
-    await createProfile(cliId, profileName);
-  }
+  const profileWasPresent = await profileExists(cliId, profileName);
+  if (profileWasPresent) await recoverProfileCaptureTransaction(cliId, profileName);
   const captured: string[] = [];
   const empty: string[] = [];
   const identitySources: IdentitySourceInput[] = [];
+  const values: Array<{ src: Source; value: string | null }> = [];
+  // Read/preflight every source before any profile mutation.
   for (const src of def.sources) {
     const value = await readSource(src);
+    values.push({ src, value });
     if (value == null) {
       empty.push(src.saveAs);
       const stored = await readProfileFile(cliId, profileName, src.saveAs);
@@ -78,15 +90,46 @@ async function snapshotLiveToProfileUnlocked(
       });
       continue;
     }
-    await writeProfileFile(cliId, profileName, src.saveAs, value);
     captured.push(src.saveAs);
     identitySources.push({ saveAs: src.saveAs, value, state: 'captured' });
   }
-  await recordProfileCapture(
-    cliId,
-    profileName,
-    buildProfileIdentity({ cliId, capturedAt: new Date(), sources: identitySources })
-  );
+  // Creating a profile itself is a mutation, so it occurs only after every
+  // selected live source has been safely read/preflighted.
+  if (!profileWasPresent) await createProfile(cliId, profileName);
+  const prior = await Promise.all(values.filter(({ value }) => value != null).map(async ({ src }) => ({ src, value: await readProfileFile(cliId, profileName, src.saveAs) })));
+  const priorMeta = await readProfileMetaRaw(cliId, profileName);
+  const staged: Array<{ src: Source; path: string }> = [];
+  try {
+    for (const { src, value } of values) if (value != null) staged.push({ src, path: await stageProfileFile(cliId, profileName, src.saveAs, value) });
+    const meta = await readMeta(cliId, profileName);
+    if (!meta) throw new Error('profile metadata missing during capture');
+    meta.updatedAt = new Date().toISOString();
+    meta.identity = buildProfileIdentity({ cliId, capturedAt: new Date(meta.updatedAt), sources: identitySources });
+    const metaStage = await stageProfileFile(cliId, profileName, 'meta.json', JSON.stringify(meta, null, 2));
+    await commitProfileCaptureTransaction(cliId, profileName, [
+      ...staged.map(item => ({ fileName: item.src.saveAs, stagingPath: item.path })),
+      { fileName: 'meta.json', stagingPath: metaStage }
+    ]);
+  } catch (err) {
+    const rollbackErrors: string[] = [];
+    for (const { path } of staged) {
+      try { await discardStagedFile(path); } catch (rollbackErr) { rollbackErrors.push(errorText(rollbackErr)); }
+    }
+    for (const { src, value } of prior) {
+      try {
+        if (value == null) await removeProfileFile(cliId, profileName, src.saveAs);
+        else await writeProfileFile(cliId, profileName, src.saveAs, value);
+      } catch (rollbackErr) { rollbackErrors.push(errorText(rollbackErr)); }
+    }
+    try {
+      if (!profileWasPresent) await deleteProfile(cliId, profileName);
+      else if (priorMeta == null) await removeProfileFile(cliId, profileName, 'meta.json');
+      else await writeProfileMetaRaw(cliId, profileName, priorMeta);
+    } catch (rollbackErr) { rollbackErrors.push(errorText(rollbackErr)); }
+    if (rollbackErrors.length) throw new Error(`snapshot failed; rollback also failed: ${rollbackErrors.join('; ')}`);
+    const code = errorCode(err);
+    throw new Error(`snapshot failed${code ? ` (${code})` : ''}`);
+  }
   return { cliId, profileName, captured, empty };
 }
 
@@ -126,6 +169,7 @@ async function restoreProfileToLiveUnlocked(
   profileName: string
 ): Promise<RestoreResult> {
   const def = mustFindCli(cliId);
+  assertValidSourceList(def.sources);
   assertNoEnvSecretSources(def.sources, 'restore');
   if (!(await profileExists(cliId, profileName))) {
     throw new Error(`프로필을 찾을 수 없습니다: ${cliId}/${profileName}`);
@@ -149,12 +193,14 @@ async function collectRestorePlan(
   const plan: RestorePlan[] = [];
   for (const src of def.sources) {
     const stored = await readProfileFile(cliId, profileName, src.saveAs);
+    // Always inspect the live source. A profile omission must not hide an
+    // unsafe present directory/file from the restore preflight.
+    const liveBackup = await readSource(src);
     if (stored == null) {
       missing.push(src.saveAs);
-      plan.push({ src, stored: null, liveBackup: null });
+      plan.push({ src, stored: null, liveBackup });
       continue;
     }
-    const liveBackup = await readSource(src);
     plan.push({ src, stored, liveBackup });
   }
   return plan;
@@ -163,22 +209,42 @@ async function collectRestorePlan(
 /** plan 을 순차 적용. 한 source 실패 시 이미 적용된 source 롤백 후 원본 에러 throw. */
 async function applyRestorePlan(plan: RestorePlan[], restored: string[]): Promise<void> {
   const appliedIdx: number[] = [];
+  let currentIdx: number | undefined;
   try {
     for (let i = 0; i < plan.length; i++) {
       const { src, stored } = plan[i];
       if (stored == null) continue;
+      currentIdx = i;
       await writeSource(src, stored);
       restored.push(src.saveAs);
       appliedIdx.push(i);
+      currentIdx = undefined;
     }
   } catch (err) {
-    for (const i of appliedIdx.reverse()) {
+    const rollbackErrors: string[] = [];
+    const rollbackIdx = [...(currentIdx === undefined ? [] : [currentIdx]), ...appliedIdx.reverse()];
+    for (const i of rollbackIdx) {
       const { src, liveBackup } = plan[i];
-      if (liveBackup == null) continue;
-      await writeSource(src, liveBackup).catch(() => { /* best-effort */ });
+      try {
+        if (liveBackup == null) await removeSource(src);
+        else await writeSource(src, liveBackup);
+      } catch (rollbackErr) {
+        rollbackErrors.push(errorText(rollbackErr));
+      }
     }
+    if (rollbackErrors.length) throw new Error(`restore failed; rollback also failed: ${rollbackErrors.join('; ')}`);
     throw err;
   }
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof Error && /^(?:unsafe directory source:|Goose provider cache |profile capture )/.test(err.message)) return err.message;
+  const code = errorCode(err);
+  return `operation failed${code ? ` (${code})` : ''}`;
+}
+
+function errorCode(err: unknown): string | undefined {
+  return typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
 }
 
 export interface SwitchResult {

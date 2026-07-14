@@ -16,7 +16,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { writeFileAtomic } from './io-atomic.js';
@@ -35,6 +35,14 @@ import type { ProfileIdentitySummary } from './types.js';
 // app.tsx / exec.ts 등 외부 호출자 backward compat 용 re-export.
 // 검증자는 paths.ts 단일 소스 — profile-store.ts 에 별도 정의 없음.
 export { validateProfileFileName, validateProfileName } from './paths.js';
+
+type ProfileStoreFsOps = typeof realFs;
+let fs: ProfileStoreFsOps = realFs;
+
+/** Deterministic profile-transaction fault injection seam. Tests must restore with `null`. */
+export function __setProfileStoreFsOpsForTests(overrides: Partial<ProfileStoreFsOps> | null): void {
+  fs = overrides ? Object.assign(Object.create(realFs) as ProfileStoreFsOps, overrides) : realFs;
+}
 
 /** 특정 CLI 의 프로필 이름 목록 (디렉토리 기반, 알파벳 순). */
 export async function listProfiles(cliId: string): Promise<string[]> {
@@ -104,6 +112,17 @@ export async function readMeta(cliId: string, name: string): Promise<Profile | n
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
   }
+}
+
+/** Internal transaction helper: preserve meta.json byte-for-byte on rollback. */
+export async function readProfileMetaRaw(cliId: string, name: string): Promise<string | null> {
+  try { return await fs.readFile(profileMetaPath(validateCliId(cliId), validateProfileName(name)), 'utf8'); }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
+}
+
+/** Internal transaction helper; callers must already hold the CLI mutation lock. */
+export async function writeProfileMetaRaw(cliId: string, name: string, value: string): Promise<void> {
+  await writeFileAtomic(profileMetaPath(validateCliId(cliId), validateProfileName(name)), value);
 }
 
 /** updatedAt 만 갱신 (메타가 없으면 no-op). */
@@ -264,6 +283,132 @@ export async function commitStagedFile(
     throw new Error('staging 이 일반 파일이 아닙니다 (symlink/디렉토리 등 — commit 거부).');
   }
   await fs.rename(stagingPath, finalPath);
+}
+
+interface CaptureTransactionEntry {
+  fileName: string;
+  stagingPath: string;
+  backupPath: string;
+  existed: boolean;
+}
+interface CaptureTransaction { version: 1; phase: 'applying' | 'committed'; entries: CaptureTransactionEntry[]; }
+const CAPTURE_BACKUP_SUFFIX = /^\.mat-capture-backup-[0-9a-f]{12}$/;
+
+function captureMarkerPath(cliId: string, name: string): string {
+  return `${profileDir(validateCliId(cliId), validateProfileName(name))}/.mat-capture-txn.json`;
+}
+async function syncProfileDirectory(cliId: string, name: string): Promise<void> {
+  const directory = profileDir(validateCliId(cliId), validateProfileName(name));
+  const before = await fs.lstat(directory);
+  if (before.isSymbolicLink() || !before.isDirectory()) throw new Error('unsafe profile capture directory');
+  const fd = await fs.open(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try { await fd.sync(); } finally { await fd.close(); }
+  const after = await fs.lstat(directory);
+  if (after.isSymbolicLink() || !after.isDirectory() || after.dev !== before.dev || after.ino !== before.ino) throw new Error('profile capture directory identity changed');
+}
+
+/**
+ * Recover an interrupted profile capture by restoring the complete old set,
+ * including meta.json.  A marker is deliberately retained if a candidate is
+ * ambiguous or a compensating operation fails; callers must not continue into
+ * a partial capture.
+ */
+export async function recoverProfileCaptureTransaction(cliId: string, name: string): Promise<void> {
+  const markerPath = captureMarkerPath(cliId, name);
+  let marker: CaptureTransaction;
+  try { marker = JSON.parse(await fs.readFile(markerPath, 'utf8')) as CaptureTransaction; }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; throw err; }
+  if (marker.version !== 1 || !['applying', 'committed'].includes(marker.phase) || !Array.isArray(marker.entries)) throw new Error('invalid profile capture transaction marker');
+  try {
+    for (const item of [...marker.entries].reverse()) {
+      const fileName = validateProfileFileName(item.fileName);
+      const target = profileFilePath(cliId, name, fileName);
+      const finalBase = basename(target);
+      const stageSuffix = basename(item.stagingPath).startsWith(finalBase) ? basename(item.stagingPath).slice(finalBase.length) : '';
+      const backupSuffix = basename(item.backupPath).startsWith(finalBase) ? basename(item.backupPath).slice(finalBase.length) : '';
+      if (dirname(item.stagingPath) !== dirname(target) || dirname(item.backupPath) !== dirname(target) || !STAGING_SUFFIX_RE.test(stageSuffix) || !CAPTURE_BACKUP_SUFFIX.test(backupSuffix)) throw new Error('invalid profile capture transaction path');
+      const backup = await fs.lstat(item.backupPath).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+      const targetSt = await fs.lstat(target).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+      const stage = await fs.lstat(item.stagingPath).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+      if (marker.phase === 'committed') {
+        if (!targetSt || !targetSt.isFile() || targetSt.isSymbolicLink() || stage) throw new Error('invalid committed profile capture state');
+        if (backup) {
+          if (!item.existed || !backup.isFile() || backup.isSymbolicLink()) throw new Error('unsafe committed profile capture backup');
+          await fs.unlink(item.backupPath); await syncProfileDirectory(cliId, name);
+        }
+        continue;
+      }
+      if (backup) {
+        if (!backup.isFile() || backup.isSymbolicLink()) throw new Error('unsafe profile capture backup');
+        if (targetSt) { await fs.unlink(target); await syncProfileDirectory(cliId, name); }
+        await fs.rename(item.backupPath, target);
+        await syncProfileDirectory(cliId, name);
+      } else if (!item.existed && targetSt) {
+        if (!targetSt.isFile() || targetSt.isSymbolicLink()) throw new Error('unsafe profile capture target');
+        await fs.unlink(target); await syncProfileDirectory(cliId, name);
+      } else if (item.existed && !stage) throw new Error('missing profile capture backup');
+      if (stage) { if (!stage.isFile() || stage.isSymbolicLink()) throw new Error('unsafe profile capture staging'); await fs.unlink(item.stagingPath); await syncProfileDirectory(cliId, name); }
+    }
+    await fs.unlink(markerPath);
+    await syncProfileDirectory(cliId, name);
+  } catch (err) {
+    const code = typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? ` (${err.code})` : '';
+    throw new Error(`profile capture recovery failed${code}`);
+  }
+}
+
+/**
+ * Commit every staged artifact and meta.json under one durable abort marker.
+ * Any interrupted boundary recovers byte-identically to the prior profile;
+ * errors include compensating failures instead of silently leaving a split set.
+ */
+export async function commitProfileCaptureTransaction(
+  cliId: string,
+  name: string,
+  staged: Array<{ fileName: string; stagingPath: string }>
+): Promise<void> {
+  await recoverProfileCaptureTransaction(cliId, name);
+  const entries: CaptureTransactionEntry[] = [];
+  for (const item of staged) {
+    const fileName = validateProfileFileName(item.fileName);
+    const target = profileFilePath(cliId, name, fileName);
+    const stageBase = basename(item.stagingPath);
+    const stageSuffix = stageBase.startsWith(basename(target)) ? stageBase.slice(basename(target).length) : '';
+    if (dirname(item.stagingPath) !== dirname(target) || !STAGING_SUFFIX_RE.test(stageSuffix)) throw new Error('invalid profile capture staging path');
+    const stagedSt = await fs.lstat(item.stagingPath);
+    if (!stagedSt.isFile() || stagedSt.isSymbolicLink()) throw new Error('unsafe profile capture staging');
+    const targetSt = await fs.lstat(target).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+    if (targetSt && (!targetSt.isFile() || targetSt.isSymbolicLink())) throw new Error('unsafe profile capture target');
+    entries.push({ fileName, stagingPath: item.stagingPath, backupPath: `${target}.mat-capture-backup-${randomBytes(6).toString('hex')}`, existed: targetSt != null });
+  }
+  const markerPath = captureMarkerPath(cliId, name);
+  const marker: CaptureTransaction = { version: 1, phase: 'applying', entries };
+  await writeFileAtomic(markerPath, JSON.stringify(marker), { mode: 0o600 });
+  await syncProfileDirectory(cliId, name);
+  let committed = false;
+  try {
+    for (const item of entries) {
+      const target = profileFilePath(cliId, name, item.fileName);
+      if (item.existed) { await fs.rename(target, item.backupPath); await syncProfileDirectory(cliId, name); }
+      await fs.rename(item.stagingPath, target);
+      await syncProfileDirectory(cliId, name);
+    }
+    marker.phase = 'committed';
+    await writeFileAtomic(markerPath, JSON.stringify(marker), { mode: 0o600 });
+    await syncProfileDirectory(cliId, name);
+    committed = true;
+    for (const item of entries) if (item.existed) { await fs.unlink(item.backupPath); await syncProfileDirectory(cliId, name); }
+    await fs.unlink(markerPath);
+    await syncProfileDirectory(cliId, name);
+  } catch (err) {
+    try { await recoverProfileCaptureTransaction(cliId, name); }
+    catch { throw new Error(committed ? 'profile capture cleanup failed; recovery also failed' : 'profile capture commit failed; rollback also failed'); }
+    if (committed) return;
+    const code = typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
+    const safe = new Error(`profile capture commit failed${code ? ` (${code})` : ''}`) as Error & { code?: string };
+    if (code) safe.code = code;
+    throw safe;
+  }
 }
 
 /** {@link stageProfileFile} staging 파일 best-effort 삭제 (stage 실패/미커밋 롤백). */
