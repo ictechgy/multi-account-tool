@@ -32,6 +32,22 @@ describe('DirectorySource', () => {
     expect((await fs.stat(join(root, 'empty'))).isDirectory()).toBe(true);
   });
 
+  it('permits private directories when process.getuid is unavailable', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'getuid');
+    const root = join(tmp.home, 'cache');
+    await fs.mkdir(root, { mode: 0o700 });
+    await fs.writeFile(join(root, 'token'), 'opaque', { mode: 0o600 });
+    try {
+      Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
+      const snapshot = await readDirectorySource(source(root));
+      await fs.rm(root, { recursive: true });
+      await writeDirectorySource(source(root), snapshot!);
+      expect(await fs.readFile(join(root, 'token'), 'utf8')).toBe('opaque');
+    } finally {
+      if (descriptor) Object.defineProperty(process, 'getuid', descriptor);
+    }
+  });
+
   it('sorts the complete captured tree globally so sibling prefixes round-trip through the codec', async () => {
     const root = join(tmp.home, 'cache');
     await fs.mkdir(join(root, 'a'), { recursive: true, mode: 0o700 });

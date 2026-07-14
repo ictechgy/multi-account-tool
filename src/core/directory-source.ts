@@ -36,7 +36,8 @@ function publicError(err: unknown): Error {
 function own(value: object, key: string): boolean { return Object.prototype.hasOwnProperty.call(value, key); }
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex'); }
 function privateDir(st: Awaited<ReturnType<typeof fs.lstat>>): boolean {
-  return st.isDirectory() && st.uid === process.getuid?.() && (Number(st.mode) & 0o022) === 0;
+  const uid = process.getuid?.();
+  return st.isDirectory() && (uid === undefined || st.uid === uid) && (Number(st.mode) & 0o022) === 0;
 }
 function same(st: Awaited<ReturnType<typeof fs.lstat>>, expected: Identity): boolean {
   return !st.isSymbolicLink() && Number(st.dev) === expected.dev && Number(st.ino) === expected.ino;

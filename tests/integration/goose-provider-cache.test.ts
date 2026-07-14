@@ -72,6 +72,7 @@ describe('Goose v1.40 provider caches — temporary HOME integration', () => {
       const { createProfile, writeProfileFile } = await import('../../src/core/profile-store.js');
       const { expandTilde: expand } = await import('../../src/core/paths.js');
       const sourcesModule = await import('../../src/core/sources.js');
+      const pinnedWriteModule = await import('../../src/core/pinned-write.js');
       const pinnedModule = await import('../../src/core/pinned-remove.js');
       const { restoreProfileToLive } = await import('../../src/core/switcher.js');
       const providers = defs.find(def => def.id === 'goose')!.sources.filter(src => src.type === 'file' && src.saveAs.startsWith('goose-provider-'));
@@ -80,12 +81,9 @@ describe('Goose v1.40 provider caches — temporary HOME integration', () => {
       await writeProfileFile('goose', `file-rollback-${failRollback}`, first.saveAs, 'first-credential-bytes');
       await writeProfileFile('goose', `file-rollback-${failRollback}`, second.saveAs, 'second-credential-bytes');
       const firstPath = expand(first.path); const secondPath = expand(second.path);
-      sourcesModule.__setSourceFsOpsForTests({
-        rename: async (from, to) => {
-          if (to === secondPath) throw Object.assign(new Error(`primary ${secondPath} second-credential-bytes`), { code: 'EIO' });
-          return fs.rename(from, to);
-        }
-      } as Partial<typeof fs>);
+      pinnedWriteModule.__setPinnedWriteTestHooksForTests({
+        faultStage: ({ parent, name }) => join(parent, name) === secondPath ? 'before-rename' : undefined
+      });
       if (failRollback) pinnedModule.__setBeforePinnedRemoveForTests(({ parent, name, kind }) => {
         if (parent === dirname(firstPath) && name === basename(firstPath) && kind === 'file') throw Object.assign(new Error(`rollback ${firstPath} first-credential-bytes`), { code: 'EACCES' });
       });
@@ -96,6 +94,7 @@ describe('Goose v1.40 provider caches — temporary HOME integration', () => {
       else await expect(fs.access(firstPath)).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.access(secondPath)).rejects.toMatchObject({ code: 'ENOENT' });
       sourcesModule.__setSourceFsOpsForTests(null);
+      pinnedWriteModule.__setPinnedWriteTestHooksForTests(null);
       pinnedModule.__setBeforePinnedRemoveForTests(null);
     } finally {
       if (previous === undefined) delete process.env.GOOSE_DISABLE_KEYRING; else process.env.GOOSE_DISABLE_KEYRING = previous;
@@ -110,25 +109,27 @@ describe('Goose v1.40 provider caches — temporary HOME integration', () => {
       const { createProfile, writeProfileFile } = await import('../../src/core/profile-store.js');
       const { expandTilde: expand } = await import('../../src/core/paths.js');
       const sourcesModule = await import('../../src/core/sources.js');
+      const pinnedWriteModule = await import('../../src/core/pinned-write.js');
       const { restoreProfileToLive } = await import('../../src/core/switcher.js');
       const src = defs.find(def => def.id === 'goose')!.sources.find(item => item.saveAs === 'goose-provider-gemini-oauth-tokens.json')!;
       if (src.type !== 'file') throw new Error('fixture source type changed');
       await createProfile('goose', 'post-activation-failure');
       await writeProfileFile('goose', 'post-activation-failure', src.saveAs, 'post-activation-credential');
-      const target = expand(src.path); let activated = false; let failed = false;
-      sourcesModule.__setSourceFsOpsForTests({
-        rename: async (from, to) => { const result = await fs.rename(from, to); if (to === target) activated = true; return result; },
-        lstat: async (path, options) => {
-          if (path === target && activated && !failed) { failed = true; throw Object.assign(new Error(`${target} post-activation-credential`), { code: 'EIO' }); }
-          return fs.lstat(path, options as never);
+      const target = expand(src.path); let failed = false;
+      pinnedWriteModule.__setPinnedWriteTestHooksForTests({
+        faultStage: ({ parent, name }) => {
+          if (join(parent, name) !== target) return undefined;
+          failed = true;
+          return 'after-rename';
         }
-      } as Partial<typeof fs>);
+      });
       const error = await restoreProfileToLive('goose', 'post-activation-failure').catch(err => err as Error);
       expect(failed).toBe(true);
       expect(error.message).toMatch(/filesystem operation failed/);
       expect(error.message).not.toMatch(/post-activation-credential|gemini_oauth|tokens\.json|\/Users\//);
       await expect(fs.access(target)).rejects.toMatchObject({ code: 'ENOENT' });
       sourcesModule.__setSourceFsOpsForTests(null);
+      pinnedWriteModule.__setPinnedWriteTestHooksForTests(null);
     } finally {
       if (previous === undefined) delete process.env.GOOSE_DISABLE_KEYRING; else process.env.GOOSE_DISABLE_KEYRING = previous;
       vi.resetModules();

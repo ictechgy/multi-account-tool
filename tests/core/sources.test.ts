@@ -31,6 +31,7 @@ import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { __setBeforePinnedRemoveForTests } from '../../src/core/pinned-remove.js';
+import { __setPinnedWriteTestHooksForTests } from '../../src/core/pinned-write.js';
 
 const mockSpawn = vi.mocked(spawn);
 
@@ -210,7 +211,7 @@ describe('sources — file branch (real fs)', () => {
 describe('sources — fixed Goose provider files', () => {
   let tmp: TmpHome;
   beforeEach(async () => { tmp = await setupTmpHome(); });
-  afterEach(async () => { __setSourceFsOpsForTests(null); __setBeforePinnedRemoveForTests(null); await tmp.cleanup(); });
+  afterEach(async () => { __setSourceFsOpsForTests(null); __setBeforePinnedRemoveForTests(null); __setPinnedWriteTestHooksForTests(null); await tmp.cleanup(); });
 
   it('treats a file beneath missing fixed ancestors as an ordinary absent source', async () => {
     const src: FileSource = { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
@@ -278,31 +279,32 @@ describe('sources — fixed Goose provider files', () => {
     const outside = join(tmp.home, 'outside-dir'); await fs.mkdir(outside, { mode: 0o700 });
     const outsideFile = join(outside, 'token.json'); await fs.writeFile(outsideFile, 'outside-secret', { mode: 0o600 });
     await fs.mkdir(parent, { recursive: true, mode: 0o700 });
-    let observations = 0;
-    __setSourceFsOpsForTests({ lstat: async (path, options) => {
-      if (path === parent && ++observations === 2) { await fs.rename(parent, `${parent}.old`); await fs.symlink(outside, parent); }
-      return fs.lstat(path, options as never);
-    }} as Partial<typeof fs>);
+    __setPinnedWriteTestHooksForTests({
+      pauseStage: (context) => context.parent === parent ? 'after-pin' : undefined,
+      atStage: async () => { await fs.rename(parent, `${parent}.old`); await fs.symlink(outside, parent); }
+    });
     const error = await writeSource(src, 'new-secret').catch(err => err as Error);
-    expect(error.message).toMatch(/parent identity changed|unsafe Goose provider cache parent/);
+    expect(error.message).toMatch(/parent identity changed/);
     expect(error.message).not.toMatch(/new-secret|token\.json|outside-dir/);
     expect(await fs.readFile(outsideFile, 'utf8')).toBe('outside-secret');
+    expect(await fs.readFile(join(`${parent}.old`, 'token.json'), 'utf8')).toBe('new-secret');
   });
 
-  it('rejects target replacement at rename and ENOENT at unlink without mutating outside bytes', async () => {
+  it('rejects target replacement before rename and ENOENT at unlink without mutating outside bytes', async () => {
     const src: FileSource = { type: 'file', path: '~/.config/goose/providers/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' };
     const target = join(tmp.home, '.config/goose/providers/chatgpt_codex/tokens.json');
     await fs.mkdir(join(target, '..'), { recursive: true, mode: 0o700 }); await fs.writeFile(target, 'old', { mode: 0o600 });
     const outside = join(tmp.home, 'outside'); await fs.writeFile(outside, 'outside-secret', { mode: 0o600 });
-    __setSourceFsOpsForTests({ rename: async (from, to) => {
-      if (to === target) { await fs.unlink(target); await fs.symlink(outside, target); throw Object.assign(new Error(`EEXIST ${target} credential`), { code: 'EEXIST' }); }
-      return fs.rename(from, to);
-    }} as Partial<typeof fs>);
+    __setPinnedWriteTestHooksForTests({
+      pauseStage: () => 'before-rename',
+      atStage: async () => { await fs.unlink(target); await fs.symlink(outside, target); }
+    });
     let error = await writeSource(src, 'new-secret').catch(err => err as Error);
-    expect(error.message).toBe('Goose provider cache filesystem operation failed (EEXIST)');
+    expect(error.message).toBe('Goose provider cache filesystem operation failed');
     expect(await fs.readFile(outside, 'utf8')).toBe('outside-secret');
+    expect((await fs.readdir(join(target, '..'))).some(name => name.includes('.mat-write-'))).toBe(false);
 
-    __setSourceFsOpsForTests(null); await fs.unlink(target); await fs.writeFile(target, 'old', { mode: 0o600 });
+    __setPinnedWriteTestHooksForTests(null); await fs.unlink(target); await fs.writeFile(target, 'old', { mode: 0o600 });
     __setBeforePinnedRemoveForTests(({ parent, name, kind }) => {
       if (parent === join(target, '..') && name === 'tokens.json' && kind === 'file') throw Object.assign(new Error(`ENOENT ${target} outside-secret`), { code: 'ENOENT' });
     });
@@ -310,6 +312,52 @@ describe('sources — fixed Goose provider files', () => {
     expect(error.message).toBe('Goose provider cache filesystem operation failed (ENOENT)');
     expect(await fs.readFile(target, 'utf8')).toBe('old');
     expect(await fs.readFile(outside, 'utf8')).toBe('outside-secret');
+  });
+
+  it('cleans the exclusive temp after an immediate post-open failure without activating credential bytes', async () => {
+    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' };
+    const parent = join(tmp.home, '.config/goose/providers/kimicode');
+    await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+    const secret = 'never-activate-this-secret';
+    let tempName = '';
+    __setPinnedWriteTestHooksForTests({
+      beforeSpawn: (context) => {
+        tempName = context.tempName;
+        expect(JSON.stringify(context)).not.toContain(secret);
+      },
+      faultStage: () => 'after-open'
+    });
+    const error = await writeSource(src, secret).catch(err => err as Error);
+    expect(error.message).toBe('Goose provider cache filesystem operation failed');
+    expect(error.message).not.toContain('never-activate-this-secret');
+    await expect(fs.access(join(parent, 'token.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.access(join(parent, tempName))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('atomically writes absent and existing provider targets with private mode', async () => {
+    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
+    const target = join(tmp.home, '.config/goose/providers/gemini_oauth/tokens.json');
+    await writeSource(src, 'first');
+    const first = await fs.stat(target);
+    expect(first.mode & 0o777).toBe(0o600);
+    expect(await fs.readFile(target, 'utf8')).toBe('first');
+    await writeSource(src, 'second');
+    const second = await fs.stat(target);
+    expect(second.ino).not.toBe(first.ino);
+    expect(second.mode & 0o777).toBe(0o600);
+    expect(await fs.readFile(target, 'utf8')).toBe('second');
+  });
+
+  it('permits private provider parents when process.getuid is unavailable', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'getuid');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
+    try {
+      Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
+      await writeSource(src, 'opaque');
+      await expect(readSource(src)).resolves.toBe('opaque');
+    } finally {
+      if (descriptor) Object.defineProperty(process, 'getuid', descriptor);
+    }
   });
 
   it('pins the provider parent inode so an ancestor swap cannot delete an outside token file', async () => {

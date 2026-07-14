@@ -12,9 +12,8 @@
  * - 에러 메시지는 errors.ts 의 redactMessage 로 토큰 누설 방지.
  */
 
-import { randomBytes } from 'node:crypto';
 import { constants, promises as realFs } from 'node:fs';
-import { basename, dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, relative, sep } from 'node:path';
 import { expandTilde } from './paths.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import { unsupportedEnvSecretSource } from './env-secret-source.js';
@@ -29,6 +28,7 @@ import {
 } from './windows-credential-source.js';
 import type { DirectorySource, FileSource, KeychainSource, KeychainStored, Source } from './types.js';
 import { removePinnedChild } from './pinned-remove.js';
+import { writePinnedProviderFile } from './pinned-write.js';
 
 export { runCommand };
 export type { CmdResult };
@@ -388,6 +388,10 @@ export async function providerFileExistsChecked(src: FileSource): Promise<boolea
 }
 
 type ParentIdentity = { path: string; dev: number; ino: number };
+function providerParentIsPrivate(st: Awaited<ReturnType<typeof fs.lstat>>): boolean {
+  const uid = process.getuid?.();
+  return !st.isSymbolicLink() && st.isDirectory() && (uid === undefined || st.uid === uid) && (Number(st.mode) & 0o022) === 0;
+}
 async function validateProviderParents(path: string, createMissing: boolean): Promise<ParentIdentity[]> {
   const home = process.env.HOME; const parent = dirname(path);
   if (!home || !parent.startsWith(home + sep)) throw new Error('unsafe Goose provider cache parent');
@@ -396,12 +400,12 @@ async function validateProviderParents(path: string, createMissing: boolean): Pr
     if (part !== '.') current = `${current}${sep}${part}`;
     try {
       const st = await fs.lstat(current);
-      if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== process.getuid?.() || (Number(st.mode) & 0o022) !== 0) throw new Error('unsafe Goose provider cache parent'); identities.push({ path: current, dev: Number(st.dev), ino: Number(st.ino) });
+      if (!providerParentIsPrivate(st)) throw new Error('unsafe Goose provider cache parent'); identities.push({ path: current, dev: Number(st.dev), ino: Number(st.ino) });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT' || !createMissing || part === '.') throw err;
       await assertProviderParentsUnchanged(identities);
       await fs.mkdir(current, { mode: 0o700 });
-      const st = await fs.lstat(current); if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== process.getuid?.() || (Number(st.mode) & 0o022) !== 0) throw new Error('unsafe Goose provider cache parent'); identities.push({ path: current, dev: Number(st.dev), ino: Number(st.ino) });
+      const st = await fs.lstat(current); if (!providerParentIsPrivate(st)) throw new Error('unsafe Goose provider cache parent'); identities.push({ path: current, dev: Number(st.dev), ino: Number(st.ino) });
     }
   }
   return identities;
@@ -414,35 +418,15 @@ async function checkedProviderWriteImpl(src: FileSource, value: string): Promise
   await assertProviderParentsUnchanged(parents);
   const existing = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
   if (existing && (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1)) throw new Error('unsafe Goose provider cache file');
-  await assertProviderParentsUnchanged(parents);
-  const temp = join(dirname(path), `.${basename(path)}.mat-write-${randomBytes(6).toString('hex')}`);
-  let fd: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    fd = await fs.open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    await assertProviderParentsUnchanged(parents);
-    await fd.writeFile(value, 'utf8');
-    await fd.sync();
-    const staged = await fd.stat();
-    if (!staged.isFile() || staged.nlink !== 1) throw new Error('unsafe Goose provider cache temporary');
-  } finally { await fd?.close(); }
-  try {
-    await assertProviderParentsUnchanged(parents);
-    const beforeRename = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
-    if (beforeRename && (beforeRename.isSymbolicLink() || !beforeRename.isFile() || beforeRename.nlink !== 1)) throw new Error('unsafe Goose provider cache activation');
-    if (existing && (!beforeRename || beforeRename.dev !== existing.dev || beforeRename.ino !== existing.ino)) throw new Error('Goose provider cache target identity changed');
-    await fs.rename(temp, path);
-  } catch (err) {
-    const staged = await fs.lstat(temp).catch(() => null);
-    if (staged?.isFile() && staged.nlink === 1) await fs.unlink(temp).catch(() => undefined);
-    throw err;
-  }
-  await assertProviderParentsUnchanged(parents);
-  const st = await fs.lstat(path); if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache activation');
-  const opened = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const openedSt = await opened.stat();
-    if (!openedSt.isFile() || openedSt.nlink !== 1 || openedSt.dev !== st.dev || openedSt.ino !== st.ino) throw new Error('Goose provider cache activation identity changed');
-  } finally { await opened.close(); }
+  const parent = parents.at(-1);
+  if (!parent || parent.path !== dirname(path)) throw new Error('Goose provider cache parent identity changed');
+  await writePinnedProviderFile(
+    parent.path,
+    basename(path),
+    value,
+    parent,
+    existing ? { kind: 'present', dev: Number(existing.dev), ino: Number(existing.ino) } : { kind: 'absent' }
+  );
   await assertProviderParentsUnchanged(parents);
 }
 
