@@ -12,8 +12,9 @@
  * - 에러 메시지는 errors.ts 의 redactMessage 로 토큰 누설 방지.
  */
 
-import { constants, promises as fs } from 'node:fs';
-import { dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { constants, promises as realFs } from 'node:fs';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { expandTilde } from './paths.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import { unsupportedEnvSecretSource } from './env-secret-source.js';
@@ -27,9 +28,25 @@ import {
   writeWindowsCredentialSourceSerialized
 } from './windows-credential-source.js';
 import type { DirectorySource, FileSource, KeychainSource, KeychainStored, Source } from './types.js';
+import { removePinnedChild } from './pinned-remove.js';
 
 export { runCommand };
 export type { CmdResult };
+
+type SourceFsOps = typeof realFs;
+let fs: SourceFsOps = realFs;
+
+/** Deterministic provider-file fault/race injection seam. Tests must restore with `null`. */
+export function __setSourceFsOpsForTests(overrides: Partial<SourceFsOps> | null): void {
+  fs = overrides ? Object.assign(Object.create(realFs) as SourceFsOps, overrides) : realFs;
+}
+
+function providerPublicError(err: unknown): Error {
+  const safe = err instanceof Error && /^(?:unsafe Goose provider cache (?:file|parent|temporary|activation)|Goose provider cache (?:identity|parent identity|target identity|activation identity) changed)$/.test(err.message);
+  if (safe) return err as Error;
+  const code = typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? ` (${err.code})` : '';
+  return new Error(`Goose provider cache filesystem operation failed${code}`);
+}
 
 /** macOS 의 `security` CLI 절대경로. PATH shim 공격을 방지. */
 const SECURITY_BIN = '/usr/bin/security';
@@ -318,32 +335,126 @@ function isGooseProviderFile(src: FileSource): boolean {
   return src.path.startsWith('~/.config/goose/providers/');
 }
 
-async function checkedProviderRead(src: FileSource): Promise<string | null> {
+async function checkedProviderReadImpl(src: FileSource): Promise<string | null> {
   const path = expandTilde(src.path);
+  let parents: ParentIdentity[];
+  try { parents = await validateProviderParents(path, false); }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
+  let st: Awaited<ReturnType<typeof fs.lstat>>;
   try {
-    const st = await fs.lstat(path);
-    if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache file');
-    const fd = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try { const opened = await fd.stat(); if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== st.dev || opened.ino !== st.ino) throw new Error('Goose provider cache identity changed'); return await fd.readFile('utf8'); } finally { await fd.close(); }
+    st = await fs.lstat(path);
   } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
+  if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache file');
+  await assertProviderParentsUnchanged(parents);
+  const fd = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = await fd.stat();
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== st.dev || opened.ino !== st.ino) throw new Error('Goose provider cache identity changed');
+    await assertProviderParentsUnchanged(parents);
+    const value = await fd.readFile('utf8');
+    await assertProviderParentsUnchanged(parents);
+    const after = await fs.lstat(path);
+    if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || after.dev !== st.dev || after.ino !== st.ino) throw new Error('Goose provider cache identity changed');
+    return value;
+  } finally { await fd.close(); }
 }
 
-async function checkedProviderWrite(src: FileSource, value: string): Promise<void> {
-  const path = expandTilde(src.path); const parent = dirname(path);
-  const home = process.env.HOME;
-  if (!home || !parent.startsWith(home)) throw new Error('unsafe Goose provider cache parent');
-  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
-  const existing = await checkedProviderRead(src);
-  void existing;
-  await writeFileAtomic(path, value);
+export async function readGooseProviderFileForTests(src: FileSource): Promise<string | null> {
+  try { return await checkedProviderReadImpl(src); } catch (err) { throw providerPublicError(err); }
+}
+
+/** Metadata-only provider-cache inspection for doctor/detector. */
+export async function providerFileExistsChecked(src: FileSource): Promise<boolean> {
+  try {
+  const path = expandTilde(src.path);
+  let parents: ParentIdentity[];
+  try { parents = await validateProviderParents(path, false); }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false; throw err; }
+  let st: Awaited<ReturnType<typeof fs.lstat>>;
+  try { st = await fs.lstat(path); }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false; throw err; }
+  if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache file');
+  await assertProviderParentsUnchanged(parents);
+  const fd = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = await fd.stat();
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== st.dev || opened.ino !== st.ino) throw new Error('Goose provider cache identity changed');
+    await assertProviderParentsUnchanged(parents);
+    const after = await fs.lstat(path);
+    if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || after.dev !== st.dev || after.ino !== st.ino) throw new Error('Goose provider cache identity changed');
+    return true;
+  } finally { await fd.close(); }
+  } catch (err) { throw providerPublicError(err); }
+}
+
+type ParentIdentity = { path: string; dev: number; ino: number };
+async function validateProviderParents(path: string, createMissing: boolean): Promise<ParentIdentity[]> {
+  const home = process.env.HOME; const parent = dirname(path);
+  if (!home || !parent.startsWith(home + sep)) throw new Error('unsafe Goose provider cache parent');
+  const parts = relative(home, parent).split(sep); let current = home; const identities: ParentIdentity[] = [];
+  for (const part of ['.', ...parts]) {
+    if (part !== '.') current = `${current}${sep}${part}`;
+    try {
+      const st = await fs.lstat(current);
+      if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== process.getuid?.() || (Number(st.mode) & 0o022) !== 0) throw new Error('unsafe Goose provider cache parent'); identities.push({ path: current, dev: Number(st.dev), ino: Number(st.ino) });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' || !createMissing || part === '.') throw err;
+      await assertProviderParentsUnchanged(identities);
+      await fs.mkdir(current, { mode: 0o700 });
+      const st = await fs.lstat(current); if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== process.getuid?.() || (Number(st.mode) & 0o022) !== 0) throw new Error('unsafe Goose provider cache parent'); identities.push({ path: current, dev: Number(st.dev), ino: Number(st.ino) });
+    }
+  }
+  return identities;
+}
+async function assertProviderParentsUnchanged(expected: ParentIdentity[]): Promise<void> { for (const item of expected) { const st = await fs.lstat(item.path); if (st.isSymbolicLink() || Number(st.dev) !== item.dev || Number(st.ino) !== item.ino) throw new Error('Goose provider cache parent identity changed'); } }
+
+async function checkedProviderWriteImpl(src: FileSource, value: string): Promise<void> {
+  const path = expandTilde(src.path);
+  const parents = await validateProviderParents(path, true);
+  await assertProviderParentsUnchanged(parents);
+  const existing = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+  if (existing && (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1)) throw new Error('unsafe Goose provider cache file');
+  await assertProviderParentsUnchanged(parents);
+  const temp = join(dirname(path), `.${basename(path)}.mat-write-${randomBytes(6).toString('hex')}`);
+  let fd: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    fd = await fs.open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    await assertProviderParentsUnchanged(parents);
+    await fd.writeFile(value, 'utf8');
+    await fd.sync();
+    const staged = await fd.stat();
+    if (!staged.isFile() || staged.nlink !== 1) throw new Error('unsafe Goose provider cache temporary');
+  } finally { await fd?.close(); }
+  try {
+    await assertProviderParentsUnchanged(parents);
+    const beforeRename = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+    if (beforeRename && (beforeRename.isSymbolicLink() || !beforeRename.isFile() || beforeRename.nlink !== 1)) throw new Error('unsafe Goose provider cache activation');
+    if (existing && (!beforeRename || beforeRename.dev !== existing.dev || beforeRename.ino !== existing.ino)) throw new Error('Goose provider cache target identity changed');
+    await fs.rename(temp, path);
+  } catch (err) {
+    const staged = await fs.lstat(temp).catch(() => null);
+    if (staged?.isFile() && staged.nlink === 1) await fs.unlink(temp).catch(() => undefined);
+    throw err;
+  }
+  await assertProviderParentsUnchanged(parents);
   const st = await fs.lstat(path); if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache activation');
+  const opened = await fs.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const openedSt = await opened.stat();
+    if (!openedSt.isFile() || openedSt.nlink !== 1 || openedSt.dev !== st.dev || openedSt.ino !== st.ino) throw new Error('Goose provider cache activation identity changed');
+  } finally { await opened.close(); }
+  await assertProviderParentsUnchanged(parents);
+}
+
+export async function writeGooseProviderFileForTests(src: FileSource, value: string): Promise<void> {
+  try { await checkedProviderWriteImpl(src, value); } catch (err) { throw providerPublicError(err); }
 }
 
 /** 임의 source 의 현재 라이브 값을 캡처해 문자열로 반환 (저장 가능한 형태). */
 export async function readSource(src: Source): Promise<string | null> {
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? checkedProviderRead(src) : readFileOrNull(src.path);
+      return isGooseProviderFile(src) ? readGooseProviderFileForTests(src) : readFileOrNull(src.path);
     case 'directory':
       return readDirectorySource(src);
     case 'keychain':
@@ -363,7 +474,7 @@ export async function readSource(src: Source): Promise<string | null> {
 export async function writeSource(src: Source, value: string): Promise<void> {
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? checkedProviderWrite(src, value) : writeFileAtomic(expandTilde(src.path), value);
+      return isGooseProviderFile(src) ? writeGooseProviderFileForTests(src, value) : writeFileAtomic(expandTilde(src.path), value);
     case 'directory':
       return writeDirectorySource(src, value);
     case 'keychain':
@@ -383,7 +494,7 @@ export async function writeSource(src: Source, value: string): Promise<void> {
 export async function sourceExists(src: Source): Promise<boolean> {
   switch (src.type) {
     case 'file':
-      return fileExists(src.path);
+      return isGooseProviderFile(src) ? providerFileExistsChecked(src) : fileExists(src.path);
     case 'directory':
       return directorySourceExists(src);
     case 'keychain':
@@ -404,13 +515,42 @@ export async function sourceExists(src: Source): Promise<boolean> {
 export async function removeSource(src: Source): Promise<void> {
   switch (src.type) {
     case 'file': {
+      if (isGooseProviderFile(src)) {
+        try { await removeGooseProviderFile(src); } catch (err) { throw providerPublicError(err); }
+        return;
+      }
       const path = expandTilde(src.path);
+      const parents = null;
+      if (parents) await assertProviderParentsUnchanged(parents);
       const st = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
       if (st == null) return;
       if (st.isSymbolicLink() || !st.isFile() || (isGooseProviderFile(src) && st.nlink !== 1)) throw new Error('unsafe source removal');
-      await fs.unlink(path); return;
+      if (parents) await assertProviderParentsUnchanged(parents);
+      const again = await fs.lstat(path);
+      if (again.isSymbolicLink() || !again.isFile() || again.dev !== st.dev || again.ino !== st.ino || (isGooseProviderFile(src) && again.nlink !== 1)) throw new Error('unsafe source removal');
+      await fs.unlink(path);
+      if (parents) await assertProviderParentsUnchanged(parents);
+      return;
     }
     case 'directory': return removeDirectorySource(src);
     default: throw new Error(`cannot rollback absence for ${src.type} source`);
   }
+}
+
+async function removeGooseProviderFile(src: FileSource): Promise<void> {
+  const path = expandTilde(src.path);
+  let parents: ParentIdentity[];
+  try { parents = await validateProviderParents(path, false); }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; throw err; }
+  await assertProviderParentsUnchanged(parents);
+  const st = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
+  if (st == null) return;
+  if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) throw new Error('unsafe Goose provider cache file');
+  await assertProviderParentsUnchanged(parents);
+  const again = await fs.lstat(path);
+  if (again.isSymbolicLink() || !again.isFile() || again.dev !== st.dev || again.ino !== st.ino || again.nlink !== 1) throw new Error('Goose provider cache target identity changed');
+  const parent = parents.at(-1);
+  if (!parent || parent.path !== dirname(path)) throw new Error('Goose provider cache parent identity changed');
+  await removePinnedChild(dirname(path), basename(path), 'file', parent, { dev: Number(again.dev), ino: Number(again.ino) });
+  await assertProviderParentsUnchanged(parents);
 }

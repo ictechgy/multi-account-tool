@@ -437,6 +437,20 @@ describe('gooseAdapter — keyring wrapper', () => {
   });
 });
 
+describe('gooseAdapter — v1.40 provider cache admission', () => {
+  it.each([
+    'goose-provider-gemini-oauth-tokens.json',
+    'goose-provider-chatgpt-codex-tokens.json',
+    'goose-provider-kimicode-token.json',
+    'goose-provider-githubcopilot.tree.json',
+    'goose-provider-xai-oauth-tokens.json',
+    'goose-provider-databricks-oauth.tree.json'
+  ])('%s remains opaque: equal is fresh and a diff is low-confidence rotated', (saveAs) => {
+    expect(gooseAdapter.compare(saveAs, 'opaque-fixture-a', 'opaque-fixture-a')).toEqual({ kind: 'fresh', confidence: 'high' });
+    expect(gooseAdapter.compare(saveAs, 'opaque-fixture-a', 'opaque-fixture-b')).toMatchObject({ kind: 'rotated', subtype: 'both', confidence: 'low' });
+  });
+});
+
 describe('gooseAdapter — 미지원 saveAs', () => {
   it('미지원 saveAs → low confidence fallback', () => {
     const r = gooseAdapter.compare('unknown.txt', 'x', 'y');

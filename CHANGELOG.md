@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- G002: Goose v1.40.0 (`9081cbd1`)의 고정 provider OAuth cache 네 파일과 bounded directory 두 개를 profile swap/freshness에 추가했다. unknown provider path, environment/project bypass, session/run, Windows 지원은 추가하지 않았다. provider schema는 redacted fixture 검토 전 opaque low-confidence comparator로 보수 처리한다.
+
 ### Changed
 
 - Disabled `mat session run qwen` (G001 Option D). Qwen v0.19.3 can resolve credentials and routing through settings, dotenv, environment, and interactive working-directory sources that the current command preflight cannot completely contain. Profile swap and advisory `session start qwen` support remain available; neither is a command-scoped credential-isolation claim.

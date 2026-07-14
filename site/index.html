@@ -118,8 +118,8 @@
 </tr>
 <tr>
 <td>Goose</td>
-<td>macOS Keychain / Linux Secret Service (service <code>goose</code>, account <code>secrets</code>) + <code>~/.config/goose/secrets.yaml</code> + <code>config.yaml</code></td>
-<td>Multi-source (account-scoped Keychain/os-keyring; Linux swaps via <code>secret-tool</code> — see below)</td>
+<td>Existing Keychain/Secret Service + YAML artifacts, four fixed provider files and two bounded provider cache directories under <code>~/.config/goose/providers/</code></td>
+<td>Profile swap only; fixed v1.40 paths, no discovery or session isolation</td>
 </tr>
 <tr>
 <td>Grok Build</td>
@@ -164,9 +164,9 @@
 </tr>
 <tr>
 <td>Goose</td>
-<td>macOS Keychain + <code>secrets.yaml</code> / <code>config.yaml</code> (provider-routed)</td>
-<td>🟢 Mitigated — identity-aware adapter (provider key matrix + keychain account)</td>
-<td><code>mat freshness goose</code> reports per-source result, identity-aware</td>
+<td>Existing backend/YAML plus six fixed v1.40 provider cache artifacts</td>
+<td>⚠️ Provider cache diffs are opaque low-confidence rotation; known YAML/keyring paths remain identity-aware</td>
+<td><code>mat freshness goose</code> reports every fixed source; opaque diffs require attention</td>
 </tr>
 <tr>
 <td>Grok Build</td>
@@ -264,7 +264,7 @@
 <td>✅</td>
 <td>✅ os-keyring</td>
 <td>❌</td>
-<td>macOS Keychain / Linux Secret Service (<code>goose</code>/<code>secrets</code> via <code>secret-tool</code>) + <code>~/.config/goose/*.yaml</code>. On Linux mat includes the os-keyring source by default and requires <code>secret-tool</code> (libsecret-tools) + a keyring daemon — a missing tool or down daemon <strong>errors out</strong> rather than silently swapping stale YAML (Goose reaches the keyring via the libsecret <em>library</em>, so a missing <code>secret-tool</code> CLI does not prove the keyring is unused). Set <code>GOOSE_DISABLE_KEYRING=1</code> if you use the file backend; mat then omits os-keyring and swaps <code>secrets.yaml</code>. Windows Credential Manager not yet supported</td>
+<td>Existing <code>goose</code>/<code>secrets</code> backend + YAML behavior is unchanged. MAT also swaps exactly four reviewed files and two bounded directories below <code>~/.config/goose/providers/</code>, verified against Goose v1.40.0 source commit <code>9081cbd1</code>; it never scans provider directories or enables session/run. Provider cache schemas are opaque until redacted fixtures admit fields. <code>GOOSE_DISABLE_KEYRING</code> remains presence-only; Windows is unsupported.</td>
 </tr>
 <tr>
 <td>Grok Build</td>

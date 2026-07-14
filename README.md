@@ -40,7 +40,7 @@ By default, `mat` takes the conservative path: it backs up macOS Keychain entrie
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | File swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | File swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS-agnostic, XDG standard) | File swap |
-| Goose | macOS Keychain / Linux Secret Service (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain/os-keyring; Linux swaps via `secret-tool` — see below) |
+| Goose | Existing Keychain/Secret Service + YAML artifacts, four fixed provider files and two bounded provider cache directories under `~/.config/goose/providers/` | Profile swap only; fixed v1.40 paths, no discovery or session isolation |
 | Grok Build | `~/.grok/auth.json` | File swap (profile-swap-only) |
 
 ### OAuth Rotation Safety Matrix
@@ -53,7 +53,7 @@ Some CLIs use **OAuth refresh-token rotation** (RFC 6749 best practice): a refre
 | Gemini CLI | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 High | Same as Codex |
 | OpenCode | OAuth per provider (`provider.refresh`, `provider.accountId`) | 🔴 High | Same as Codex |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 Mitigated — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec`, and `mat freshness claude` (high-confidence rotation classification) |
-| Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider-routed) | 🟢 Mitigated — identity-aware adapter (provider key matrix + keychain account) | `mat freshness goose` reports per-source result, identity-aware |
+| Goose | Existing backend/YAML plus six fixed v1.40 provider cache artifacts | ⚠️ Provider cache diffs are opaque low-confidence rotation; known YAML/keyring paths remain identity-aware | `mat freshness goose` reports every fixed source; opaque diffs require attention |
 | Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ Unknown — fallback byte-diff only, no identity adapter yet | Use only the TUI profile switch (select `grok`, then the profile); review config/env/project overrides before relying on the selected profile |
 | Aider / Kimi / Qwen / Crush | Static API key | 🟢 None | Standard swap suffices — but environment variables or project-local config can bypass `mat` (see "Platform support" below) |
 
@@ -74,7 +74,7 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 | Qwen Code CLI | ✅ | ✅ | ⚠️ untested | Profile swap and `mat session start qwen` redirect `QWEN_HOME`, but are advisory only: Qwen can still use shell/project/ancestor/home configuration sources. `mat session run qwen` is intentionally unsupported until the complete v0.19.3 auth/source contract can be fail-closed. |
 | Crush | ✅ | ✅ | ⚠️ untested | **project-local override**: `./.crush.json` / `./crush.json` in CWD takes precedence over `~/.config/crush/*`; `CRUSH_GLOBAL_*` env vars also override |
 | OpenCode | ✅ | ✅ | ⚠️ untested | OS-agnostic XDG path (`$XDG_DATA_HOME/opencode/auth.json`, default `~/.local/share/opencode/auth.json`). `mat session start` is **EXPERIMENTAL** via broad `XDG_DATA_HOME`; `mat session run opencode` is command-scoped and hard-stops known local env/config bypasses |
-| Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service (`goose`/`secrets` via `secret-tool`) + `~/.config/goose/*.yaml`. On Linux mat includes the os-keyring source by default and requires `secret-tool` (libsecret-tools) + a keyring daemon — a missing tool or down daemon **errors out** rather than silently swapping stale YAML (Goose reaches the keyring via the libsecret *library*, so a missing `secret-tool` CLI does not prove the keyring is unused). Set `GOOSE_DISABLE_KEYRING=1` if you use the file backend; mat then omits os-keyring and swaps `secrets.yaml`. Windows Credential Manager not yet supported |
+| Goose | ✅ | ✅ os-keyring | ❌ | Existing `goose`/`secrets` backend + YAML behavior is unchanged. MAT also swaps exactly four reviewed files and two bounded directories below `~/.config/goose/providers/`, verified against Goose v1.40.0 source commit `9081cbd1`; it never scans provider directories or enables session/run. Provider cache schemas are opaque until redacted fixtures admit fields. `GOOSE_DISABLE_KEYRING` remains presence-only; Windows is unsupported. |
 | Grok Build | ✅ | ✅ | ⚠️ untested | Current support swaps only the primary signed-in browser/OIDC token file `~/.grok/auth.json` as `grok-auth.json`. `mat session start/run grok` is unsupported. `~/.grok/config.toml` model `api_key`/`env_key`, `XAI_API_KEY`, `GROK_*` auth/model env, `GROK_HOME`, project `.grok/config.toml`, and MCP credentials can override or bypass `auth.json`; unset/review those before relying on a selected profile. |
 
 "⚠️ untested" = swap logic is platform-agnostic file I/O, but the project's CI runs macOS + Ubuntu only. Windows paths are inferred from each CLI's documentation, not exercised. Patches and bug reports welcome.

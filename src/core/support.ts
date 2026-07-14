@@ -266,15 +266,15 @@ const REGISTRY: Record<string, SupportMetadata> = {
   },
   goose: {
     ambientRisks: [
-      'GOOSE_DISABLE_KEYRING changes backend selection; GOOSE_PROVIDER/model and provider env vars can bypass profile intent.'
+      'GOOSE_DISABLE_KEYRING changes backend selection; GOOSE_PROVIDER/model, provider API-key env vars, project config, and unknown provider paths can bypass profile intent.'
     ],
     driftContracts: [
       {
         id: 'goose-keyring-backend',
-        summary: 'Goose defaults to Keychain/Secret Service plus YAML config; GOOSE_DISABLE_KEYRING switches to file backend.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs gooseSources()', 'README Goose Linux notes'],
-        risks: ['Missing secret-tool does not prove Goose is not using libsecret; backend assumptions must stay fail-closed.']
+        summary: 'Goose swaps its existing backend/YAML artifacts plus six fixed v1.40 provider cache artifacts; this is not session isolation.',
+        lastVerified: '2026-07-14',
+        evidence: ['aaif-goose/goose v1.40.0 commit 9081cbd1', 'cli-defs gooseSources()', 'README Goose boundary'],
+        risks: ['Unknown provider layouts and token schemas remain opaque; missing secret-tool does not prove Goose is not using libsecret.']
       }
     ]
   },

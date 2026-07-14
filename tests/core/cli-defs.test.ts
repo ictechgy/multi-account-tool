@@ -123,20 +123,20 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     expect(opencode?.session?.roots[0].warning).toContain('XDG_DATA_HOME');
   });
 
-  it('goose source 수는 현재 platform 에 따라 darwin=3(keychain) / linux=3(os-keyring) / 그 외=2(file)', () => {
+  it('goose source 수는 현재 platform 에 따라 keyring 3 + fixed provider 6 / file 2 + provider 6 이다', () => {
     // 본 테스트는 process.platform 그대로 사용. 양쪽 분기 상세는 아래 별도 describe 에서 stub.
     const goose = BUILTIN_CLI_DEFS.find((c) => c.id === 'goose');
     expect(goose).toBeDefined();
     if (process.platform === 'darwin') {
-      expect(goose!.sources).toHaveLength(3);
+      expect(goose!.sources).toHaveLength(9);
       expect(goose!.sources[0].type).toBe('keychain');
     } else if (process.platform === 'linux') {
-      expect(goose!.sources).toHaveLength(3);
+      expect(goose!.sources).toHaveLength(9);
       expect(goose!.sources[0].type).toBe('os-keyring');
-      expect(goose!.sources.slice(1).every((s) => s.type === 'file')).toBe(true);
+      expect(goose!.sources.slice(1, 3).every((s) => s.type === 'file')).toBe(true);
     } else {
-      expect(goose!.sources).toHaveLength(2);
-      expect(goose!.sources.every((s) => s.type === 'file')).toBe(true);
+      expect(goose!.sources).toHaveLength(8);
+      expect(goose!.sources.slice(0, 2).every((s) => s.type === 'file')).toBe(true);
     }
   });
 
@@ -300,6 +300,14 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
     { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
   ];
+  const PROVIDER_SOURCES = [
+    { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' },
+    { type: 'file', path: '~/.config/goose/providers/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' },
+    { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' },
+    { type: 'directory', path: '~/.config/goose/providers/githubcopilot', saveAs: 'goose-provider-githubcopilot.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
+    { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' },
+    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 }
+  ];
 
   it('platform=darwin (기본 keyring) → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {
     stubPlatform('darwin');
@@ -308,7 +316,7 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     const goose = defs.find((c) => c.id === 'goose');
     expect(goose!.sources).toEqual([
       { type: 'keychain', service: 'goose', account: 'secrets', allowAnyApp: true, saveAs: 'goose-keyring.json' },
-      ...YAML_SOURCES
+      ...YAML_SOURCES, ...PROVIDER_SOURCES
     ]);
   });
 
@@ -326,7 +334,7 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
         backend: 'secret-service',
         saveAs: 'goose-keyring.json'
       },
-      ...YAML_SOURCES
+      ...YAML_SOURCES, ...PROVIDER_SOURCES
     ]);
   });
 
@@ -346,7 +354,7 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
       vi.resetModules();
       const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
       const goose = defs.find((c) => c.id === 'goose');
-      expect(goose!.sources).toEqual(YAML_SOURCES);
+      expect(goose!.sources).toEqual([...YAML_SOURCES, ...PROVIDER_SOURCES]);
     }
   );
 
@@ -357,7 +365,7 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
       vi.resetModules();
       const { BUILTIN_CLI_DEFS: defs } = await import('../../src/core/cli-defs.js');
       const goose = defs.find((c) => c.id === 'goose');
-      expect(goose!.sources).toEqual(YAML_SOURCES);
+      expect(goose!.sources).toEqual([...YAML_SOURCES, ...PROVIDER_SOURCES]);
     }
   );
 });

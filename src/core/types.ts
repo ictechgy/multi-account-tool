@@ -312,6 +312,7 @@ export type ProfileIdentityWarningCode =
   | 'carried-forward'
   | 'parse-error'
   | 'no-identity'
+  | 'identity-unavailable'
   | 'unsupported'
   | 'lock-free-recapture';
 

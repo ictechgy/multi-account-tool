@@ -118,8 +118,8 @@
 </tr>
 <tr>
 <td>Goose</td>
-<td>macOS Keychain / Linux Secret Service (service <code>goose</code>, account <code>secrets</code>) + <code>~/.config/goose/secrets.yaml</code> + <code>config.yaml</code></td>
-<td>Multi-source (account-scoped Keychain/os-keyring; Linux는 <code>secret-tool</code>로 swap — 아래 참고)</td>
+<td>기존 Keychain/Secret Service + YAML과 <code>~/.config/goose/providers/</code>의 고정 파일 4개/제한 디렉터리 2개</td>
+<td>프로필 swap 전용; v1.40 고정 경로만, discovery/session 격리 없음</td>
 </tr>
 <tr>
 <td>Grok Build</td>
@@ -164,9 +164,9 @@
 </tr>
 <tr>
 <td>Goose</td>
-<td>macOS Keychain + <code>secrets.yaml</code> / <code>config.yaml</code> (provider 라우팅)</td>
-<td>🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account)</td>
-<td><code>mat freshness goose</code>가 source별 결과 보고, identity-aware</td>
+<td>기존 backend/YAML + v1.40 고정 provider cache 6개</td>
+<td>⚠️ provider cache diff는 opaque low-confidence rotation; 기존 YAML/keyring은 identity-aware 유지</td>
+<td><code>mat freshness goose</code>가 고정 source별 결과 보고</td>
 </tr>
 <tr>
 <td>Grok Build</td>
@@ -264,7 +264,7 @@
 <td>✅</td>
 <td>✅ os-keyring</td>
 <td>❌</td>
-<td>macOS Keychain / Linux Secret Service(<code>goose</code>/<code>secrets</code>, <code>secret-tool</code> 경유) + <code>~/.config/goose/*.yaml</code>. Linux는 기본적으로 os-keyring을 포함하며 <code>secret-tool</code>(libsecret-tools) + keyring daemon이 필요 — 미설치/daemon-down 시 stale YAML로 조용히 swap하지 않고 <strong>명시 에러</strong>를 낸다. Goose는 libsecret <em>라이브러리</em>로 keyring에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않는다. file backend라면 <code>GOOSE_DISABLE_KEYRING=1</code> 설정 시 <code>mat</code>이 os-keyring을 생략하고 <code>secrets.yaml</code>을 swap한다. Windows Credential Manager 미지원</td>
+<td>기존 <code>goose</code>/<code>secrets</code> backend + YAML 동작은 유지한다. MAT는 Goose v1.40.0 source commit <code>9081cbd1</code>로 확인한 <code>providers/</code> 하위 파일 4개와 제한된 디렉터리 2개만 swap하며 discovery/session/run을 열지 않는다. schema는 redacted fixture 승인 전 opaque다. <code>GOOSE_DISABLE_KEYRING</code>은 기존처럼 값과 무관한 presence-only이고 Windows는 미지원이다.</td>
 </tr>
 <tr>
 <td>Grok Build</td>

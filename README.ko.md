@@ -40,7 +40,7 @@
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | 파일 swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | 파일 swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) | 파일 swap |
-| Goose | macOS Keychain / Linux Secret Service (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain/os-keyring; Linux는 `secret-tool`로 swap — 아래 참고) |
+| Goose | 기존 Keychain/Secret Service + YAML과 `~/.config/goose/providers/`의 고정 파일 4개/제한 디렉터리 2개 | 프로필 swap 전용; v1.40 고정 경로만, discovery/session 격리 없음 |
 | Grok Build | `~/.grok/auth.json` | 파일 swap (profile-swap-only) |
 
 ### OAuth Rotation 안전성 매트릭스
@@ -53,7 +53,7 @@
 | Gemini CLI | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 높음 | Codex와 동일 |
 | OpenCode | provider별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex와 동일 |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (high-confidence rotation 분류) |
-| Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider 라우팅) | 🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account) | `mat freshness goose`가 source별 결과 보고, identity-aware |
+| Goose | 기존 backend/YAML + v1.40 고정 provider cache 6개 | ⚠️ provider cache diff는 opaque low-confidence rotation; 기존 YAML/keyring은 identity-aware 유지 | `mat freshness goose`가 고정 source별 결과 보고 |
 | Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용 | TUI 프로필 전환만 사용(`grok` 선택 후 대상 프로필 선택); 선택한 프로필을 신뢰하기 전 config/env/project override를 검토 |
 | Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap으로 충분 — 단 환경변수 / project-local 설정이 `mat`의 swap을 우회할 수 있음 (아래 "플랫폼 지원" 참고) |
 
@@ -74,7 +74,7 @@
 | Qwen Code CLI | ✅ | ✅ | ⚠️ 미검증 | profile swap과 `mat session start qwen`은 `QWEN_HOME`을 재지정하지만 advisory 범위다. Qwen은 shell/project/ancestor/home 설정 source를 계속 사용할 수 있다. 완전한 v0.19.3 auth/source 계약을 fail-closed할 수 있을 때까지 `mat session run qwen`은 의도적으로 미지원이다. |
 | Crush | ✅ | ✅ | ⚠️ 미검증 | **project-local override**: CWD의 `./.crush.json` / `./crush.json`이 `~/.config/crush/*`보다 우선; `CRUSH_GLOBAL_*` env도 우선 |
 | OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로(`$XDG_DATA_HOME/opencode/auth.json`, 기본 `~/.local/share/opencode/auth.json`). `mat session start`는 broad `XDG_DATA_HOME` 기반 **EXPERIMENTAL**; `mat session run opencode`는 command-scoped로 알려진 local env/config 우회를 hard-stop |
-| Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service(`goose`/`secrets`, `secret-tool` 경유) + `~/.config/goose/*.yaml`. Linux는 기본적으로 os-keyring을 포함하며 `secret-tool`(libsecret-tools) + keyring daemon이 필요 — 미설치/daemon-down 시 stale YAML로 조용히 swap하지 않고 **명시 에러**를 낸다. Goose는 libsecret *라이브러리*로 keyring에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않는다. file backend라면 `GOOSE_DISABLE_KEYRING=1` 설정 시 `mat`이 os-keyring을 생략하고 `secrets.yaml`을 swap한다. Windows Credential Manager 미지원 |
+| Goose | ✅ | ✅ os-keyring | ❌ | 기존 `goose`/`secrets` backend + YAML 동작은 유지한다. MAT는 Goose v1.40.0 source commit `9081cbd1`로 확인한 `providers/` 하위 파일 4개와 제한된 디렉터리 2개만 swap하며 discovery/session/run을 열지 않는다. schema는 redacted fixture 승인 전 opaque다. `GOOSE_DISABLE_KEYRING`은 기존처럼 값과 무관한 presence-only이고 Windows는 미지원이다. |
 | Grok Build | ✅ | ✅ | ⚠️ 미검증 | 현재 지원은 기본 signed-in browser/OIDC 토큰 파일 `~/.grok/auth.json`만 `grok-auth.json`으로 swap한다. `mat session start/run grok`은 미지원이다. `~/.grok/config.toml`의 model `api_key`/`env_key`, `XAI_API_KEY`, `GROK_*` auth/model env, `GROK_HOME`, project `.grok/config.toml`, MCP credentials는 `auth.json`을 override/우회할 수 있으므로 선택한 프로필을 신뢰하기 전에 unset/검토해야 한다. |
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O라 동작 가능성이 있지만, 본 프로젝트 CI는 macOS + Ubuntu만 검증한다. Windows 경로는 각 CLI의 공식 문서 기반 추정이며 실제 실행은 검증하지 않았다. patch / 버그 리포트 환영.

@@ -17,7 +17,7 @@ import { errorMessage, redactMessage } from './errors.js';
 import { expandTilde, dataDir } from './paths.js';
 import { normalizeIsoString, normalizeProfileIdentity, formatProfileIdentity } from './profile-identity.js';
 import { listProfiles, profileExists, readMeta } from './profile-store.js';
-import { sourceExists } from './sources.js';
+import { providerFileExistsChecked, sourceExists } from './sources.js';
 import { doctorSessionSupportForCli } from './support.js';
 import {
   isWindowsCredentialRuntimeUnsupported,
@@ -127,6 +127,10 @@ async function existsNoFollow(path: string): Promise<{ exists: boolean; kind?: s
 
 async function inspectFileSource(src: Extract<Source, { type: 'file' }>): Promise<DoctorSourceStatus> {
   try {
+    if (src.path.startsWith('~/.config/goose/providers/')) {
+      const exists = await providerFileExistsChecked(src);
+      return { saveAs: redactMessage(src.saveAs), type: src.type, status: exists ? 'present' : 'missing', detail: exists ? 'checked fixed provider cache file' : undefined };
+    }
     const found = await existsNoFollow(expandTilde(src.path));
     return {
       saveAs: redactMessage(src.saveAs),

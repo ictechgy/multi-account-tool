@@ -60,6 +60,8 @@ const PROVIDER_VALUES = new Set([
   'replicate',
   'huggingface',
   'databricks',
+  'githubcopilot',
+  'xai',
   'qwen',
   'kimi'
 ]);
@@ -295,6 +297,13 @@ function gooseSignals(sources: IdentitySourceInput[], warnings: ProfileIdentityW
 }
 
 function gooseSourceSignals(saveAs: string, raw: string, warnings: ProfileIdentityWarning[]): ProfileIdentitySignal[] {
+  const cacheProvider = gooseProviderForSource(saveAs);
+  if (cacheProvider) {
+    // The v1.40 path admission is intentionally not a token-schema admission.
+    // Record only the fixed provider label; no cache bytes are parsed here.
+    warnings.push(warning('identity-unavailable', saveAs));
+    return [signal('provider', saveAs, 'low', { value: cacheProvider })];
+  }
   const parsed = parseGooseYaml(raw);
   if (!parsed) {
     warnings.push(warning('parse-error', saveAs));
@@ -305,6 +314,18 @@ function gooseSourceSignals(saveAs: string, raw: string, warnings: ProfileIdenti
   const provider = parsed.GOOSE_PROVIDER__TYPE ?? parsed.GOOSE_PROVIDER;
   if (typeof provider === 'string') out.push(signal('routing', saveAs, 'medium', safeProviderValue(provider)));
   return out;
+}
+
+function gooseProviderForSource(saveAs: string): string | undefined {
+  const names: Record<string, string> = {
+    'goose-provider-gemini-oauth-tokens.json': 'gemini',
+    'goose-provider-chatgpt-codex-tokens.json': 'openai',
+    'goose-provider-kimicode-token.json': 'kimi',
+    'goose-provider-githubcopilot.tree.json': 'githubcopilot',
+    'goose-provider-xai-oauth-tokens.json': 'xai',
+    'goose-provider-databricks-oauth.tree.json': 'databricks'
+  };
+  return names[saveAs];
 }
 
 function parseGooseYaml(raw: string): Record<string, string> | null {
@@ -401,6 +422,7 @@ function isWarningCode(value: unknown): value is ProfileIdentityWarningCode {
     value === 'carried-forward' ||
     value === 'parse-error' ||
     value === 'no-identity' ||
+    value === 'identity-unavailable' ||
     value === 'unsupported' ||
     value === 'lock-free-recapture'
   );
