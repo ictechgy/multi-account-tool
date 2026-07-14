@@ -38,6 +38,21 @@ describe('support registry — support/explain reports', () => {
     expect(report.sources).not.toEqual(expect.arrayContaining([expect.objectContaining({ path: expect.any(String) })]));
   });
 
+  it('reports Qwen session start as advisory-only and session run as unsupported', () => {
+    const report = buildCliSupportReport('qwen');
+    const serialized = JSON.stringify(report);
+
+    expect(report.capabilities.sessionStart.status).toBe('partial');
+    expect(report.capabilities.sessionStart.summary).toMatch(/advisory/i);
+    expect(report.capabilities.sessionStart.caveats.join(' ')).toMatch(/ambient detection.*switch.*exec.*doctor/i);
+    expect(report.capabilities.sessionRun.status).toBe('unsupported');
+    expect(serialized).toMatch(/v0\.19\.3/);
+    expect(report.nextSteps).toEqual(expect.arrayContaining([
+      expect.stringMatching(/mat exec qwen <profile>/)
+    ]));
+    expect(report.nextSteps.join(' ')).not.toMatch(/session start qwen.*concurrent isolated sessions/i);
+  });
+
   it('explains Aider as session-start unsupported and session-run partial', () => {
     const report = buildCliSupportReport('aider');
 

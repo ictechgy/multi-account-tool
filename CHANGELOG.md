@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Disabled `mat session run qwen` (G001 Option D). Qwen v0.19.3 can resolve credentials and routing through settings, dotenv, environment, and interactive working-directory sources that the current command preflight cannot completely contain. Profile swap and advisory `session start qwen` support remain available; neither is a command-scoped credential-isolation claim.
+
 ## [0.7.1] - 2026-06-22
 
 Docs-only patch release for README and generated site copy polish.

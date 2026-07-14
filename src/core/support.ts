@@ -189,19 +189,34 @@ const REGISTRY: Record<string, SupportMetadata> = {
       freshness: {
         status: 'partial',
         summary: 'Fallback byte-diff only; no adapter-backed identity/rotation contract.'
+      },
+      sessionStart: {
+        status: 'partial',
+        summary: 'QWEN_HOME redirection provides an advisory session-start profile copy, not credential isolation.',
+        reasons: ['Qwen can resolve auth/config from shell, project/ancestor/home dotenv, settings, and interactive working-directory sources outside the redirected root.'],
+        caveats: ['Ambient detection runs for app-based switching, mat exec, and mat doctor; session start does not run that detector.']
+      },
+      sessionRun: {
+        status: 'unsupported',
+        summary: 'Command-scoped Qwen run is disabled until the complete pinned v0.19.3 auth/source contract can be fail-closed.'
       }
     },
     ambientRisks: [
-      'DASHSCOPE_API_KEY, QWEN_API_KEY, OPENAI_API_KEY, ~/.qwen/.env, and project .env can override swapped settings.'
+      'DASHSCOPE_API_KEY, QWEN_API_KEY, OPENAI_API_KEY, settings, and project/ancestor/home dotenv sources can override swapped settings.'
     ],
     driftContracts: [
       {
         id: 'qwen-home-precedence',
-        summary: 'QWEN_HOME relocates ~/.qwen, but shell env and dotenv precedence can bypass swapped files.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs Qwen comments', 'README Platform support'],
-        risks: ['Provider precedence changes can create new ambient bypasses.']
+        summary: 'QWEN_HOME relocates ~/.qwen, but shell, dotenv, settings, and working-directory routes can bypass swapped files.',
+        lastVerified: '2026-07-14',
+        evidence: ['G001 pinned Qwen v0.19.3 admission gate', 'README Platform support'],
+        risks: ['Command run stays disabled until every auth/config source can be frozen and rechecked fail-closed.']
       }
+    ],
+    nextSteps: [
+      'Use profile swap or `mat exec qwen <profile> -- qwen ...` for controlled profile selection; neither is a command-scoped credential-isolation boundary.',
+      'Run `mat doctor qwen --json` to review metadata-only ambient warnings before relying on a selected profile.',
+      'Do not use `mat session run qwen`; it is intentionally unsupported pending a reviewed all-auth-source admission.'
     ]
   },
   crush: {
