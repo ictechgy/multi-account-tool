@@ -40,7 +40,7 @@
 | Qwen Code CLI | `~/.qwen/settings.json`, `~/.qwen/.env` | 파일 swap |
 | Crush | `~/.config/crush/crush.json`, `~/.local/share/crush/crush.json` | 파일 swap |
 | OpenCode | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) | 파일 swap |
-| Goose | macOS Keychain / Linux Secret Service (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` | Multi-source (account-scoped Keychain/os-keyring; Linux는 `secret-tool`로 swap — 아래 참고) |
+| Goose | 기존 Keychain/Secret Service + YAML과 `~/.config/goose/providers/`의 고정 파일 4개/제한 디렉터리 2개 | 프로필 swap 전용; v1.40 고정 경로만, discovery/session 격리 없음 |
 | Grok Build | `~/.grok/auth.json` | 파일 swap (profile-swap-only) |
 
 ### OAuth Rotation 안전성 매트릭스
@@ -53,7 +53,7 @@
 | Gemini CLI | OAuth (`refresh_token` + `google_accounts.json.active`) | 🔴 높음 | Codex와 동일 |
 | OpenCode | provider별 OAuth (`provider.refresh`, `provider.accountId`) | 🔴 높음 | Codex와 동일 |
 | Claude Code | macOS Keychain (Anthropic OAuth) | 🟢 완화됨 — identity-aware adapter (`subscriptionType` + macOS keychain account) | `mat exec` 또는 `mat freshness claude` (high-confidence rotation 분류) |
-| Goose | macOS Keychain + `secrets.yaml` / `config.yaml` (provider 라우팅) | 🟢 완화됨 — identity-aware adapter (provider key 매트릭스 + keychain account) | `mat freshness goose`가 source별 결과 보고, identity-aware |
+| Goose | 기존 backend/YAML + v1.40 고정 provider cache 6개 | ⚠️ provider cache diff는 opaque low-confidence rotation; 기존 YAML/keyring은 identity-aware 유지 | `mat freshness goose`가 고정 source별 결과 보고 |
 | Grok Build | Browser/OIDC `~/.grok/auth.json` | ⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용 | TUI 프로필 전환만 사용(`grok` 선택 후 대상 프로필 선택); 선택한 프로필을 신뢰하기 전 config/env/project override를 검토 |
 | Aider / Kimi / Qwen / Crush | 정적 API key | 🟢 없음 | 일반 swap으로 충분 — 단 환경변수 / project-local 설정이 `mat`의 swap을 우회할 수 있음 (아래 "플랫폼 지원" 참고) |
 
@@ -74,7 +74,7 @@
 | Qwen Code CLI | ✅ | ✅ | ⚠️ 미검증 | profile swap과 `mat session start qwen`은 `QWEN_HOME`을 재지정하지만 advisory 범위다. Qwen은 shell/project/ancestor/home 설정 source를 계속 사용할 수 있다. 완전한 v0.19.3 auth/source 계약을 fail-closed할 수 있을 때까지 `mat session run qwen`은 의도적으로 미지원이다. |
 | Crush | ✅ | ✅ | ⚠️ 미검증 | **project-local override**: CWD의 `./.crush.json` / `./crush.json`이 `~/.config/crush/*`보다 우선; `CRUSH_GLOBAL_*` env도 우선 |
 | OpenCode | ✅ | ✅ | ⚠️ 미검증 | OS 공통 XDG 경로(`$XDG_DATA_HOME/opencode/auth.json`, 기본 `~/.local/share/opencode/auth.json`). `mat session start`는 broad `XDG_DATA_HOME` 기반 **EXPERIMENTAL**; `mat session run opencode`는 command-scoped로 알려진 local env/config 우회를 hard-stop |
-| Goose | ✅ | ✅ os-keyring | ❌ | macOS Keychain / Linux Secret Service(`goose`/`secrets`, `secret-tool` 경유) + `~/.config/goose/*.yaml`. Linux는 기본적으로 os-keyring을 포함하며 `secret-tool`(libsecret-tools) + keyring daemon이 필요 — 미설치/daemon-down 시 stale YAML로 조용히 swap하지 않고 **명시 에러**를 낸다. Goose는 libsecret *라이브러리*로 keyring에 접근하므로 secret-tool CLI 부재가 keyring 미사용을 뜻하지 않는다. file backend라면 `GOOSE_DISABLE_KEYRING=1` 설정 시 `mat`이 os-keyring을 생략하고 `secrets.yaml`을 swap한다. Windows Credential Manager 미지원 |
+| Goose | ✅ | ✅ os-keyring | ❌ | 기존 `goose`/`secrets` backend + YAML 동작은 유지한다. Linux 기본 keyring 경로에는 `secret-tool`(libsecret-tools)과 실행 중인 keyring daemon이 필요하다. 도구 부재/접근 거부는 stale YAML fallback이 아니라 **명시 에러**다. CLI 부재만으로 Goose의 libsecret keyring 미사용이 증명되지 않기 때문이다. Goose가 file backend를 쓰도록 의도적으로 설정한 경우에만 `GOOSE_DISABLE_KEYRING=1`을 사용한다(값 무관 presence-only). MAT는 Goose v1.40.0 source commit `9081cbd1`로 확인한 `providers/` 하위 파일 4개와 제한된 디렉터리 2개만 추가 swap하며 discovery/session/run을 열지 않는다. schema는 redacted fixture 승인 전 opaque이고 Windows는 미지원이다. |
 | Grok Build | ✅ | ✅ | ⚠️ 미검증 | 현재 지원은 기본 signed-in browser/OIDC 토큰 파일 `~/.grok/auth.json`만 `grok-auth.json`으로 swap한다. `mat session start/run grok`은 미지원이다. `~/.grok/config.toml`의 model `api_key`/`env_key`, `XAI_API_KEY`, `GROK_*` auth/model env, `GROK_HOME`, project `.grok/config.toml`, MCP credentials는 `auth.json`을 override/우회할 수 있으므로 선택한 프로필을 신뢰하기 전에 unset/검토해야 한다. |
 
 "⚠️ 미검증" = swap 로직은 platform-agnostic file I/O라 동작 가능성이 있지만, 본 프로젝트 CI는 macOS + Ubuntu만 검증한다. Windows 경로는 각 CLI의 공식 문서 기반 추정이며 실제 실행은 검증하지 않았다. patch / 버그 리포트 환영.
@@ -559,9 +559,9 @@ v0.4+ 계획은 [ROADMAP.md](./ROADMAP.md) 참고:
 - ~~세션별 자격증명 격리~~ ✅ (v0.4.x — `mat session start/list/stop`: env 주입 + copy-isolate, 동시 다계정; `@ictechgy/lterm` v1.0.25+에서 `lterm` profile shim 통합 완료)
 - ~~`mat session run <cli> <profile> -- [cli-args...]` framework~~ ✅ — command-scoped safer-run 기반. ~~OpenCode hard-stop probe~~ ✅; ~~Aider forced config/env-file partial-run~~ ✅. ~~Antigravity auth-store research artifact~~ ✅, 하지만 제품 지원은 upstream이 안정 auth-store, redirect, recapture 계약을 문서화할 때까지 blocked로 유지한다. [Antigravity research note](./docs/superpowers/specs/2026-06-14-antigravity-auth-store-research.md)와 [session-run R&D note](./docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md) 참고.
 - 빌트인 CLI 추가 확장 — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service는 `os-keyring` source type으로 추가됨). Copilot / Amp는 보류 — [Copilot/Amp research note](./docs/superpowers/specs/2026-06-14-copilot-amp-auth-research.md) 참고. Copilot은 명시적 account binding, application-state swap, ambient token fallback 정책, Windows Credential Manager 지원이 필요하다. Amp는 일반 file/keychain profile swap이 아니라 env-secret / command-scoped 실행 설계가 필요하다. Cursor Agent는 plugin 권장(keychain service name 공식 미공개).
-- **Goose Linux**: Linux에서 `mat`은 Goose의 기본 `secret-service` 백엔드(libsecret, GNOME Keyring/KWallet)를 `os-keyring` source(`secret-tool` CLI, `goose`/`secrets`)로 swap하고 `~/.config/goose/*.yaml`도 함께 swap한다. 설정별 동작:
+- **Goose Linux**: Linux에서 `mat`은 Goose의 기본 `secret-service` 백엔드(libsecret, GNOME Keyring/KWallet)를 `os-keyring` source(`secret-tool` CLI, `goose`/`secrets`)로 swap하고, `~/.config/goose/*.yaml` 및 위에서 설명한 고정 v1.40 provider-cache 파일/디렉터리도 함께 swap한다. keyring 설정별 동작:
   - **기본(keyring)**: os-keyring source가 포함되며 `secret-tool`(libsecret-tools) + keyring daemon이 필요하다. 미설치이거나 daemon이 down/접근거부면 **명시 에러** — yaml로 조용히 fallback 하지 *않는다*. Goose는 keyring에 libsecret *라이브러리*(`secret-tool` CLI와 별도 패키지)로 접근하므로, CLI 부재가 keyring 미사용을 증명하지 못한다. 활성 keyring 사용자에게 `secrets.yaml`을 조용히 swap하면 wrong-account가 된다. (도구 부재가 아니라) keyring 항목 자체의 부재는 정상 "not found"로 yaml로 넘어간다.
-  - **file backend**: `GOOSE_DISABLE_KEYRING` 설정. `mat`은 이 env가 **존재하면**(값 무관 — `0`/`false`/빈 문자열 포함) file backend로 본다 — Goose 자신의 `env::var(...).is_ok()` 판정과 동일. 그러면 keyring source(Linux=os-keyring, macOS=Keychain)를 **생략**하고 `secrets.yaml` + `config.yaml`만 swap한다. `config.yaml`만의 `keyring: false` 설정은 자동 감지하지 않으니 env도 함께 지정하라.
+  - **file backend**: Goose가 keyring을 쓰지 않도록 의도적으로 설정한 경우 `GOOSE_DISABLE_KEYRING=1`을 사용한다. `mat`은 이 env가 **존재하면**(값 무관 — `0`/`false`/빈 문자열 포함) file backend로 본다 — Goose 자신의 `env::var(...).is_ok()` 판정과 동일. 그러면 keyring source(Linux=os-keyring, macOS=Keychain)를 **생략**하지만 `secrets.yaml`, `config.yaml`, 고정 provider-cache source는 계속 swap한다. `config.yaml`만의 `keyring: false` 설정은 자동 감지하지 않으니 env도 함께 지정하라.
 - ~~`lterm claude --profile <name>` 같은 shim wrapper~~ ✅ (`ictechgy/light_terminal` PR #144에서 구현)
 
 ---

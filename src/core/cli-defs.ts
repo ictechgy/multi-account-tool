@@ -18,6 +18,7 @@ import { join } from 'node:path';
 
 import { loadUserCliDefs } from './cli-defs-plugin.js';
 import type { CliDef, Source } from './types.js';
+import { assertValidSourceList } from './validators.js';
 
 /**
  * Claude Code 의 자격증명 source.
@@ -110,12 +111,23 @@ function gooseSources(): Source[] {
     { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
     { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
   ];
+  // Upstream admission: aaif-goose/goose v1.40.0, commit
+  // 9081cbd1d7c1856199383abb667ac7276d1794d5.  Fixed paths only; no provider
+  // discovery and no session capability are introduced here.
+  const providerSources: Source[] = [
+    { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' },
+    { type: 'file', path: '~/.config/goose/providers/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' },
+    { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' },
+    { type: 'directory', path: '~/.config/goose/providers/githubcopilot', saveAs: 'goose-provider-githubcopilot.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
+    { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' },
+    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 }
+  ];
   // file backend(GOOSE_DISABLE_KEYRING 존재) 면 macOS 도 keychain 을 생략한다 — Goose 가
   // file backend 일 때 stale keychain 항목을 swap 하는 wrong-account 위험 차단 (Linux 와 대칭).
   if (process.platform === 'darwin' && !gooseUsesFileBackend()) {
     return [
       { type: 'keychain', service: 'goose', account: 'secrets', allowAnyApp: true, saveAs: 'goose-keyring.json' },
-      ...yamlSources
+      ...yamlSources, ...providerSources
     ];
   }
   // Linux 는 Goose 의 기본 secret-service 백엔드를 os-keyring source 로 swap (PR-4).
@@ -130,10 +142,10 @@ function gooseSources(): Source[] {
         backend: 'secret-service',
         saveAs: 'goose-keyring.json'
       },
-      ...yamlSources
+      ...yamlSources, ...providerSources
     ];
   }
-  return yamlSources;
+  return [...yamlSources, ...providerSources];
 }
 
 /**
@@ -369,6 +381,8 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     ]
   }
 ];
+
+for (const def of BUILTIN_CLI_DEFS) assertValidSourceList(def.sources);
 
 let cachedAllDefs: CliDef[] | null = null;
 let cachedWarnings: string[] = [];

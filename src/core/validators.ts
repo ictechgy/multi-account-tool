@@ -183,3 +183,18 @@ export function validateShareRel(rawRel: string): string {
   }
   return normalized;
 }
+import type { Source } from './types.js';
+
+/** Profile artifact names are a namespace, not user-controlled live paths. */
+export function assertValidSourceList(sources: Source[]): void {
+  const seen = new Set<string>();
+  for (const source of sources) {
+    const saveAs = validateProfileFileName(source.saveAs);
+    const canonical = saveAs.normalize('NFC').toLocaleLowerCase('en-US');
+    if (saveAs === 'meta.json' || saveAs === 'identity.json' || /\.recap-[0-9a-f]+$/i.test(saveAs)) {
+      throw new Error(`reserved profile artifact name: ${saveAs}`);
+    }
+    if (seen.has(canonical)) throw new Error(`duplicate profile artifact name: ${saveAs}`);
+    seen.add(canonical);
+  }
+}

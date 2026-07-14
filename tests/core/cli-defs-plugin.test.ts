@@ -58,6 +58,24 @@ async function writePluginRaw(name: string, raw: string): Promise<void> {
 }
 
 describe('validateCliDefRaw (순수 validator)', () => {
+  it('recursive directory source 는 builtin 전용이라 plugin 에서 거부한다', () => {
+    const result = validateCliDefRaw({
+      id: 'unsafe-tree', name: 'Unsafe Tree',
+      sources: [{ type: 'directory', path: '~/.config/x', saveAs: 'x.tree.json', maxEntries: 1, maxBytes: 1, maxDepth: 1 }]
+    });
+    expect(result.error).toContain('builtin');
+  });
+
+  it('duplicate saveAs 는 plugin load 전에 거부한다', () => {
+    const result = validateCliDefRaw({
+      id: 'duplicate-save-as', name: 'Duplicate',
+      sources: [
+        { type: 'file', path: '~/.a', saveAs: 'same.json' },
+        { type: 'file', path: '~/.b', saveAs: 'same.json' }
+      ]
+    });
+    expect(result.error).toContain('duplicate profile artifact');
+  });
   it('정상 입력 → def 반환, error 없음', () => {
     // 비-builtin id 로 plugin 예시 검증 (aider 는 v0.3 부터 builtin).
     const r = validateCliDefRaw({

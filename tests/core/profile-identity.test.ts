@@ -159,4 +159,24 @@ describe('profile identity metadata', () => {
     expect(identityCapabilitiesForCli('codex').status).toBe('available');
     expect(identityCapabilitiesForCli('plugin').status).toBe('unsupported');
   });
+
+  it('keeps Goose provider-cache identity opaque and never surfaces dynamic descendant names or token bytes', () => {
+    const secret = 'goose-provider-secret-abcdefghijklmnopqrstuvwxyz0123456789';
+    const dynamicName = 'customer@example.test/private-token.json';
+    const identity = buildProfileIdentity({
+      cliId: 'goose',
+      capturedAt: new Date('2026-07-14T00:00:00Z'),
+      sources: [{
+        saveAs: 'goose-provider-githubcopilot.tree.json',
+        state: 'captured',
+        value: JSON.stringify({ version: 1, entries: [{ kind: 'file', path: dynamicName, contentBase64: Buffer.from(secret).toString('base64') }] })
+      }]
+    });
+    const text = serialized(identity);
+    expect(identity.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'identity-unavailable', source: 'goose-provider-githubcopilot.tree.json' })]));
+    expect(identity.signals).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'provider', value: 'githubcopilot', confidence: 'low' })]));
+    expect(text).not.toContain(dynamicName);
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain('customer@example.test');
+  });
 });

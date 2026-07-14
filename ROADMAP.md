@@ -65,7 +65,7 @@
 | `qwen` | `~/.qwen/settings.json` + `~/.qwen/.env` |
 | `crush` | `~/.config/crush/crush.json` + `~/.local/share/crush/crush.json` |
 | `opencode` | `~/.local/share/opencode/auth.json` (OS 공통, XDG 표준) |
-| `goose` | **macOS**: Keychain (service `goose`, account `secrets`) + `~/.config/goose/secrets.yaml` + `config.yaml` / **그 외**: yaml 2개 |
+| `goose` | 기존 backend/YAML + v1.40 고정 provider cache 파일 4개 및 bounded directory 2개; session/run/Windows 미지원 |
 
 ### 확장 대상 universe
 
