@@ -169,13 +169,19 @@
 <td><code>mat freshness goose</code> reports every fixed source; opaque diffs require attention</td>
 </tr>
 <tr>
+<td>Crush</td>
+<td>Hyper/Copilot OAuth (<code>providers.*.oauth</code>) plus mirrored/static API keys</td>
+<td>⚠️ No stored account identity — adapter-backed conservative low-confidence byte-diff only (not confirmed rotation)</td>
+<td><code>mat freshness crush</code> before swap; project/<code>CRUSH_*</code>/XDG/provider-env overrides can bypass swapped globals (see Platform support)</td>
+</tr>
+<tr>
 <td>Grok Build</td>
 <td>Browser/OIDC <code>~/.grok/auth.json</code></td>
 <td>⚠️ Unknown — fallback byte-diff only, no identity adapter yet</td>
 <td>Use only the TUI profile switch (select <code>grok</code>, then the profile); review config/env/project overrides before relying on the selected profile</td>
 </tr>
 <tr>
-<td>Aider / Kimi / Qwen / Crush</td>
+<td>Aider / Kimi / Qwen</td>
 <td>Static API key</td>
 <td>🟢 None</td>
 <td>Standard swap suffices — but environment variables or project-local config can bypass <code>mat</code> (see &quot;Platform support&quot; below)</td>
@@ -250,7 +256,7 @@
 <td>✅</td>
 <td>✅</td>
 <td>⚠️ untested</td>
-<td><strong>project-local override</strong>: <code>./.crush.json</code> / <code>./crush.json</code> in CWD takes precedence over <code>~/.config/crush/*</code>; <code>CRUSH_GLOBAL_*</code> env vars also override</td>
+<td>Hyper/Copilot login may persist OAuth plus mirrored <code>api_key</code> under <code>providers.*</code> (pin <code>charmbracelet/crush@7b24cc09…</code>, retrieved 2026-07-15 KST). No stable account identity is stored, so freshness diffs stay low-confidence attention-required. <strong>project-local / env override</strong>: <code>./.crush.json</code> / <code>./crush.json</code>, <code>CRUSH_GLOBAL_*</code>, XDG roots, and provider API-key env can bypass swapped globals</td>
 </tr>
 <tr>
 <td>OpenCode</td>

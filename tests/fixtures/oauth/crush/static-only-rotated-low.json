@@ -1,0 +1,12 @@
+{
+  "name": "crush static-only api_key change → low-confidence rotated both",
+  "cli": "crush",
+  "saveAs": "crush-config.json",
+  "stored": "{\"providers\":{\"custom\":{\"api_key\":\"sk-fake-crush-0001\"}}}",
+  "live": "{\"providers\":{\"custom\":{\"api_key\":\"sk-fake-crush-0002\"}}}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "both",
+    "confidence": "low"
+  }
+}

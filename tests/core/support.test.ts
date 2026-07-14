@@ -297,4 +297,37 @@ describe('support registry — support/explain reports', () => {
     }
     expect(buildCliSupportReport('aider').capabilities.freshness.status).toBe('partial');
   });
+
+  it('explains Crush freshness as supported conservative byte-diff with pin evidence', () => {
+    const report = buildCliSupportReport('crush');
+    const serialized = JSON.stringify(report);
+
+    expect(BUILTIN_FRESHNESS_ADAPTER_IDS).toContain('crush');
+    expect(report.capabilities.freshness.status).toBe('supported');
+    expect(report.capabilities.freshness.summary).toMatch(/conservative byte-diff|identity/i);
+    expect(report.capabilities.freshness.summary).not.toMatch(/static-key-only|static API key only/i);
+    // Approved copy may say "not confirmed rotation"; forbid affirmative same-account claims.
+    expect(report.capabilities.freshness.summary).not.toMatch(/\bsame account\b(?! continuity)/i);
+    expect(report.capabilities.freshness.summary).toMatch(/not confirmed rotation|identity/i);
+    expect(report.sources.map((s) => s.saveAs).sort()).toEqual([
+      'crush-config.json',
+      'crush-data.json'
+    ]);
+    expect(report.driftContracts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'crush-oauth-freshness',
+          lastVerified: '2026-07-15',
+          evidence: expect.arrayContaining([
+            expect.stringMatching(/7b24cc09987337de8bdab1f8b78430efb00337b8/)
+          ])
+        })
+      ])
+    );
+    expect(serialized).toMatch(/Hyper|Copilot|OAuth/i);
+    expect(serialized).toMatch(/CRUSH_GLOBAL_|project-local|XDG/i);
+    expect(serialized).not.toMatch(/Fallback byte-diff only; no adapter-backed/);
+    expect(serialized).not.toContain('crushfake-access');
+    expect(serialized).not.toContain('sk-fake-crush');
+  });
 });

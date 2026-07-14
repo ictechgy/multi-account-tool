@@ -1,6 +1,6 @@
 # OAuth Fixture Library
 
-각 freshness adapter (codex / gemini / opencode / claude / goose) 의 분류 행동을
+각 freshness adapter (codex / gemini / opencode / claude / goose / crush) 의 분류 행동을
 **고정된 입력 → 기대 출력** 으로 contract test 하기 위한 fixture 모음.
 
 ## 파일 형식 (v1 — single-source)

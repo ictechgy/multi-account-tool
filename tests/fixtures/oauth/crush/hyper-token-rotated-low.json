@@ -1,0 +1,12 @@
+{
+  "name": "crush hyper oauth token-only diff → low-confidence rotated both",
+  "cli": "crush",
+  "saveAs": "crush-data.json",
+  "stored": "{\"providers\":{\"hyper\":{\"oauth\":{\"access_token\":\"crushfake-access-0001\",\"refresh_token\":\"crushfake-refresh-0001\",\"expires_in\":3600,\"expires_at\":1900000000},\"api_key\":\"sk-fake-crush-0001\"}}}",
+  "live": "{\"providers\":{\"hyper\":{\"oauth\":{\"access_token\":\"crushfake-access-0002\",\"refresh_token\":\"crushfake-refresh-0001\",\"expires_in\":3600,\"expires_at\":1900000000},\"api_key\":\"sk-fake-crush-0001\"}}}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "both",
+    "confidence": "low"
+  }
+}

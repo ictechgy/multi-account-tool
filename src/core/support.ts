@@ -222,20 +222,34 @@ const REGISTRY: Record<string, SupportMetadata> = {
   crush: {
     capabilities: {
       freshness: {
-        status: 'partial',
-        summary: 'Fallback byte-diff only; no adapter-backed identity/rotation contract.'
+        // status remains derived `supported` via BUILTIN_FRESHNESS_ADAPTER_IDS.
+        summary:
+          'Adapter-backed conservative byte-diff for Hyper/Copilot OAuth (and static/mirrored API keys); no stored account identity, so diffs stay low-confidence attention-required — not confirmed rotation or same-account continuity.',
+        caveats: [
+          'Upstream pin charmbracelet/crush@7b24cc09987337de8bdab1f8b78430efb00337b8 (retrieved 2026-07-15 KST) persists OAuth tokens without a stable non-secret account identity.',
+          'Normal Hyper/Copilot login may store OAuth plus a mirrored api_key; coexistence is valid but is not identity and is not cross-file coherence proof.',
+          'CRUSH_GLOBAL_CONFIG/CRUSH_GLOBAL_DATA, XDG roots, project-local crush.json, and provider API-key env vars can bypass the swapped global artifacts.'
+        ]
       }
     },
     ambientRisks: [
-      'CRUSH_GLOBAL_CONFIG, CRUSH_GLOBAL_DATA, provider env vars, and project-local crush.json files can bypass mat defaults.'
+      'CRUSH_GLOBAL_CONFIG, CRUSH_GLOBAL_DATA, XDG config/data roots, provider API-key env vars, and project-local .crush.json/crush.json files can bypass mat-selected global artifacts.'
     ],
     driftContracts: [
       {
-        id: 'crush-xdg-roots',
-        summary: 'Crush uses separate config/data roots that mat relocates with CRUSH_GLOBAL_CONFIG and CRUSH_GLOBAL_DATA.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs Crush session roots', 'README Platform support'],
-        risks: ['Project-local config precedence remains outside mat scope.']
+        id: 'crush-oauth-freshness',
+        summary:
+          'Crush freshness admits providers.hyper/copilot.oauth as access_token/refresh_token/expires_in/expires_at only; without stored account identity, changed content is low-confidence unsafe byte-diff, never confirmed rotation.',
+        lastVerified: '2026-07-15',
+        evidence: [
+          'charmbracelet/crush@7b24cc09987337de8bdab1f8b78430efb00337b8',
+          'internal/oauth/token.go + schema.json OAuth object',
+          'cli-defs crush-config.json + crush-data.json'
+        ],
+        risks: [
+          'Project-local config, CRUSH/XDG roots, and provider env can bypass swapped global files.',
+          'Source-local comparison does not prove cross-file OAuth/api_key coherence.'
+        ]
       }
     ]
   },

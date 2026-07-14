@@ -1,0 +1,12 @@
+{
+  "name": "crush malformed providers → low-confidence rotated both",
+  "cli": "crush",
+  "saveAs": "crush-config.json",
+  "stored": "{\"providers\":[]}",
+  "live": "{\"providers\":{}}",
+  "expected": {
+    "kind": "rotated",
+    "subtype": "both",
+    "confidence": "low"
+  }
+}
