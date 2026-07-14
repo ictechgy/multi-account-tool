@@ -265,10 +265,11 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
       { type: 'file', path: '~/.qwen/settings.json', saveAs: 'qwen-settings.json' },
       { type: 'file', path: '~/.qwen/.env', saveAs: 'qwen.env' }
     ],
-    // QWEN_HOME 으로 ~/.qwen 재배치 가능 (settings.json + .env 포함). 세션 격리 지원.
+    // QWEN_HOME 으로 ~/.qwen 재배치 가능 (settings.json + .env 포함). 세션 시작만 지원.
     // settings.json 이 자격증명+config 혼재라 share 후보 없음 — 통째 격리 복사.
-    session: { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] },
-    sessionRun: { executable: 'qwen' }
+    // G001 Option D: Qwen v0.19.3의 설정·dotenv·interactive CWD/auth 경로 전체를
+    // command preflight로 안전하게 닫을 수 있을 때까지 session run 은 열지 않는다.
+    session: { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] }
   },
   {
     // Charm.sh 공식 Crush (https://github.com/charmbracelet/crush). Go 기반 TUI AI 코딩 에이전트.

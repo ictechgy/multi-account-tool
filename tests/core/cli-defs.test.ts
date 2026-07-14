@@ -442,10 +442,12 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
       codex: 'codex',
       gemini: 'gemini',
       kimi: 'kimi',
-      qwen: 'qwen',
       crush: 'crush',
       opencode: 'opencode'
     });
+    // G001 Option D: Qwen v0.19.3 has project/home dotenv, settings, and
+    // interactive-relocation auth routes that MAT cannot completely contain yet.
+    expect(find('qwen').sessionRun).toBeUndefined();
     expect(find('goose').sessionRun).toBeUndefined();
     expect(find('grok').sessionRun).toBeUndefined();
   });
