@@ -149,23 +149,15 @@ export function findAdmittedOauthProviders(raw: string): string[] {
  * Compare two Crush JSON sources.
  *
  * Equal raw bytes → fresh/high. Any difference → low-confidence rotated:both.
- * Admission helpers stay available for pin documentation and future identity
- * fields; with empty identity, no path may confirm rotation.
+ * Pin admission helpers (`isAdmittedOauthShape`, `findAdmittedOauthProviders`,
+ * `canConfirmOauthRotation`, `CRUSH_ADMISSION`) remain exported for tests and
+ * future identity evidence; they do not change this conservative compare path
+ * while `CRUSH_IDENTITY_FIELDS` is empty. Enabling confirmed rotation requires
+ * re-plan + non-empty identity admission, not a silent compare-side branch.
  */
 function compareCrush(stored: string, live: string): CompareResult {
   if (stored === live) {
     return { kind: 'fresh', confidence: 'high' };
-  }
-
-  // Touch admission surface so closed-world pin stays testable without
-  // changing the conservative result while identity is empty.
-  findAdmittedOauthProviders(stored);
-  findAdmittedOauthProviders(live);
-
-  if (canConfirmOauthRotation()) {
-    // Unreachable at this pin. Future evidence-backed identity admission must
-    // re-plan before returning high-confidence rotated from this branch.
-    return unsafeByteDiff(BYTE_DIFF_DETAIL);
   }
 
   return unsafeByteDiff(BYTE_DIFF_DETAIL);
