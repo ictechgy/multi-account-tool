@@ -86,11 +86,14 @@ function ownKeys(obj: object): string[] {
 /**
  * Admit an OAuth object only when it has exactly the four pin-required fields
  * with the correct types and no extra own keys.
+ *
+ * Counts all enumerable own keys (including __proto__, constructor, prototype)
+ * so a JSON-parsed payload carrying a dangerous own key is rejected.
  */
 export function isAdmittedOauthShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const keys = ownKeys(value);
-  if (keys.length !== OAUTH_REQUIRED_FIELDS.length) return false;
+  const totalOwnKeys = Object.keys(value).length;
+  if (totalOwnKeys !== OAUTH_REQUIRED_FIELDS.length) return false;
   for (const field of OAUTH_REQUIRED_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) return false;
   }

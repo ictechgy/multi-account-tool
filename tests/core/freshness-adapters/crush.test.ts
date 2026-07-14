@@ -232,21 +232,42 @@ describe('crushAdapter — coexistence / static / malformed matrix', () => {
   });
 
   it('dangerous prototype keys do not become identity or high confidence', () => {
-    const stored = JSON.stringify({
-      providers: {
-        hyper: { oauth: hyperOauth() },
-        __proto__: { polluted: true }
-      }
-    });
-    const live = JSON.stringify({
-      providers: {
-        hyper: { oauth: hyperOauth({ access_token: 'crushfake-access-0009' }) },
-        constructor: { polluted: true }
-      }
-    });
-    expectUnsafeByteDiff(crushAdapter.compare(CONFIG, stored, live));
+    const storedRaw = '{"providers":{"hyper":{"oauth":' + JSON.stringify(hyperOauth()) +
+      '},"__proto__":{"polluted":true}}}';
+    const liveRaw = '{"providers":{"hyper":{"oauth":' +
+      JSON.stringify(hyperOauth({ access_token: 'crushfake-access-0009' })) +
+      '},"constructor":{"polluted":true}}}';
+
+    const parsedStored = JSON.parse(storedRaw);
+    expect(Object.prototype.hasOwnProperty.call(parsedStored.providers, '__proto__')).toBe(true);
+    const parsedLive = JSON.parse(liveRaw);
+    expect(Object.prototype.hasOwnProperty.call(parsedLive.providers, 'constructor')).toBe(true);
+
+    expectUnsafeByteDiff(crushAdapter.compare(CONFIG, storedRaw, liveRaw));
     const probe: Record<string, unknown> = {};
     expect((probe as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
+  it.each([
+    { key: '__proto__',   json: '{"access_token":"a","refresh_token":"b","expires_in":1,"expires_at":2,"__proto__":{"x":1}}' },
+    { key: 'constructor', json: '{"access_token":"a","refresh_token":"b","expires_in":1,"expires_at":2,"constructor":{}}' },
+    { key: 'prototype',   json: '{"access_token":"a","refresh_token":"b","expires_in":1,"expires_at":2,"prototype":{}}' }
+  ])('isAdmittedOauthShape rejects OAuth with own "$key" extra key', ({ key, json }) => {
+    const poisoned = JSON.parse(json);
+    expect(Object.prototype.hasOwnProperty.call(poisoned, key)).toBe(true);
+    expect(Object.keys(poisoned).length).toBe(5);
+    expect(isAdmittedOauthShape(poisoned)).toBe(false);
+  });
+
+  it('findAdmittedOauthProviders excludes dangerous provider keys from traversal', () => {
+    const raw =
+      '{"providers":{' +
+        '"hyper":{"oauth":{"access_token":"a","refresh_token":"b","expires_in":1,"expires_at":2}},' +
+        '"__proto__":{"oauth":{"access_token":"c","refresh_token":"d","expires_in":3,"expires_at":4}}' +
+      '}}';
+    const parsed = JSON.parse(raw);
+    expect(Object.prototype.hasOwnProperty.call(parsed.providers, '__proto__')).toBe(true);
+    expect(findAdmittedOauthProviders(raw)).toEqual(['hyper']);
   });
 
   it('unsupported saveAs → low-confidence rotated both', () => {
