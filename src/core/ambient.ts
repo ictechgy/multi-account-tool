@@ -45,7 +45,25 @@ const AMBIENT_RULES: Record<string, AmbientRule> = {
     envNames: ['MOONSHOT_API_KEY', 'KIMI_API_KEY']
   },
   qwen: {
-    envNames: ['DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'OPENAI_API_KEY'],
+    envNames: [
+      'ANTHROPIC_API_KEY',
+      'BAILIAN_CODING_PLAN_API_KEY',
+      'BAILIAN_TOKEN_PLAN_API_KEY',
+      'DASHSCOPE_API_KEY',
+      'DEEPSEEK_API_KEY',
+      'GEMINI_API_KEY',
+      'GOOGLE_API_KEY',
+      'IDEALAB_API_KEY',
+      'MINIMAX_API_KEY',
+      'MODELSCOPE_API_KEY',
+      'OPENAI_API_KEY',
+      'OPENROUTER_API_KEY',
+      'QWEN_API_KEY',
+      'REQUESTY_API_KEY',
+      'XAI_API_KEY',
+      'ZAI_API_KEY'
+    ],
+    envPrefixes: ['QWEN_CUSTOM_API_KEY_'],
     cwdEntries: ['.qwen', '.env']
   },
   crush: {
@@ -57,7 +75,7 @@ const AMBIENT_RULES: Record<string, AmbientRule> = {
     cwdEntries: ['.opencode', 'opencode.json', 'opencode.jsonc']
   },
   goose: {
-    envNames: ['GOOSE_DISABLE_KEYRING', 'GOOSE_PROVIDER', 'GOOSE_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']
+    envNames: ['GOOSE_DISABLE_KEYRING', 'GOOSE_PROVIDER', 'GOOSE_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'HF_TOKEN']
   },
   grok: {
     envNames: ['XAI_API_KEY'],

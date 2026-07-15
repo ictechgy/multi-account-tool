@@ -66,6 +66,47 @@ describe('ambient warnings — shared detector', () => {
     expect(serialized).not.toContain('oidc-secret-value-must-not-appear');
   });
 
+  it('detects Goose HF_TOKEN without reading or exposing its value', async () => {
+    const env = {};
+    Object.defineProperty(env, 'HF_TOKEN', {
+      enumerable: true,
+      get() {
+        throw new Error('HF_TOKEN value was read');
+      }
+    });
+
+    const warnings = await detectAmbientWarnings('goose', {
+      cwd: tmp.home,
+      env: env as NodeJS.ProcessEnv
+    });
+
+    expect(warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'ambient.env', cliId: 'goose', name: 'HF_TOKEN' })
+    ]));
+    expect(JSON.stringify(warnings)).not.toContain('value was read');
+  });
+
+  it('detects current Qwen v0.19.10 static provider env channels', async () => {
+    const warnings = await detectAmbientWarnings('qwen', {
+      cwd: tmp.home,
+      env: {
+        BAILIAN_CODING_PLAN_API_KEY: 'secret-a',
+        XAI_API_KEY: 'secret-b',
+        QWEN_CUSTOM_API_KEY_TEAM: 'secret-c'
+      }
+    });
+    const serialized = JSON.stringify(warnings);
+
+    expect(warnings.map((warning) => warning.name)).toEqual(expect.arrayContaining([
+      'BAILIAN_CODING_PLAN_API_KEY',
+      'XAI_API_KEY',
+      'QWEN_CUSTOM_API_KEY_TEAM'
+    ]));
+    expect(serialized).not.toContain('secret-a');
+    expect(serialized).not.toContain('secret-b');
+    expect(serialized).not.toContain('secret-c');
+  });
+
   it('detects env prefixes and redacts long env names', async () => {
     const longKey = 'AIDER_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz';
     const warnings = await detectAmbientWarnings('aider', {

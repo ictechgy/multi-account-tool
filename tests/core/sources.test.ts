@@ -237,6 +237,20 @@ describe('sources — fixed Goose provider files', () => {
     await expect(writeSource(src, 'opaque')).rejects.toThrow(/unsafe Goose provider cache parent/);
   });
 
+  it('does not follow the nested Hugging Face provider ancestor for read, existence, or write', async () => {
+    const src: FileSource = {
+      type: 'file',
+      path: '~/.config/goose/providers/huggingface/oauth/tokens.json',
+      saveAs: 'goose-provider-huggingface-oauth-tokens.json'
+    };
+    await fs.mkdir(join(tmp.home, '.config/goose/providers'), { recursive: true, mode: 0o700 });
+    await fs.symlink('/tmp', join(tmp.home, '.config/goose/providers/huggingface'));
+
+    await expect(readSource(src)).rejects.toThrow(/unsafe Goose provider cache parent/);
+    await expect(sourceExists(src)).rejects.toThrow(/unsafe Goose provider cache parent/);
+    await expect(writeSource(src, 'opaque')).rejects.toThrow(/unsafe Goose provider cache parent/);
+  });
+
   it('rejects provider hardlink substitution and never reads or mutates the outside inode', async () => {
     const src: FileSource = { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
     const target = join(tmp.home, '.config/goose/providers/gemini_oauth');

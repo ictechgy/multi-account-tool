@@ -7,14 +7,14 @@ import { readSource, writeSource } from '../../src/core/sources.js';
 import { expandTilde } from '../../src/core/paths.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 
-describe('Goose v1.40 provider caches — temporary HOME integration', () => {
+describe('Goose v1.43 provider caches — temporary HOME integration', () => {
   let tmp: TmpHome;
   beforeEach(async () => { tmp = await setupTmpHome(); });
   afterEach(async () => { await tmp.cleanup(); });
 
-  it('round-trips each of the fixed four files and two bounded directories without touching a real HOME', async () => {
+  it('round-trips each of the fixed five files and two bounded directories without touching a real HOME', async () => {
     const sources = BUILTIN_CLI_DEFS.find(def => def.id === 'goose')!.sources.filter(src => src.saveAs.startsWith('goose-provider-'));
-    expect(sources).toHaveLength(6);
+    expect(sources).toHaveLength(7);
     for (const src of sources) {
       const opaque = src.type === 'directory'
         ? JSON.stringify({ version: 1, entries: [{ kind: 'file', path: 'cache.json', contentBase64: Buffer.from('opaque').toString('base64') }] })
@@ -23,10 +23,10 @@ describe('Goose v1.40 provider caches — temporary HOME integration', () => {
       expect(await readSource(src)).toBe(opaque);
       expect(expandTilde(src.path).startsWith(tmp.home)).toBe(true);
     }
-    expect(await fs.readdir(join(tmp.home, '.config/goose/providers'))).toHaveLength(6);
+    expect(await fs.readdir(join(tmp.home, '.config/goose/providers'))).toHaveLength(7);
   });
 
-  it('captures and restores all six provider artifacts through the public profile transaction under a temporary HOME', async () => {
+  it('captures and restores all seven provider artifacts through the public profile transaction under a temporary HOME', async () => {
     const previous = process.env.GOOSE_DISABLE_KEYRING;
     process.env.GOOSE_DISABLE_KEYRING = '1';
     vi.resetModules();
@@ -35,7 +35,7 @@ describe('Goose v1.40 provider caches — temporary HOME integration', () => {
       const { writeSource: write, readSource: read } = await import('../../src/core/sources.js');
       const { snapshotLiveToProfile, restoreProfileToLive } = await import('../../src/core/switcher.js');
       const sources = defs.find(def => def.id === 'goose')!.sources;
-      expect(sources).toHaveLength(8); // two YAML + six fixed provider artifacts; no keyring.
+      expect(sources).toHaveLength(9); // two YAML + seven fixed provider artifacts; no keyring.
       const encoded = (value: string) => Buffer.from(value).toString('base64');
       const valueFor = (tag: string, src: typeof sources[number]) => src.type === 'directory'
         ? JSON.stringify({ version: 1, entries: [{ kind: 'file', path: 'cache.json', contentBase64: encoded(`${tag}:${src.saveAs}`) }, { kind: 'dir', path: 'empty' }] })

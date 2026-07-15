@@ -7,13 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-15
+
 ### Added
 
 - G002: Goose v1.40.0 (`9081cbd1`)의 고정 provider OAuth cache 네 파일과 bounded directory 두 개를 profile swap/freshness에 추가했다. unknown provider path, environment/project bypass, session/run, Windows 지원은 추가하지 않았다. provider schema는 redacted fixture 검토 전 opaque low-confidence comparator로 보수 처리한다.
+- G003: Crush Hyper/Copilot OAuth와 mirrored/static API-key 변화를 adapter-backed conservative freshness로 분류한다. upstream에 안정적인 비밀이 아닌 account identity가 없으므로 변경은 확인된 same-account rotation이 아니라 low-confidence attention-required 상태로 유지한다.
+- G004: Goose v1.43.0 (`5a9eb7e`)의 고정 Hugging Face `providers/huggingface/oauth/tokens.json` cache를 일곱 번째 provider artifact로 추가했다. 기존 no-follow/private-parent 보호와 opaque low-confidence comparator를 재사용하며 token schema를 파싱하지 않는다.
 
 ### Changed
 
-- Disabled `mat session run qwen` (G001 Option D). Qwen v0.19.3 can resolve credentials and routing through settings, dotenv, environment, and interactive working-directory sources that the current command preflight cannot completely contain. Profile swap and advisory `session start qwen` support remain available; neither is a command-scoped credential-isolation claim.
+- Disabled `mat session run qwen` (G001 Option D). Qwen v0.19.10 can resolve credentials and routing through settings, dotenv, environment, custom `modelProviders[].envKey`, and interactive working-directory sources that the current command preflight cannot completely contain. Profile swap and advisory `session start qwen` support remain available; neither is a command-scoped credential-isolation claim.
+- Refreshed every built-in/known-blocked upstream drift contract to the 2026-07-15 audit baseline, including canonical OpenCode v1.18.1, Crush v0.84.1 equivalence, Gemini CLI v0.50.0 availability caveats, and Antigravity 1.1.2 remaining blocked.
+- Expanded informational ambient warnings for current Qwen v0.19.10 static provider env keys and Goose `HF_TOKEN`; values are never read or emitted.
+- Updated English/Korean documentation and generated Pages content for the seven-cache Goose v1.43 boundary and unchanged fail-closed Qwen/Antigravity limits.
 
 ## [0.7.1] - 2026-06-22
 
