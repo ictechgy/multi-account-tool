@@ -179,4 +179,27 @@ describe('profile identity metadata', () => {
     expect(text).not.toContain(secret);
     expect(text).not.toContain('customer@example.test');
   });
+
+  it('keeps the Goose Hugging Face OAuth cache opaque and exposes only its fixed provider label', () => {
+    const secret = 'hf-oauth-secret-abcdefghijklmnopqrstuvwxyz0123456789';
+    const identity = buildProfileIdentity({
+      cliId: 'goose',
+      capturedAt: new Date('2026-07-15T00:00:00Z'),
+      sources: [{
+        saveAs: 'goose-provider-huggingface-oauth-tokens.json',
+        state: 'captured',
+        value: JSON.stringify({ access_token: secret, refresh_token: `${secret}-refresh` })
+      }]
+    });
+    const text = serialized(identity);
+
+    expect(identity.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'identity-unavailable', source: 'goose-provider-huggingface-oauth-tokens.json' })
+    ]));
+    expect(identity.signals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'provider', value: 'huggingface', confidence: 'low' })
+    ]));
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain('access_token');
+  });
 });

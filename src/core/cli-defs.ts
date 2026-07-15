@@ -111,8 +111,8 @@ function gooseSources(): Source[] {
     { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
     { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
   ];
-  // Upstream admission: aaif-goose/goose v1.40.0, commit
-  // 9081cbd1d7c1856199383abb667ac7276d1794d5.  Fixed paths only; no provider
+  // Upstream admission: aaif-goose/goose v1.43.0, commit
+  // 5a9eb7edea1e081e2d54473ae41481f0289b826a. Fixed paths only; no provider
   // discovery and no session capability are introduced here.
   const providerSources: Source[] = [
     { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' },
@@ -120,7 +120,8 @@ function gooseSources(): Source[] {
     { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' },
     { type: 'directory', path: '~/.config/goose/providers/githubcopilot', saveAs: 'goose-provider-githubcopilot.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
     { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' },
-    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 }
+    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
+    { type: 'file', path: '~/.config/goose/providers/huggingface/oauth/tokens.json', saveAs: 'goose-provider-huggingface-oauth-tokens.json' }
   ];
   // file backend(GOOSE_DISABLE_KEYRING 존재) 면 macOS 도 keychain 을 생략한다 — Goose 가
   // file backend 일 때 stale keychain 항목을 swap 하는 wrong-account 위험 차단 (Linux 와 대칭).
@@ -279,7 +280,7 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
     ],
     // QWEN_HOME 으로 ~/.qwen 재배치 가능 (settings.json + .env 포함). 세션 시작만 지원.
     // settings.json 이 자격증명+config 혼재라 share 후보 없음 — 통째 격리 복사.
-    // G001 Option D: Qwen v0.19.3의 설정·dotenv·interactive CWD/auth 경로 전체를
+    // G001 Option D: Qwen v0.19.10의 설정·dotenv·interactive CWD/auth 경로 전체를
     // command preflight로 안전하게 닫을 수 있을 때까지 session run 은 열지 않는다.
     session: { roots: [{ env: 'QWEN_HOME', base: '~/.qwen' }] }
   },

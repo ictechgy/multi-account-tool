@@ -123,19 +123,19 @@ describe('BUILTIN_CLI_DEFS — 현재 platform 기반 invariant', () => {
     expect(opencode?.session?.roots[0].warning).toContain('XDG_DATA_HOME');
   });
 
-  it('goose source 수는 현재 platform 에 따라 keyring 3 + fixed provider 6 / file 2 + provider 6 이다', () => {
+  it('goose source 수는 현재 platform 에 따라 keyring 3 + fixed provider 7 / file 2 + provider 7 이다', () => {
     // 본 테스트는 process.platform 그대로 사용. 양쪽 분기 상세는 아래 별도 describe 에서 stub.
     const goose = BUILTIN_CLI_DEFS.find((c) => c.id === 'goose');
     expect(goose).toBeDefined();
     if (process.platform === 'darwin') {
-      expect(goose!.sources).toHaveLength(9);
+      expect(goose!.sources).toHaveLength(10);
       expect(goose!.sources[0].type).toBe('keychain');
     } else if (process.platform === 'linux') {
-      expect(goose!.sources).toHaveLength(9);
+      expect(goose!.sources).toHaveLength(10);
       expect(goose!.sources[0].type).toBe('os-keyring');
       expect(goose!.sources.slice(1, 3).every((s) => s.type === 'file')).toBe(true);
     } else {
-      expect(goose!.sources).toHaveLength(8);
+      expect(goose!.sources).toHaveLength(9);
       expect(goose!.sources.slice(0, 2).every((s) => s.type === 'file')).toBe(true);
     }
   });
@@ -306,7 +306,8 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' },
     { type: 'directory', path: '~/.config/goose/providers/githubcopilot', saveAs: 'goose-provider-githubcopilot.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
     { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' },
-    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 }
+    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
+    { type: 'file', path: '~/.config/goose/providers/huggingface/oauth/tokens.json', saveAs: 'goose-provider-huggingface-oauth-tokens.json' }
   ];
 
   it('platform=darwin (기본 keyring) → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {
@@ -453,7 +454,7 @@ describe('session 메타데이터 (PR-S1 — 세션 격리)', () => {
       crush: 'crush',
       opencode: 'opencode'
     });
-    // G001 Option D: Qwen v0.19.3 has project/home dotenv, settings, and
+    // G001 Option D: Qwen v0.19.10 has project/home dotenv, settings, and
     // interactive-relocation auth routes that MAT cannot completely contain yet.
     expect(find('qwen').sessionRun).toBeUndefined();
     expect(find('goose').sessionRun).toBeUndefined();

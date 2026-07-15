@@ -1,5 +1,8 @@
 # Goose v1.40.0 provider-cache admission
 
+> Historical baseline. The current v1.43 extension is documented in
+> [\`goose-v1.43.0-provider-cache.md\`](./goose-v1.43.0-provider-cache.md).
+
 G002 pins the upstream primary source at tag [`v1.40.0`](https://github.com/aaif-goose/goose/releases/tag/v1.40.0), commit [`9081cbd1d7c1856199383abb667ac7276d1794d5`](https://github.com/aaif-goose/goose/tree/9081cbd1d7c1856199383abb667ac7276d1794d5).
 
 The reviewed upstream provider modules use Goose's config directory with these

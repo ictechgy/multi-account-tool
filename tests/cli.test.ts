@@ -280,7 +280,7 @@ describe('mat support/explain — support boundary diagnostics', () => {
         id: 'agy-blocked-no-contract',
         evidence: expect.arrayContaining([
           expect.stringMatching(/system keyring auth \+ Google Sign-In fallback/),
-          expect.stringMatching(/local agy --version: 1\.0\.8/)
+          expect.stringMatching(/local agy --version: 1\.1\.2/)
         ])
       })
     ]);

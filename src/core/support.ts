@@ -100,8 +100,8 @@ const REGISTRY: Record<string, SupportMetadata> = {
       {
         id: 'claude-credential-store',
         summary: 'Claude Code uses macOS Keychain on macOS and ~/.claude/.credentials.json on file-source platforms.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs claudeSource()', 'README Platform support'],
+        lastVerified: '2026-07-15',
+        evidence: ['anthropics/claude-code v2.1.210 release', 'cli-defs claudeSource()', 'README Platform support'],
         risks: ['CLAUDE_CONFIG_DIR is an upstream behavior assumption and may change.']
       }
     ]
@@ -114,8 +114,8 @@ const REGISTRY: Record<string, SupportMetadata> = {
       {
         id: 'codex-home-auth',
         summary: 'Codex auth lives in ~/.codex/auth.json and CODEX_HOME relocates the Codex home.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs Codex session root', 'PR #93 copy-isolated skills/config'],
+        lastVerified: '2026-07-15',
+        evidence: ['openai/codex rust-v0.144.4 release', 'cli-defs Codex session root', 'PR #93 copy-isolated skills/config'],
         risks: ['New Codex config or plugin write paths may need explicit copy-isolate review.']
       }
     ]
@@ -128,9 +128,12 @@ const REGISTRY: Record<string, SupportMetadata> = {
       {
         id: 'gemini-cli-home',
         summary: 'GEMINI_CLI_HOME points to the parent of .gemini; mat uses envSubdir=.gemini.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs Gemini session comments', 'README Platform support'],
-        risks: ['Google CLI home semantics can drift; keep envSubdir tests in sync.']
+        lastVerified: '2026-07-15',
+        evidence: ['google-gemini/gemini-cli v0.50.0 release', 'cli-defs Gemini session comments', 'README Platform support'],
+        risks: [
+          'Google CLI home semantics can drift; keep envSubdir tests in sync.',
+          'Personal/free-tier availability transitioned toward Antigravity on 2026-06-18; enterprise, Cloud, and API-key paths remain distinct from mat credential support.'
+        ]
       }
     ]
   },
@@ -158,8 +161,8 @@ const REGISTRY: Record<string, SupportMetadata> = {
       {
         id: 'aider-command-boundary',
         summary: 'Aider support is command-scoped partial support, not session-start/home isolation.',
-        lastVerified: '2026-06-14',
-        evidence: ['session preflightAiderSessionRun', 'README session run Aider caveat'],
+        lastVerified: '2026-07-15',
+        evidence: ['Aider-AI/aider v0.86.0 release', 'session preflightAiderSessionRun', 'README session run Aider caveat'],
         risks: ['New Aider argv/env credential channels require hard-stop updates.']
       }
     ]
@@ -178,8 +181,8 @@ const REGISTRY: Record<string, SupportMetadata> = {
       {
         id: 'kimi-share-dir',
         summary: 'KIMI_SHARE_DIR relocates ~/.kimi for file-based session isolation.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs Kimi session root'],
+        lastVerified: '2026-07-15',
+        evidence: ['MoonshotAI/kimi-cli 1.48.0 release', 'cli-defs Kimi session root'],
         risks: ['Single config file mixes credentials and config; session changes are ephemeral.']
       }
     ]
@@ -198,18 +201,18 @@ const REGISTRY: Record<string, SupportMetadata> = {
       },
       sessionRun: {
         status: 'unsupported',
-        summary: 'Command-scoped Qwen run is disabled until the complete pinned v0.19.3 auth/source contract can be fail-closed.'
+        summary: 'Command-scoped Qwen run is disabled until the complete pinned v0.19.10 auth/source contract can be fail-closed.'
       }
     },
     ambientRisks: [
-      'DASHSCOPE_API_KEY, QWEN_API_KEY, OPENAI_API_KEY, settings, and project/ancestor/home dotenv sources can override swapped settings.'
+      'Qwen v0.19.10 built-in provider API-key env vars, QWEN_CUSTOM_API_KEY_*, settings, and project/ancestor/home dotenv sources can override swapped settings.'
     ],
     driftContracts: [
       {
         id: 'qwen-home-precedence',
         summary: 'QWEN_HOME relocates ~/.qwen, but shell, dotenv, settings, and working-directory routes can bypass swapped files.',
-        lastVerified: '2026-07-14',
-        evidence: ['G001 pinned Qwen v0.19.3 admission gate', 'README Platform support'],
+        lastVerified: '2026-07-15',
+        evidence: ['QwenLM/qwen-code v0.19.10 commit 095bd160918086a3a33192133e7923635f08f973', 'G001 fail-closed admission gate', 'README Platform support'],
         risks: ['Command run stays disabled until every auth/config source can be frozen and rechecked fail-closed.']
       }
     ],
@@ -242,7 +245,7 @@ const REGISTRY: Record<string, SupportMetadata> = {
           'Crush freshness admits providers.hyper/copilot.oauth as access_token/refresh_token/expires_in/expires_at only; without stored account identity, changed content is low-confidence unsafe byte-diff, never confirmed rotation.',
         lastVerified: '2026-07-15',
         evidence: [
-          'charmbracelet/crush@7b24cc09987337de8bdab1f8b78430efb00337b8',
+          'charmbracelet/crush v0.84.1 (no file changes versus pin 7b24cc09987337de8bdab1f8b78430efb00337b8)',
           'internal/oauth/token.go + schema.json OAuth object',
           'cli-defs crush-config.json + crush-data.json'
         ],
@@ -272,22 +275,22 @@ const REGISTRY: Record<string, SupportMetadata> = {
       {
         id: 'opencode-xdg-data',
         summary: 'OpenCode auth.json is under XDG data root; mat uses XDG_DATA_HOME with envSubdir=opencode.',
-        lastVerified: '2026-06-14',
-        evidence: ['cli-defs opencodeDataRoot()', 'README Platform support'],
+        lastVerified: '2026-07-15',
+        evidence: ['anomalyco/opencode v1.18.1 commit 99f638d8293f6985726ba509da602296c4963497', 'cli-defs opencodeDataRoot()', 'README Platform support'],
         risks: ['Broad XDG_DATA_HOME can redirect unrelated tools in a session.']
       }
     ]
   },
   goose: {
     ambientRisks: [
-      'GOOSE_DISABLE_KEYRING changes backend selection; GOOSE_PROVIDER/model, provider API-key env vars, project config, and unknown provider paths can bypass profile intent.'
+      'GOOSE_DISABLE_KEYRING changes backend selection; GOOSE_PROVIDER/model, HF_TOKEN, provider API-key env vars, project config, and unknown provider paths can bypass profile intent.'
     ],
     driftContracts: [
       {
         id: 'goose-keyring-backend',
-        summary: 'Goose swaps its existing backend/YAML artifacts plus six fixed v1.40 provider cache artifacts; this is not session isolation.',
-        lastVerified: '2026-07-14',
-        evidence: ['aaif-goose/goose v1.40.0 commit 9081cbd1', 'cli-defs gooseSources()', 'README Goose boundary'],
+        summary: 'Goose swaps its existing backend/YAML artifacts plus seven fixed v1.43 provider cache artifacts; this is not session isolation.',
+        lastVerified: '2026-07-15',
+        evidence: ['aaif-goose/goose v1.43.0 commit 5a9eb7edea1e081e2d54473ae41481f0289b826a', 'crates/goose-local-inference/src/huggingface_auth.rs', 'cli-defs gooseSources()', 'README Goose boundary'],
         risks: ['Unknown provider layouts and token schemas remain opaque; missing secret-tool does not prove Goose is not using libsecret.']
       }
     ]
@@ -317,8 +320,8 @@ const REGISTRY: Record<string, SupportMetadata> = {
       {
         id: 'grok-auth-json-pr1',
         summary: 'Grok PR1 support swaps only the primary signed-in credential file ~/.grok/auth.json.',
-        lastVerified: '2026-06-20',
-        evidence: ['cli-defs grok builtin source', 'Grok builtin PR1 plan/test spec'],
+        lastVerified: '2026-07-15',
+        evidence: ['local grok 0.2.101 (5bc4b5dfadcf) stable', 'xAI Grok Build authentication/config documentation', 'cli-defs grok builtin source', 'Grok builtin PR1 plan/test spec'],
         risks: ['Config/env/project-local credential overrides can cause Grok to use a different account than the swapped auth.json.']
       }
     ],
@@ -360,11 +363,11 @@ const KNOWN_BLOCKED: Record<string, { name: string; metadata: SupportMetadata }>
         {
           id: 'agy-blocked-no-contract',
           summary: 'Antigravity remains blocked: public docs describe system keyring + Google Sign-In fallback, not a stable mat-safe auth-store or redirect contract.',
-          lastVerified: '2026-06-14',
+          lastVerified: '2026-07-15',
           evidence: [
             'google-antigravity/antigravity-cli README: system keyring auth + Google Sign-In fallback; /logout sign-out only',
-            'google-antigravity/antigravity-cli CHANGELOG: latest observed release 1.0.8 on 2026-06-12',
-            'local agy --version: 1.0.8; agy --help exposes no auth-store redirect flag/subcommand',
+            'google-antigravity/antigravity-cli 1.1.2 commit b27d51dbe52b1b0686b501302b9c4a353d84661d',
+            'local agy --version: 1.1.2; agy --help exposes no auth-store redirect flag/subcommand',
             'docs/superpowers/specs/2026-06-14-antigravity-auth-store-research.md'
           ],
           risks: [

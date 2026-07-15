@@ -437,14 +437,15 @@ describe('gooseAdapter — keyring wrapper', () => {
   });
 });
 
-describe('gooseAdapter — v1.40 provider cache admission', () => {
+describe('gooseAdapter — v1.43 provider cache admission', () => {
   it.each([
     'goose-provider-gemini-oauth-tokens.json',
     'goose-provider-chatgpt-codex-tokens.json',
     'goose-provider-kimicode-token.json',
     'goose-provider-githubcopilot.tree.json',
     'goose-provider-xai-oauth-tokens.json',
-    'goose-provider-databricks-oauth.tree.json'
+    'goose-provider-databricks-oauth.tree.json',
+    'goose-provider-huggingface-oauth-tokens.json'
   ])('%s remains opaque: equal is fresh and a diff is low-confidence rotated', (saveAs) => {
     expect(gooseAdapter.compare(saveAs, 'opaque-fixture-a', 'opaque-fixture-a')).toEqual({ kind: 'fresh', confidence: 'high' });
     expect(gooseAdapter.compare(saveAs, 'opaque-fixture-a', 'opaque-fixture-b')).toMatchObject({ kind: 'rotated', subtype: 'both', confidence: 'low' });

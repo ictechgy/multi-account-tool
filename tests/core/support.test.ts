@@ -46,7 +46,7 @@ describe('support registry — support/explain reports', () => {
     expect(report.capabilities.sessionStart.summary).toMatch(/advisory/i);
     expect(report.capabilities.sessionStart.caveats.join(' ')).toMatch(/ambient detection.*switch.*exec.*doctor/i);
     expect(report.capabilities.sessionRun.status).toBe('unsupported');
-    expect(serialized).toMatch(/v0\.19\.3/);
+    expect(serialized).toMatch(/v0\.19\.10/);
     expect(report.nextSteps).toEqual(expect.arrayContaining([
       expect.stringMatching(/mat exec qwen <profile>/)
     ]));
@@ -99,10 +99,10 @@ describe('support registry — support/explain reports', () => {
     expect(report.driftContracts).toEqual([
       expect.objectContaining({
         id: 'agy-blocked-no-contract',
-        lastVerified: '2026-06-14',
+        lastVerified: '2026-07-15',
         evidence: expect.arrayContaining([
           expect.stringMatching(/system keyring auth \+ Google Sign-In fallback/),
-          expect.stringMatching(/local agy --version: 1\.0\.8/)
+          expect.stringMatching(/local agy --version: 1\.1\.2/)
         ])
       })
     ]);
@@ -296,6 +296,16 @@ describe('support registry — support/explain reports', () => {
       expect(buildCliSupportReport(id).capabilities.freshness.status).toBe('supported');
     }
     expect(buildCliSupportReport('aider').capabilities.freshness.status).toBe('partial');
+  });
+
+  it('pins every builtin and known-blocked drift contract to the 2026-07-15 audit', () => {
+    for (const cliId of [...BUILTIN_CLI_DEFS.map((def) => def.id), 'agy']) {
+      const contracts = buildCliSupportReport(cliId).driftContracts;
+      expect(contracts.length, `${cliId} must expose an audited drift contract`).toBeGreaterThan(0);
+      expect(contracts.map((contract) => contract.lastVerified), cliId).toEqual(
+        contracts.map(() => '2026-07-15')
+      );
+    }
   });
 
   it('explains Crush freshness as supported conservative byte-diff with pin evidence', () => {

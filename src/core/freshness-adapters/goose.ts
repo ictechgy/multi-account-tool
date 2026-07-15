@@ -56,7 +56,7 @@ interface KeychainOuter {
 }
 
 /** Each provider has an explicit admission declaration. Empty field lists are
- * intentional: v1.40 source proves cache locations, not a redacted stable
+ * intentional: v1.43 source proves cache locations, not a redacted stable
  * token schema. A future field admission must update this declaration and add
  * a redacted fixture; generic JSON parsing is forbidden. */
 const GOOSE_PROVIDER_CACHE_MANIFEST: Record<string, { provider: string; identityFields: readonly string[]; credentialFields: readonly string[]; metadataFields: readonly string[] }> = {
@@ -65,7 +65,8 @@ const GOOSE_PROVIDER_CACHE_MANIFEST: Record<string, { provider: string; identity
   'goose-provider-kimicode-token.json': { provider: 'kimicode', identityFields: [], credentialFields: [], metadataFields: [] },
   'goose-provider-githubcopilot.tree.json': { provider: 'githubcopilot', identityFields: [], credentialFields: [], metadataFields: [] },
   'goose-provider-xai-oauth-tokens.json': { provider: 'xai', identityFields: [], credentialFields: [], metadataFields: [] },
-  'goose-provider-databricks-oauth.tree.json': { provider: 'databricks', identityFields: [], credentialFields: [], metadataFields: [] }
+  'goose-provider-databricks-oauth.tree.json': { provider: 'databricks', identityFields: [], credentialFields: [], metadataFields: [] },
+  'goose-provider-huggingface-oauth-tokens.json': { provider: 'huggingface', identityFields: [], credentialFields: [], metadataFields: [] }
 };
 
 /**
@@ -411,12 +412,12 @@ export const gooseAdapter: SourceAdapter = {
       return compareGooseYaml(saveAs, stored, live);
     }
     if (GOOSE_PROVIDER_CACHE_MANIFEST[saveAs]) {
-      // v1.40 source proves location, not a durable redacted field schema for
+      // v1.43 source proves location, not a durable redacted field schema for
       // every cache. Do not invent token claims: opaque differences demand
       // user attention rather than an account-change assertion.
       return stored === live
         ? { kind: 'fresh', confidence: 'high' }
-        : { kind: 'rotated', subtype: 'both', confidence: 'low', detail: 'Goose provider cache changed (opaque v1.40 admission)' };
+        : { kind: 'rotated', subtype: 'both', confidence: 'low', detail: 'Goose provider cache changed (opaque v1.43 admission)' };
     }
     return {
       kind: 'rotated',
