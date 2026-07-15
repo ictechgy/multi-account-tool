@@ -134,6 +134,63 @@ describe('mat freshness — exit code 정책', () => {
     expect(reports[0].sources).toHaveLength(1);
     expect(reports[0].sources[0].result.kind).toBe('stale');
   });
+
+  it('G003: crush Hyper token-only diff → low-confidence rotated unsafe exit 1', async () => {
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/crush/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    const stored = JSON.stringify({
+      providers: {
+        hyper: {
+          oauth: {
+            access_token: 'crushfake-access-0001',
+            refresh_token: 'crushfake-refresh-0001',
+            expires_in: 3600,
+            expires_at: 1900000000
+          },
+          api_key: 'sk-fake-crush-0001'
+        }
+      }
+    });
+    const live = JSON.stringify({
+      providers: {
+        hyper: {
+          oauth: {
+            access_token: 'crushfake-access-0002',
+            refresh_token: 'crushfake-refresh-0001',
+            expires_in: 3600,
+            expires_at: 1900000000
+          },
+          api_key: 'sk-fake-crush-0001'
+        }
+      }
+    });
+    await fs.writeFile(join(profileDir, 'crush-config.json'), stored);
+    await fs.writeFile(join(profileDir, 'crush-data.json'), stored);
+    await fs.mkdir(join(tmp.home, '.config/crush'), { recursive: true });
+    await fs.mkdir(join(tmp.home, '.local/share/crush'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.config/crush/crush.json'), live);
+    await fs.writeFile(join(tmp.home, '.local/share/crush/crush.json'), live);
+
+    const result = runMat(['freshness', 'crush', '--profile', 'p', '--json'], tmp.home);
+    expect(result.code).toBe(1);
+    expect(result.stdout).not.toContain('crushfake-access-0001');
+    expect(result.stdout).not.toContain('crushfake-access-0002');
+    expect(result.stdout).not.toContain('sk-fake-crush-0001');
+    expect(result.stdout).not.toMatch(/\bsame account\b/i);
+    expect(result.stdout).toMatch(/identity unknown|no confirmed rotation/i);
+
+    const reports = JSON.parse(result.stdout) as Array<{
+      sources: Array<{ result: { kind: string; subtype?: string; confidence?: string; detail?: string } }>;
+    }>;
+    expect(reports).toHaveLength(1);
+    expect(reports[0].sources.length).toBeGreaterThanOrEqual(1);
+    for (const source of reports[0].sources) {
+      expect(source.result.kind).toBe('rotated');
+      expect(source.result.subtype).toBe('both');
+      expect(source.result.confidence).toBe('low');
+      expect(source.result.detail ?? '').toMatch(/identity unknown|conservative byte-diff/i);
+    }
+  });
 });
 
 describe('mat doctor — read-only diagnostics', () => {

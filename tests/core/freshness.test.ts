@@ -508,6 +508,101 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
   });
 });
 
+describe('inspectLiveFreshness — crush adapter (G003)', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+    resetAdapters();
+    resetCliDefCache();
+  });
+
+  afterEach(async () => {
+    resetAdapters();
+    resetCliDefCache();
+    await tmp.cleanup();
+  });
+
+  /** Synthetic Crush Hyper OAuth root (fixture-safe tokens only). */
+  function crushHyperPayload(access: string): string {
+    return JSON.stringify({
+      providers: {
+        hyper: {
+          oauth: {
+            access_token: access,
+            refresh_token: 'crushfake-refresh-0001',
+            expires_in: 3600,
+            expires_at: 1_900_000_000
+          },
+          api_key: 'sk-fake-crush-0001'
+        }
+      }
+    });
+  }
+
+  it('lazy-registers crush and reports both config/data sources', async () => {
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/crush/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    const payload = crushHyperPayload('crushfake-access-0001');
+    await fs.writeFile(join(profileDir, 'crush-config.json'), payload);
+    await fs.writeFile(join(profileDir, 'crush-data.json'), payload);
+    await fs.mkdir(join(tmp.home, '.config/crush'), { recursive: true });
+    await fs.mkdir(join(tmp.home, '.local/share/crush'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.config/crush/crush.json'), payload);
+    await fs.writeFile(join(tmp.home, '.local/share/crush/crush.json'), payload);
+
+    const report = await inspectLiveFreshness('crush', 'p');
+    expect(getAdapter('crush')).toBeTruthy();
+    expect(report.sources.map((s) => s.saveAs).sort()).toEqual([
+      'crush-config.json',
+      'crush-data.json'
+    ]);
+    expect(report.sources.every((s) => s.result.kind === 'fresh')).toBe(true);
+  });
+
+  it('token-only live drift is low-confidence rotated and needs attention', async () => {
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/crush/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    const stored = crushHyperPayload('crushfake-access-0001');
+    const live = crushHyperPayload('crushfake-access-0002');
+    await fs.writeFile(join(profileDir, 'crush-config.json'), stored);
+    await fs.writeFile(join(profileDir, 'crush-data.json'), stored);
+    await fs.mkdir(join(tmp.home, '.config/crush'), { recursive: true });
+    await fs.mkdir(join(tmp.home, '.local/share/crush'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.config/crush/crush.json'), live);
+    await fs.writeFile(join(tmp.home, '.local/share/crush/crush.json'), live);
+
+    const report = await inspectLiveFreshness('crush', 'p');
+    expect(report.sources).toHaveLength(2);
+    for (const source of report.sources) {
+      expect(source.result.kind).toBe('rotated');
+      expect(source.result.subtype).toBe('both');
+      expect(source.result.confidence).toBe('low');
+      expect(source.result.detail).toMatch(/identity unknown|conservative byte-diff/i);
+      expect(source.result.detail).not.toContain('crushfake-access-0001');
+      expect(source.result.detail).not.toContain('crushfake-access-0002');
+      expect(source.result.detail).not.toContain('sk-fake-crush-0001');
+    }
+    expect(needsUserAttention(report)).toBe(true);
+  });
+
+  it('missing live source stays stale (existing path, before adapter)', async () => {
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/crush/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    const stored = crushHyperPayload('crushfake-access-0001');
+    await fs.writeFile(join(profileDir, 'crush-config.json'), stored);
+    await fs.writeFile(join(profileDir, 'crush-data.json'), stored);
+    // live paths intentionally absent
+
+    const report = await inspectLiveFreshness('crush', 'p');
+    expect(report.sources).toHaveLength(2);
+    for (const source of report.sources) {
+      expect(source.result.kind).toBe('stale');
+      expect(source.result.detail).toMatch(/라이브 부재/);
+    }
+  });
+});
+
 // --- PR-G: TUI dialog 분기 predicate ---
 
 /**

@@ -12,11 +12,19 @@
 import { getAdapter, registerAdapter } from '../freshness.js';
 import { claudeAdapter } from './claude.js';
 import { codexAdapter } from './codex.js';
+import { crushAdapter } from './crush.js';
 import { geminiAdapter } from './gemini.js';
 import { gooseAdapter } from './goose.js';
 import { opencodeAdapter } from './opencode.js';
 
-export const BUILTIN_FRESHNESS_ADAPTER_IDS = ['claude', 'codex', 'gemini', 'goose', 'opencode'] as const;
+export const BUILTIN_FRESHNESS_ADAPTER_IDS = [
+  'claude',
+  'codex',
+  'crush',
+  'gemini',
+  'goose',
+  'opencode'
+] as const;
 
 /**
  * 모든 builtin adapter 등록. idempotent (registerAdapter 가 Map.set).
@@ -34,9 +42,17 @@ export function registerAllBuiltinAdapters(): void {
   // lazy init 시 덮여지는 사고 방지.
   if (!getAdapter('claude')) registerAdapter('claude', claudeAdapter);
   if (!getAdapter('codex')) registerAdapter('codex', codexAdapter);
+  if (!getAdapter('crush')) registerAdapter('crush', crushAdapter);
   if (!getAdapter('gemini')) registerAdapter('gemini', geminiAdapter);
   if (!getAdapter('goose')) registerAdapter('goose', gooseAdapter);
   if (!getAdapter('opencode')) registerAdapter('opencode', opencodeAdapter);
 }
 
-export { claudeAdapter, codexAdapter, geminiAdapter, gooseAdapter, opencodeAdapter };
+export {
+  claudeAdapter,
+  codexAdapter,
+  crushAdapter,
+  geminiAdapter,
+  gooseAdapter,
+  opencodeAdapter
+};

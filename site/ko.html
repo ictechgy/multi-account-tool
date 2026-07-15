@@ -169,13 +169,19 @@
 <td><code>mat freshness goose</code>가 고정 source별 결과 보고</td>
 </tr>
 <tr>
+<td>Crush</td>
+<td>Hyper/Copilot OAuth(<code>providers.*.oauth</code>) + mirrored/정적 API key</td>
+<td>⚠️ 저장된 계정 identity 없음 — adapter 기반 conservative low-confidence byte-diff만(확인된 rotation 아님)</td>
+<td>swap 전 <code>mat freshness crush</code>; project/<code>CRUSH_*</code>/XDG/provider-env가 전역 swap을 우회할 수 있음(플랫폼 지원 참고)</td>
+</tr>
+<tr>
 <td>Grok Build</td>
 <td>Browser/OIDC <code>~/.grok/auth.json</code></td>
 <td>⚠️ 미확인 — identity adapter 없이 fallback byte-diff만 사용</td>
 <td>TUI 프로필 전환만 사용(<code>grok</code> 선택 후 대상 프로필 선택); 선택한 프로필을 신뢰하기 전 config/env/project override를 검토</td>
 </tr>
 <tr>
-<td>Aider / Kimi / Qwen / Crush</td>
+<td>Aider / Kimi / Qwen</td>
 <td>정적 API key</td>
 <td>🟢 없음</td>
 <td>일반 swap으로 충분 — 단 환경변수 / project-local 설정이 <code>mat</code>의 swap을 우회할 수 있음 (아래 &quot;플랫폼 지원&quot; 참고)</td>
@@ -250,7 +256,7 @@
 <td>✅</td>
 <td>✅</td>
 <td>⚠️ 미검증</td>
-<td><strong>project-local override</strong>: CWD의 <code>./.crush.json</code> / <code>./crush.json</code>이 <code>~/.config/crush/*</code>보다 우선; <code>CRUSH_GLOBAL_*</code> env도 우선</td>
+<td>Hyper/Copilot 로그인 시 <code>providers.*</code> 아래 OAuth와 mirrored <code>api_key</code>가 공존할 수 있음(pin <code>charmbracelet/crush@7b24cc09…</code>, 조회 2026-07-15 KST). 저장된 계정 identity가 없어 freshness diff는 low-confidence attention-required. <strong>project-local / env override</strong>: <code>./.crush.json</code> / <code>./crush.json</code>, <code>CRUSH_GLOBAL_*</code>, XDG root, provider API-key env가 swap된 전역 파일을 우회할 수 있음</td>
 </tr>
 <tr>
 <td>OpenCode</td>
