@@ -237,7 +237,11 @@ describe('Goose v1.43 provider caches — temporary HOME integration', () => {
       const { formatSwitchResult } = await import('../../src/app/formatters.js');
       const text = formatSwitchResult({ fromSnapshot: undefined, restore, preSwapLiveFreshness: undefined }, 'acct-a');
       expect(text).toMatch(/이전 계정 자격증명이 라이브에 그대로 남아 있습니다/);
-      expect(text).toMatch(/재스냅샷/);
+      // 안내가 "이 프로필을 재캡처하라" 여서는 **안 된다** — 라이브 값은 직전 계정 것이라
+      // 그대로 따르면 다른 계정의 자격증명을 이 프로필에 저장하게 된다. 회귀 방지 단정.
+      expect(text).toMatch(/재캡처하지 마세요/);
+      expect(text).toMatch(/다시 로그인/);
+      expect(text).not.toMatch(/이 프로필을 다시 캡처\(재스냅샷\)해야/);
     } finally {
       if (previous === undefined) delete process.env.GOOSE_DISABLE_KEYRING;
       else process.env.GOOSE_DISABLE_KEYRING = previous;

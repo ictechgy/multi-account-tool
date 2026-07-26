@@ -53,7 +53,10 @@ export function formatSwitchResult(r: SwitchResult, to: string): string {
   // 이쪽은 직전 계정의 자격증명이 여전히 활성이라는 뜻이라 의미가 전혀 다르다.
   if (r.restore.carriedOver.length) {
     lines.push(`  ⚠ 이전 계정 자격증명이 라이브에 그대로 남아 있습니다: ${r.restore.carriedOver.join(', ')}`);
-    lines.push(`    → 이 프로필을 다시 캡처(재스냅샷)해야 해당 아티팩트가 프로필에 포함됩니다.`);
+    // 여기서 "이 프로필을 재캡처하라" 고 안내하면 **안 된다** — 라이브 아티팩트는 직전 계정 것이라
+    // 지금 ${to} 를 재캡처하면 다른 계정의 자격증명을 ${to} 프로필에 저장하게 된다.
+    lines.push(`    → 지금 ${to} 를 재캡처하면 다른 계정의 자격증명이 ${to} 에 저장됩니다. 재캡처하지 마세요.`);
+    lines.push(`    → ${to} 계정으로 다시 로그인해 해당 아티팩트를 새로 만드세요. 라이브 값이 다른 프로필의 것이라면 그 프로필을 먼저 재캡처하세요.`);
   }
   return lines.join('\n');
 }

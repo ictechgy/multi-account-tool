@@ -360,6 +360,11 @@ async function switchProfileUnlocked(
   // 성공을 보고하지 않는다. 기존 restoreProfileToLiveUnlocked 의 missing-profile
   // guard 로 fall through 해 깨진 상태를 surface 한다.
   if (current != null && current === toProfile && (await profileExists(cliId, toProfile))) {
+    // 이 경로는 restore 를 **실행하지 않는** idempotent no-op 이므로 세 배열이 모두 비어 있다.
+    // `carriedOver: []` 는 "이월이 없다" 는 보증이 아니라 "이번 호출이 아무것도 복원하지 않아
+    // 평가 대상이 없다" 는 뜻이다 — 이미 활성인 프로필을 다시 선택했을 때 라이브에 남아 있는
+    // 아티팩트를 이 필드로 판단하면 안 된다. 라이브 대 프로필 실제 상태는 `mat doctor` 와
+    // `mat freshness` 가 권위 있는 채널이다.
     return {
       fromSnapshot: undefined,
       restore: { cliId, profileName: toProfile, restored: [], missing: [], carriedOver: [] },
