@@ -60,8 +60,26 @@ Profiles captured before 0.8.1 contain no provider artifacts. Restore does not
 delete a live file that the profile does not carry, so the previous account's
 provider token survives the first switch. 0.8.1 surfaces this as
 `RestoreResult.carriedOver` and a distinct warning line instead of folding it
-into the neutral "not in profile, skipped" notice. **Re-snapshot each Goose
-profile after upgrading.**
+into the neutral "not in profile, skipped" notice.
+
+**Recovery is order-dependent — do not treat this as a blanket "re-snapshot
+everything" instruction.** The provider cache always belongs to whichever account
+is logged in to Goose *right now*, so:
+
+- Re-capture a Goose profile only **while that profile's own account is the one
+  currently logged in**. Once you have logged in as that account, capturing is the
+  correct action.
+- **Never re-capture immediately after a switch reported a carried-over
+  artifact.** At that moment the live cache still belongs to the *previous*
+  account, so capturing would store the wrong account's token into the profile you
+  just switched to — precisely the cross-account write this release exists to
+  prevent.
+- If you are unsure which account the live artifact belongs to, check with
+  `mat freshness` / `mat doctor` before capturing anything.
+
+`formatSwitchResult`, README/README.ko, CHANGELOG, and the `support goose`
+drift-contract risks all state this same order; a contract test fails if the
+support text regresses to unconditional re-capture advice.
 
 ### Directory mode is umask-dependent upstream
 

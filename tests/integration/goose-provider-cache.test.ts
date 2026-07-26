@@ -241,6 +241,9 @@ describe('Goose v1.43 provider caches — temporary HOME integration', () => {
       // 그대로 따르면 다른 계정의 자격증명을 이 프로필에 저장하게 된다. 회귀 방지 단정.
       expect(text).toMatch(/재캡처하지 마세요/);
       expect(text).toMatch(/다시 로그인/);
+      // 절대 금지가 아니라 **순서 조건**임을 문구가 밝혀야 한다 — 재로그인 후에는 재캡처가
+      // 올바른 조치다. 문서(README/CHANGELOG/support/evidence)와 같은 조건을 공유한다.
+      expect(text).toMatch(/다시 로그인한 뒤에는 .* 재캡처가 올바른 조치/);
       // 라이브가 어느 계정 것인지 모르는 상태에서 '다른 프로필을 재캡처하라' 고 안내하면
       // 계정 교차 저장을 유도한다. 확인 채널로 유도하는지 고정한다.
       expect(text).toMatch(/mat freshness/);

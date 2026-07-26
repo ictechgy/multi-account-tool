@@ -59,7 +59,7 @@ export function formatSwitchResult(r: SwitchResult, to: string): string {
     // "라이브가 다른 프로필 것이면 그 프로필을 재캡처하라" 는 안내는 하지 않는다 — 부분 전환
     // 이후 라이브가 섞여 있을 수 있고, 사용자는 라이브 값이 어느 계정 것인지 알 수 없다.
     // 그 상태로 다른 프로필을 재캡처하면 계정 교차 저장이 된다. 먼저 확인하도록 유도한다.
-    lines.push(`    → ${to} 계정으로 다시 로그인해 해당 아티팩트를 새로 만드세요.`);
+    lines.push(`    → ${to} 계정으로 다시 로그인한 뒤에는 ${to} 재캡처가 올바른 조치입니다.`);
     lines.push(`    → 라이브 값이 어느 계정 것인지는 'mat freshness' / 'mat doctor' 로 먼저 확인하세요.`);
   }
   return lines.join('\n');
