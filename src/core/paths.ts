@@ -12,7 +12,7 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 
 import {
   validateCliId,
@@ -138,4 +138,22 @@ export function expandTilde(p: string): string {
   if (p === '~') return homedir();
   if (p.startsWith('~/')) return join(homedir(), p.slice(2));
   return p;
+}
+
+/**
+ * 확장 후 표기가 이미 정규형인지 — 즉 `normalize` 가 아무것도 바꾸지 않는지.
+ *
+ * `expandTilde` 는 `~/` 경로를 `join` 으로 확장하고 `join` 은 `normalize` 를 포함하므로
+ * `~/` 리터럴은 **구조적으로 항상** 정규형이다. 따라서 이 검사가 실제로 걸러내는 것은
+ * `..`/`.`/중복 슬래시를 포함한 **비-틸데 절대 경로**뿐이다.
+ *
+ * **왜 이걸 거부해야 하는가**: 비정규 표기를 받아들이면 안전성 판정은 정규형 문자열로,
+ * 실제 파일 I/O 는 원형 문자열로 이뤄진다. 그러면 부모 디렉토리 identity 를 pinning 하는
+ * 검사(`sources.ts` 의 provider 경로)에서 두 문자열이 어긋나 정상 경로인데도
+ * TOCTOU 를 암시하는 오류로 실패한다. 판정과 I/O 대상을 같은 문자열로 유지하는 것이
+ * 하드닝 계약의 전제다.
+ */
+export function isNormalizedPathSpelling(p: string): boolean {
+  const expanded = expandTilde(p);
+  return normalize(expanded) === expanded;
 }

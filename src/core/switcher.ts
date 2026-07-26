@@ -78,7 +78,14 @@ async function snapshotLiveToProfileUnlocked(
   const values: Array<{ src: Source; value: string | null }> = [];
   // Read/preflight every source before any profile mutation.
   for (const src of def.sources) {
-    const value = await readSource(src);
+    // 이 루프는 프로필을 만들기 전에 돌기 때문에(mutation 없음) 실패 시 그대로 전파되지만,
+    // 하드닝 sentinel 은 경로를 지운 상태라 어느 아티팩트가 막혔는지 알 수 없다. 예외에
+    // saveAs 를 붙여 귀속시킨다 — saveAs 는 doctor/switch 출력에 이미 노출되는 비밀 아닌
+    // 값이므로 누출 계약을 깨지 않는다. 사용자가 `mat doctor` 로 바로 좁혀갈 수 있어야 한다.
+    const value = await readSource(src).catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`${src.saveAs}: ${detail} — 'mat doctor' 로 어떤 아티팩트가 막혔는지 확인하세요.`);
+    });
     values.push({ src, value });
     if (value == null) {
       empty.push(src.saveAs);
@@ -140,6 +147,21 @@ export interface RestoreResult {
   restored: string[];
   /** 프로필에 저장된 파일이 없어 건너뛴 source 의 saveAs 명 */
   missing: string[];
+  /**
+   * `missing` 중에서도 **라이브에 값이 남아 있는** source 의 saveAs 명 (`carriedOver ⊆ missing`).
+   *
+   * 프로필에 없으면 restore 는 라이브 파일을 건드리지 않는다(의도된 설계 — 프로필이 캡처하지
+   * 않은 자격증명을 mat 이 삭제하면 데이터 손실 위험이 크다). 그 결과 **직전 계정의 자격증명이
+   * 그대로 활성 상태로 남는다.** `missing` 만으로는 "그냥 없어서 건너뜀"과 구별되지 않으므로
+   * 별도 필드로 노출한다. 특히 소스 집합이 확장된 직후(예: 0.8.1 의 Goose provider 캐시 정정)
+   * 기존 프로필은 새 아티팩트를 갖고 있지 않아 이 상태가 정상적으로 발생하며, 사용자는
+   * 해당 프로필을 재스냅샷해야 한다.
+   *
+   * 전환 자체를 fail-closed 로 막지는 않는다 — 그러면 소스 집합을 확장할 때마다 기존 모든
+   * 프로필이 전환 불가가 되는 자체 유발 denial-of-switch 가 된다. 격리 원칙이 금지하는 것은
+   * **조용한** 저하이므로, 구조적 필드 + 구분된 경고로 비침묵성과 귀속성을 확보한다.
+   */
+  carriedOver: string[];
 }
 
 /** 복원 plan: source 별 stored (프로필) + liveBackup (롤백용 라이브 백업) */
@@ -176,11 +198,12 @@ async function restoreProfileToLiveUnlocked(
   }
   const restored: string[] = [];
   const missing: string[] = [];
+  const carriedOver: string[] = [];
 
-  const plan = await collectRestorePlan(def, cliId, profileName, missing);
+  const plan = await collectRestorePlan(def, cliId, profileName, missing, carriedOver);
   await applyRestorePlan(plan, restored);
 
-  return { cliId, profileName, restored, missing };
+  return { cliId, profileName, restored, missing, carriedOver };
 }
 
 /** 복원 전 preflight: 모든 source 의 stored + 현재 라이브 값을 메모리에 수집. */
@@ -188,7 +211,8 @@ async function collectRestorePlan(
   def: CliDef,
   cliId: string,
   profileName: string,
-  missing: string[]
+  missing: string[],
+  carriedOver: string[]
 ): Promise<RestorePlan[]> {
   const plan: RestorePlan[] = [];
   for (const src of def.sources) {
@@ -198,6 +222,9 @@ async function collectRestorePlan(
     const liveBackup = await readSource(src);
     if (stored == null) {
       missing.push(src.saveAs);
+      // 프로필에는 없는데 라이브에는 값이 있다 → 직전 계정 자격증명이 활성 상태로 남는다.
+      // liveBackup 은 위에서 이미 무조건 계산하므로 추가 I/O 가 없다.
+      if (liveBackup != null) carriedOver.push(src.saveAs);
       plan.push({ src, stored: null, liveBackup });
       continue;
     }
@@ -238,7 +265,11 @@ async function applyRestorePlan(plan: RestorePlan[], restored: string[]): Promis
 }
 
 function errorText(err: unknown): string {
-  if (err instanceof Error && /^(?:unsafe directory source:|Goose provider cache |profile capture )/.test(err.message)) return err.message;
+  // `unsafe Goose provider cache …` 계열을 반드시 포함할 것 — 이 sentinel 들은 `unsafe ` 로
+  // 시작하므로 `unsafe directory source:` 대안에 걸리지 않아, 누락되면 롤백 집계에서
+  // `operation failed` 로 붕괴해 어떤 하드닝 검사가 실패했는지 알 수 없게 된다.
+  // (`providerPublicError` 의 whitelist 는 이미 이 계열을 원문 통과시킨다 — 그쪽과 대칭을 맞춘다.)
+  if (err instanceof Error && /^(?:unsafe directory source:|unsafe Goose provider cache |Goose provider cache |profile capture )/.test(err.message)) return err.message;
   const code = errorCode(err);
   return `operation failed${code ? ` (${code})` : ''}`;
 }
@@ -331,7 +362,7 @@ async function switchProfileUnlocked(
   if (current != null && current === toProfile && (await profileExists(cliId, toProfile))) {
     return {
       fromSnapshot: undefined,
-      restore: { cliId, profileName: toProfile, restored: [], missing: [] },
+      restore: { cliId, profileName: toProfile, restored: [], missing: [], carriedOver: [] },
       preSwapLiveFreshness: undefined
     };
   }

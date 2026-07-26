@@ -49,6 +49,12 @@ export function formatSwitchResult(r: SwitchResult, to: string): string {
   if (r.restore.missing.length) {
     lines.push(`  (프로필에 없어 건너뜀: ${r.restore.missing.join(', ')})`);
   }
+  // 위 중립 안내와 **반드시 구별되는 별도 경고 라인**. "건너뜀" 은 그냥 없다는 뜻으로 읽히지만
+  // 이쪽은 직전 계정의 자격증명이 여전히 활성이라는 뜻이라 의미가 전혀 다르다.
+  if (r.restore.carriedOver.length) {
+    lines.push(`  ⚠ 이전 계정 자격증명이 라이브에 그대로 남아 있습니다: ${r.restore.carriedOver.join(', ')}`);
+    lines.push(`    → 이 프로필을 다시 캡처(재스냅샷)해야 해당 아티팩트가 프로필에 포함됩니다.`);
+  }
   return lines.join('\n');
 }
 

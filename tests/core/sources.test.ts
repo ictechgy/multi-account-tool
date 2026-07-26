@@ -214,24 +214,26 @@ describe('sources — fixed Goose provider files', () => {
   afterEach(async () => { __setSourceFsOpsForTests(null); __setBeforePinnedRemoveForTests(null); __setPinnedWriteTestHooksForTests(null); await tmp.cleanup(); });
 
   it('treats a file beneath missing fixed ancestors as an ordinary absent source', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
+    const src: FileSource = { type: 'file', path: '~/.config/goose/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
     await expect(readSource(src)).resolves.toBeNull();
     await expect(sourceExists(src)).resolves.toBe(false);
     await expect(removeSource(src)).resolves.toBeUndefined();
   });
 
   it('does not follow a provider-file symlink', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
-    const target = join(tmp.home, '.config/goose/providers/gemini_oauth');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
+    const target = join(tmp.home, '.config/goose/gemini_oauth');
     await fs.mkdir(target, { recursive: true, mode: 0o700 });
     await fs.symlink('/tmp/not-a-token', join(target, 'tokens.json'));
     await expect(readSource(src)).rejects.toThrow(/unsafe Goose provider cache file/);
   });
 
   it('does not follow a provider ancestor symlink for read, existence, or write', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
+    const src: FileSource = { type: 'file', path: '~/.config/goose/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
     await fs.mkdir(join(tmp.home, '.config/goose'), { recursive: true, mode: 0o700 });
-    await fs.symlink('/tmp', join(tmp.home, '.config/goose/providers'));
+    // 조상 symlink 는 provider **자신의 부모 디렉토리**여야 의미가 있다. 정정된 경로에서
+    // `xai_oauth` 가 그 부모다 (0.8.0 은 존재하지도 않는 `providers` 를 심었다).
+    await fs.symlink('/tmp', join(tmp.home, '.config/goose/xai_oauth'));
     await expect(readSource(src)).rejects.toThrow(/unsafe Goose provider cache parent/);
     await expect(sourceExists(src)).rejects.toThrow(/unsafe Goose provider cache parent/);
     await expect(writeSource(src, 'opaque')).rejects.toThrow(/unsafe Goose provider cache parent/);
@@ -240,11 +242,11 @@ describe('sources — fixed Goose provider files', () => {
   it('does not follow the nested Hugging Face provider ancestor for read, existence, or write', async () => {
     const src: FileSource = {
       type: 'file',
-      path: '~/.config/goose/providers/huggingface/oauth/tokens.json',
+      path: '~/.config/goose/huggingface/oauth/tokens.json',
       saveAs: 'goose-provider-huggingface-oauth-tokens.json'
     };
-    await fs.mkdir(join(tmp.home, '.config/goose/providers'), { recursive: true, mode: 0o700 });
-    await fs.symlink('/tmp', join(tmp.home, '.config/goose/providers/huggingface'));
+    await fs.mkdir(join(tmp.home, '.config/goose'), { recursive: true, mode: 0o700 });
+    await fs.symlink('/tmp', join(tmp.home, '.config/goose/huggingface'));
 
     await expect(readSource(src)).rejects.toThrow(/unsafe Goose provider cache parent/);
     await expect(sourceExists(src)).rejects.toThrow(/unsafe Goose provider cache parent/);
@@ -252,8 +254,8 @@ describe('sources — fixed Goose provider files', () => {
   });
 
   it('rejects provider hardlink substitution and never reads or mutates the outside inode', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
-    const target = join(tmp.home, '.config/goose/providers/gemini_oauth');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
+    const target = join(tmp.home, '.config/goose/gemini_oauth');
     const outside = join(tmp.home, 'outside-token');
     await fs.mkdir(target, { recursive: true, mode: 0o700 }); await fs.writeFile(outside, 'outside-secret', { mode: 0o600 });
     await fs.link(outside, join(target, 'tokens.json'));
@@ -264,8 +266,8 @@ describe('sources — fixed Goose provider files', () => {
   });
 
   it('fails closed for ENOENT and symlink/hardlink changes between validation and open without leaking paths', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
-    const target = join(tmp.home, '.config/goose/providers/xai_oauth/tokens.json');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
+    const target = join(tmp.home, '.config/goose/xai_oauth/tokens.json');
     await fs.mkdir(join(target, '..'), { recursive: true, mode: 0o700 }); await fs.writeFile(target, 'inside', { mode: 0o600 });
     __setSourceFsOpsForTests({ open: async (path, flags, mode) => {
       if (path === target) throw Object.assign(new Error(`ENOENT ${target} credential-bytes`), { code: 'ENOENT' });
@@ -288,8 +290,8 @@ describe('sources — fixed Goose provider files', () => {
   });
 
   it('detects a provider parent replacement during write and leaves the outside target untouched', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' };
-    const parent = join(tmp.home, '.config/goose/providers/kimicode');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' };
+    const parent = join(tmp.home, '.config/goose/kimicode');
     const outside = join(tmp.home, 'outside-dir'); await fs.mkdir(outside, { mode: 0o700 });
     const outsideFile = join(outside, 'token.json'); await fs.writeFile(outsideFile, 'outside-secret', { mode: 0o600 });
     await fs.mkdir(parent, { recursive: true, mode: 0o700 });
@@ -305,8 +307,8 @@ describe('sources — fixed Goose provider files', () => {
   });
 
   it('rejects target replacement before rename and ENOENT at unlink without mutating outside bytes', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' };
-    const target = join(tmp.home, '.config/goose/providers/chatgpt_codex/tokens.json');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' };
+    const target = join(tmp.home, '.config/goose/chatgpt_codex/tokens.json');
     await fs.mkdir(join(target, '..'), { recursive: true, mode: 0o700 }); await fs.writeFile(target, 'old', { mode: 0o600 });
     const outside = join(tmp.home, 'outside'); await fs.writeFile(outside, 'outside-secret', { mode: 0o600 });
     __setPinnedWriteTestHooksForTests({
@@ -329,8 +331,8 @@ describe('sources — fixed Goose provider files', () => {
   });
 
   it('cleans the exclusive temp after an immediate post-open failure without activating credential bytes', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' };
-    const parent = join(tmp.home, '.config/goose/providers/kimicode');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' };
+    const parent = join(tmp.home, '.config/goose/kimicode');
     await fs.mkdir(parent, { recursive: true, mode: 0o700 });
     const secret = 'never-activate-this-secret';
     let tempName = '';
@@ -349,8 +351,8 @@ describe('sources — fixed Goose provider files', () => {
   });
 
   it('atomically writes absent and existing provider targets with private mode', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
-    const target = join(tmp.home, '.config/goose/providers/gemini_oauth/tokens.json');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' };
+    const target = join(tmp.home, '.config/goose/gemini_oauth/tokens.json');
     await writeSource(src, 'first');
     const first = await fs.stat(target);
     expect(first.mode & 0o777).toBe(0o600);
@@ -364,7 +366,7 @@ describe('sources — fixed Goose provider files', () => {
 
   it('permits private provider parents when process.getuid is unavailable', async () => {
     const descriptor = Object.getOwnPropertyDescriptor(process, 'getuid');
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
+    const src: FileSource = { type: 'file', path: '~/.config/goose/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
     try {
       Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
       await writeSource(src, 'opaque');
@@ -375,8 +377,8 @@ describe('sources — fixed Goose provider files', () => {
   });
 
   it('pins the provider parent inode so an ancestor swap cannot delete an outside token file', async () => {
-    const src: FileSource = { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
-    const parent = join(tmp.home, '.config/goose/providers/xai_oauth'); const target = join(parent, 'tokens.json');
+    const src: FileSource = { type: 'file', path: '~/.config/goose/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' };
+    const parent = join(tmp.home, '.config/goose/xai_oauth'); const target = join(parent, 'tokens.json');
     await fs.mkdir(parent, { recursive: true, mode: 0o700 }); await fs.writeFile(target, 'inside', { mode: 0o600 });
     const outside = join(tmp.home, 'outside-dir'); await fs.mkdir(outside, { mode: 0o700 });
     const outsideTarget = join(outside, 'tokens.json'); await fs.writeFile(outsideTarget, 'outside-secret', { mode: 0o600 });

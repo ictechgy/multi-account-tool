@@ -17,6 +17,7 @@
 import { join } from 'node:path';
 
 import { loadUserCliDefs } from './cli-defs-plugin.js';
+import { gooseConfigSources, gooseProviderCacheSources } from './goose-provider-cache.js';
 import type { CliDef, Source } from './types.js';
 import { assertValidSourceList } from './validators.js';
 
@@ -107,22 +108,12 @@ function gooseUsesFileBackend(): boolean {
 }
 
 function gooseSources(): Source[] {
-  const yamlSources: Source[] = [
-    { type: 'file', path: '~/.config/goose/secrets.yaml', saveAs: 'goose-secrets.yaml' },
-    { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
-  ];
-  // Upstream admission: aaif-goose/goose v1.43.0, commit
-  // 5a9eb7edea1e081e2d54473ae41481f0289b826a. Fixed paths only; no provider
-  // discovery and no session capability are introduced here.
-  const providerSources: Source[] = [
-    { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' },
-    { type: 'file', path: '~/.config/goose/providers/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' },
-    { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' },
-    { type: 'directory', path: '~/.config/goose/providers/githubcopilot', saveAs: 'goose-provider-githubcopilot.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
-    { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' },
-    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
-    { type: 'file', path: '~/.config/goose/providers/huggingface/oauth/tokens.json', saveAs: 'goose-provider-huggingface-oauth-tokens.json' }
-  ];
+  // 경로 리터럴은 goose-provider-cache.ts 한 곳에만 둔다 — 0.8.0 까지 같은 문자열이
+  // 여기·sources.ts 가드·doctor.ts 가드 세 곳에 재기술돼 있었고, 세 곳이 똑같이 업스트림에
+  // 없는 `providers/` 세그먼트를 담고 있었기 때문에 어떤 테스트도 결함을 잡지 못했다.
+  // 하드닝 가드가 같은 배열에서 판정을 파생하므로 경로와 가드가 갈라질 수 없다.
+  const yamlSources: Source[] = gooseConfigSources();
+  const providerSources: Source[] = gooseProviderCacheSources();
   // file backend(GOOSE_DISABLE_KEYRING 존재) 면 macOS 도 keychain 을 생략한다 — Goose 가
   // file backend 일 때 stale keychain 항목을 swap 하는 wrong-account 위험 차단 (Linux 와 대칭).
   if (process.platform === 'darwin' && !gooseUsesFileBackend()) {

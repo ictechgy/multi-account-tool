@@ -301,13 +301,13 @@ describe('gooseSources — platform 별 분기 (multi-source + account scope 검
     { type: 'file', path: '~/.config/goose/config.yaml', saveAs: 'goose-config.yaml' }
   ];
   const PROVIDER_SOURCES = [
-    { type: 'file', path: '~/.config/goose/providers/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' },
-    { type: 'file', path: '~/.config/goose/providers/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' },
-    { type: 'file', path: '~/.config/goose/providers/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' },
-    { type: 'directory', path: '~/.config/goose/providers/githubcopilot', saveAs: 'goose-provider-githubcopilot.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
-    { type: 'file', path: '~/.config/goose/providers/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' },
-    { type: 'directory', path: '~/.config/goose/providers/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
-    { type: 'file', path: '~/.config/goose/providers/huggingface/oauth/tokens.json', saveAs: 'goose-provider-huggingface-oauth-tokens.json' }
+    { type: 'file', path: '~/.config/goose/gemini_oauth/tokens.json', saveAs: 'goose-provider-gemini-oauth-tokens.json' },
+    { type: 'file', path: '~/.config/goose/chatgpt_codex/tokens.json', saveAs: 'goose-provider-chatgpt-codex-tokens.json' },
+    { type: 'file', path: '~/.config/goose/kimicode/token.json', saveAs: 'goose-provider-kimicode-token.json' },
+    { type: 'directory', path: '~/.config/goose/githubcopilot', saveAs: 'goose-provider-githubcopilot.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
+    { type: 'file', path: '~/.config/goose/xai_oauth/tokens.json', saveAs: 'goose-provider-xai-oauth-tokens.json' },
+    { type: 'directory', path: '~/.config/goose/databricks/oauth', saveAs: 'goose-provider-databricks-oauth.tree.json', maxEntries: 128, maxBytes: 1_048_576, maxDepth: 8 },
+    { type: 'file', path: '~/.config/goose/huggingface/oauth/tokens.json', saveAs: 'goose-provider-huggingface-oauth-tokens.json' }
   ];
 
   it('platform=darwin (기본 keyring) → keychain(service=goose, account=secrets) + secrets.yaml + config.yaml', async () => {

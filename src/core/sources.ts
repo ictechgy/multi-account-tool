@@ -15,6 +15,7 @@
 import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, relative, sep } from 'node:path';
 import { expandTilde } from './paths.js';
+import { isAdmittedGooseProviderCacheFile } from './goose-provider-cache.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import { unsupportedEnvSecretSource } from './env-secret-source.js';
 import { writeFileAtomic } from './io-atomic.js';
@@ -331,8 +332,16 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * provider 캐시 파일 하드닝 경로를 타야 하는 source 인지.
+ *
+ * 문자열 prefix 판정을 쓰지 않는다 — 0.8.0 의 prefix `~/.config/goose/providers/` 는 업스트림에
+ * 없는 세그먼트를 요구해서 실제 캐시를 **한 번도 매칭하지 못했고**, 정정된 경로는 `secrets.yaml`
+ * /`config.yaml` 과 같은 디렉토리 직하에 있으므로 prefix 를 넓히면 두 YAML 까지 하드닝 경로로
+ * 삼켜 기존 동작을 반전시킨다. 따라서 goose-provider-cache.ts 의 정확 집합 멤버십으로 판정한다.
+ */
 function isGooseProviderFile(src: FileSource): boolean {
-  return src.path.startsWith('~/.config/goose/providers/');
+  return isAdmittedGooseProviderCacheFile(src.path);
 }
 
 async function checkedProviderReadImpl(src: FileSource): Promise<string | null> {
@@ -503,17 +512,18 @@ export async function removeSource(src: Source): Promise<void> {
         try { await removeGooseProviderFile(src); } catch (err) { throw providerPublicError(err); }
         return;
       }
+      // 여기는 provider 캐시가 **아닌** 일반 파일 전용 경로다 — provider 파일은 위에서
+      // removeGooseProviderFile 로 조기 return 되므로, 부모 identity pinning 과 nlink 검사는
+      // 그쪽에만 존재한다. (0.8.0 에는 `const parents = null` 과 도달 불가한
+      // `isGooseProviderFile(src) && …` 항이 남아 있어 이 경로에도 하드닝이 있는 것처럼
+      // 읽혔다 — 실제로는 항상 false 인 죽은 코드였다.)
       const path = expandTilde(src.path);
-      const parents = null;
-      if (parents) await assertProviderParentsUnchanged(parents);
       const st = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
       if (st == null) return;
-      if (st.isSymbolicLink() || !st.isFile() || (isGooseProviderFile(src) && st.nlink !== 1)) throw new Error('unsafe source removal');
-      if (parents) await assertProviderParentsUnchanged(parents);
+      if (st.isSymbolicLink() || !st.isFile()) throw new Error('unsafe source removal');
       const again = await fs.lstat(path);
-      if (again.isSymbolicLink() || !again.isFile() || again.dev !== st.dev || again.ino !== st.ino || (isGooseProviderFile(src) && again.nlink !== 1)) throw new Error('unsafe source removal');
+      if (again.isSymbolicLink() || !again.isFile() || again.dev !== st.dev || again.ino !== st.ino) throw new Error('unsafe source removal');
       await fs.unlink(path);
-      if (parents) await assertProviderParentsUnchanged(parents);
       return;
     }
     case 'directory': return removeDirectorySource(src);

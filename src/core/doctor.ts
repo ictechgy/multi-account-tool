@@ -14,6 +14,7 @@ import { getAllCliDefs, getCliDefsWarnings } from './cli-defs.js';
 import { loadConfig } from './config.js';
 import { envSecretSourceMetadata } from './env-secret-source.js';
 import { errorMessage, redactMessage } from './errors.js';
+import { isAdmittedGooseProviderCacheFile } from './goose-provider-cache.js';
 import { expandTilde, dataDir } from './paths.js';
 import { normalizeIsoString, normalizeProfileIdentity, formatProfileIdentity } from './profile-identity.js';
 import { listProfiles, profileExists, readMeta } from './profile-store.js';
@@ -127,7 +128,9 @@ async function existsNoFollow(path: string): Promise<{ exists: boolean; kind?: s
 
 async function inspectFileSource(src: Extract<Source, { type: 'file' }>): Promise<DoctorSourceStatus> {
   try {
-    if (src.path.startsWith('~/.config/goose/providers/')) {
+    // sources.ts 와 **같은 판정 함수**를 쓴다 — prefix 문자열을 여기 다시 적으면 0.8.0 의
+    // drift(가드 3곳이 각자 틀린 경로를 담고 있던 상태)가 그대로 재발한다.
+    if (isAdmittedGooseProviderCacheFile(src.path)) {
       const exists = await providerFileExistsChecked(src);
       return { saveAs: redactMessage(src.saveAs), type: src.type, status: exists ? 'present' : 'missing', detail: exists ? 'checked fixed provider cache file' : undefined };
     }
