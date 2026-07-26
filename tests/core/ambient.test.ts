@@ -169,6 +169,56 @@ describe('ambient warnings — shared detector', () => {
     }
   });
 
+  it('warns on ANTHROPIC_BASE_URL for claude — 목적지 재지정도 격리 경계다', async () => {
+    // z.ai GLM Coding Plan 같은 env 전용 통합은 이 변수로 세션 전체를 다른 provider/계정으로
+    // 보낸다. 토큰만 경고하고 이걸 놓치면 mat 의 "프로필 swap 성공" 보고가 사실과 어긋난다.
+    const warnings = await detectAmbientWarnings('claude', {
+      cwd: tmp.home,
+      env: { ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic' }
+    });
+    const serialized = JSON.stringify(warnings);
+
+    expect(serialized).toContain('ANTHROPIC_BASE_URL');
+    expect(serialized).not.toContain('api.z.ai');
+  });
+
+  it('does not warn on ANTHROPIC_DEFAULT_*_MODEL — mat 은 claude routing 아티팩트를 캡처하지 않는다', async () => {
+    const warnings = await detectAmbientWarnings('claude', {
+      cwd: tmp.home,
+      env: {
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-4.6',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-4.6',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air'
+      }
+    });
+
+    expect(warnings.filter((w) => w.channel === 'env')).toHaveLength(0);
+  });
+
+  it('warns on ANTHROPIC_HOST for goose — ANTHROPIC_BASE_URL 이 아니라 이 이름이다', async () => {
+    // goose 의 anthropic provider 는 config.get_param("ANTHROPIC_HOST") 를 읽고
+    // get_param 은 env 를 config.yaml 보다 우선한다 → 캡처된 goose-config.yaml 을 덮어쓴다.
+    const hostWarnings = await detectAmbientWarnings('goose', {
+      cwd: tmp.home,
+      env: { ANTHROPIC_HOST: 'https://api.z.ai/api/anthropic' }
+    });
+    expect(JSON.stringify(hostWarnings)).toContain('ANTHROPIC_HOST');
+
+    // goose 가 읽지 않는 이름으로 거짓 경고를 내지 않는다.
+    const baseUrlWarnings = await detectAmbientWarnings('goose', {
+      cwd: tmp.home,
+      env: { ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic' }
+    });
+    expect(baseUrlWarnings.filter((w) => w.channel === 'env')).toHaveLength(0);
+  });
+
+  it('warns on the goose config-dir resolver inputs that would silently void every fixed path', async () => {
+    for (const name of ['GOOSE_PATH_ROOT', 'XDG_CONFIG_HOME']) {
+      const warnings = await detectAmbientWarnings('goose', { cwd: tmp.home, env: { [name]: '/tmp/relocated' } });
+      expect(JSON.stringify(warnings), name).toContain(name);
+    }
+  });
+
   it('formats a warning-only block', async () => {
     const warnings = await detectAmbientWarnings('codex', {
       cwd: tmp.home,

@@ -118,8 +118,8 @@
 </tr>
 <tr>
 <td>Goose</td>
-<td>기존 Keychain/Secret Service + YAML과 <code>~/.config/goose/providers/</code>의 고정 파일 5개/제한 디렉터리 2개</td>
-<td>프로필 swap 전용; v1.43 고정 경로만, discovery/session 격리 없음</td>
+<td>기존 Keychain/Secret Service + YAML과 <code>~/.config/goose/</code> <strong>직하</strong>의 고정 파일 5개/제한 디렉터리 2개</td>
+<td>프로필 swap 전용; v1.43 고정 경로만, discovery/session 격리 없음. <strong>0.8.1 이전에 캡처한 프로필은 재스냅샷 필요</strong></td>
 </tr>
 <tr>
 <td>Grok Build</td>
@@ -270,7 +270,7 @@
 <td>✅</td>
 <td>✅ os-keyring</td>
 <td>❌</td>
-<td>기존 <code>goose</code>/<code>secrets</code> backend + YAML 동작은 유지한다. Linux 기본 keyring 경로에는 <code>secret-tool</code>(libsecret-tools)과 실행 중인 keyring daemon이 필요하다. 도구 부재/접근 거부는 stale YAML fallback이 아니라 <strong>명시 에러</strong>다. CLI 부재만으로 Goose의 libsecret keyring 미사용이 증명되지 않기 때문이다. Goose가 file backend를 쓰도록 의도적으로 설정한 경우에만 <code>GOOSE_DISABLE_KEYRING=1</code>을 사용한다(값 무관 presence-only). MAT는 Goose v1.43.0 source commit <code>5a9eb7e</code>로 확인한 <code>providers/</code> 하위 파일 5개와 제한된 디렉터리 2개만 swap한다. 일곱 번째 artifact는 Hugging Face <code>oauth/tokens.json</code>이며, 이를 우회할 수 있는 <code>HF_TOKEN</code>은 ambient warning으로 보고한다. discovery/session/run은 열지 않고 schema는 redacted fixture 승인 전 opaque이며 Windows는 미지원이다.</td>
+<td>기존 <code>goose</code>/<code>secrets</code> backend + YAML 동작은 유지한다. Linux 기본 keyring 경로에는 <code>secret-tool</code>(libsecret-tools)과 실행 중인 keyring daemon이 필요하다. 도구 부재/접근 거부는 stale YAML fallback이 아니라 <strong>명시 에러</strong>다. CLI 부재만으로 Goose의 libsecret keyring 미사용이 증명되지 않기 때문이다. Goose가 file backend를 쓰도록 의도적으로 설정한 경우에만 <code>GOOSE_DISABLE_KEYRING=1</code>을 사용한다(값 무관 presence-only). MAT는 Goose v1.43.0 source commit <code>5a9eb7e</code>로 확인한 <code>~/.config/goose/</code> <strong>직하</strong> 파일 5개(<code>gemini_oauth/tokens.json</code>, <code>chatgpt_codex/tokens.json</code>, <code>kimicode/token.json</code>, <code>xai_oauth/tokens.json</code>, <code>huggingface/oauth/tokens.json</code>)와 제한된 디렉터리 2개(<code>githubcopilot/</code>, <code>databricks/oauth/</code>)만 swap한다. <strong>0.8.1 이전 릴리스는 업스트림에 존재하지 않는 <code>~/.config/goose/providers/...</code> 를 한 단계 더 깊이 보고 있었으므로 그 프로필에는 provider artifact가 하나도 없다 — 업그레이드 후 각 Goose 프로필을 재스냅샷하라.</strong> 프로필에 대응 값이 없는데 라이브에 provider 캐시가 있으면 조용히 건너뛰지 않고 &quot;이전 계정 자격증명이 남아 있음&quot;으로 보고한다. 이를 우회·재배치할 수 있는 <code>ANTHROPIC_HOST</code>, <code>HF_TOKEN</code>, <code>GOOSE_PATH_ROOT</code>, <code>XDG_CONFIG_HOME</code>은 ambient warning으로 보고하며, 재배치된 Goose config 디렉터리는 미지원이다. Goose는 이 캐시 디렉터리를 명시 mode 없이 만들기 때문에 group-writable umask면 <code>0775</code>가 되어 MAT의 private-parent 검사가 fail-closed로 막는다 — <code>mat doctor</code>로 어느 artifact인지 확인한 뒤 그 디렉터리에 <code>chmod g-w,o-w</code>를 적용하라. discovery/session/run은 열지 않고 schema는 redacted fixture 승인 전 opaque이며 Windows는 미지원이다.</td>
 </tr>
 <tr>
 <td>Grok Build</td>
