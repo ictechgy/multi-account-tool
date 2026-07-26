@@ -113,6 +113,16 @@ describe('goose provider cache — 근접 실패 (각 케이스 독립)', () => 
     expect(normalize(denormalized)).toBe(join(homedir(), '.config/goose/gemini_oauth/tokens.json'));
   });
 
+  it('구역 루트 자신도 구역 안으로 분류된다 (술어가 경계에서 틀리지 않아야 한다)', () => {
+    // `root + sep` 하위만 보면 루트와 `root/.`(정규화 후 루트와 동일)가 'outside' 로 새어나가,
+    // plugin 이 구역 전체를 가리키는 경로를 선언해도 예약구역 거부에 걸리지 않는다.
+    for (const p of ['~/.config/goose', '~/.config/goose/', '~/.config/goose/.']) {
+      expect(classifyGoosePath(p), p).toBe('reserved-nonadmitted');
+    }
+    // 다만 루트는 인정 **파일** 이 아니므로 파일 하드닝 대상은 아니다.
+    expect(isAdmittedGooseProviderCacheFile('~/.config/goose')).toBe(false);
+  });
+
   it('goose 구역 밖 경로는 그대로 일반 source 로 취급된다', () => {
     expect(classifyGoosePath('~/.config/other/tokens.json')).toBe('outside');
     expect(isAdmittedGooseProviderCacheFile('~/.config/other/tokens.json')).toBe(false);

@@ -173,6 +173,9 @@ export function classifyGoosePath(path: string): 'admitted' | 'reserved-nonadmit
   const normalized = comparableGoosePath(path);
   if (canonicalComparableGoosePaths().has(normalized)) return 'admitted';
   const root = comparableGoosePath(GOOSE_CONFIG_ROOT);
+  // 구역 **루트 자신**도 구역 안이다. `root + sep` 하위만 보면 `~/.config/goose` 와
+  // `~/.config/goose/.`(정규화 후 루트와 동일)가 'outside' 로 새어나가, 술어가 경계에서 틀린다.
+  if (normalized === root) return 'reserved-nonadmitted';
   // 플랫폼 구분자를 쓴다. Windows 에서 `normalize` 는 백슬래시를 만들므로 `/` 로 고정 비교하면
   // 예약구역 안의 경로가 전부 'outside' 로 새어나가 보호가 사라진다.
   return normalized.startsWith(`${root}${sep}`) ? 'reserved-nonadmitted' : 'outside';
