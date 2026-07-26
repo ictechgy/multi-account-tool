@@ -85,9 +85,13 @@ async function snapshotLiveToProfileUnlocked(
     // 단 **원본 에러 객체를 교체하지 않는다**:
     //  - `new Error(...)` 로 감싸면 `err.code` 와 `KeychainAccountMissingError.service` 같은
     //    커스텀 필드가 사라져 그 필드로 분기하는 호출자가 깨진다.
-    //  - 메시지 **앞**에 무엇이든 붙이면 `errorText`(`^` 앵커)와 `providerPublicError`
-    //    (`^…$` 완전 앵커)의 sentinel 매칭이 깨져 공개 문구가 `operation failed` 로 붕괴한다.
-    // 따라서 원본을 그대로 재throw 하고 귀속은 **접미어**로만 덧붙인다.
+    //  - 메시지 **앞**에 무엇이든 붙이면 `errorText`(`^` 앵커)의 sentinel 매칭이 깨져
+    //    공개 문구가 `operation failed` 로 붕괴한다. 그래서 귀속은 **접미어**로만 붙인다.
+    //
+    // 접미어가 안전한 이유는 접미어 자체가 무해해서가 **아니다** — `providerPublicError` 는
+    // `^…$` 완전 앵커라 접미어도 매칭을 깬다. 안전한 이유는 그 sanitize 가 `sources.ts` 의
+    // 4개 진입점에서 **이 catch 보다 먼저** 끝나고 이후 재적용되지 않기 때문이다. 따라서
+    // 나중에 이 메시지를 다시 `providerPublicError` 로 통과시키는 경로를 추가하면 안 된다.
     const value = await readSource(src).catch((err: unknown) => {
       if (err instanceof Error) err.message = `${err.message} (${src.saveAs}; 'mat doctor' 로 확인)`;
       throw err;

@@ -241,6 +241,10 @@ describe('Goose v1.43 provider caches — temporary HOME integration', () => {
       // 그대로 따르면 다른 계정의 자격증명을 이 프로필에 저장하게 된다. 회귀 방지 단정.
       expect(text).toMatch(/재캡처하지 마세요/);
       expect(text).toMatch(/다시 로그인/);
+      // 라이브가 어느 계정 것인지 모르는 상태에서 '다른 프로필을 재캡처하라' 고 안내하면
+      // 계정 교차 저장을 유도한다. 확인 채널로 유도하는지 고정한다.
+      expect(text).toMatch(/mat freshness/);
+      expect(text).not.toMatch(/그 프로필을 먼저 재캡처/);
       expect(text).not.toMatch(/이 프로필을 다시 캡처\(재스냅샷\)해야/);
     } finally {
       if (previous === undefined) delete process.env.GOOSE_DISABLE_KEYRING;
