@@ -16,9 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   않는다**(v1.35.0–v1.44.0 전 태그에서 확인). 부재 source 는 skip 되므로 mat 은 Goose provider
   OAuth 캐시를 **한 번도 캡처·복원한 적이 없으면서** 프로필 전환을 성공으로 보고했다 — 이전 계정의
   provider 토큰이 그대로 활성 상태로 남는 격리 위반. 정정된 경로는 `~/.config/goose/` 직하다.
-  - **업그레이드 후 각 Goose 프로필을 재스냅샷해야 한다.** 0.8.1 이전 프로필에는 provider
-    아티팩트가 없고, restore 는 프로필이 갖고 있지 않은 라이브 파일을 삭제하지 않는다(의도된 설계).
-    그 상태를 조용히 넘기지 않도록 `RestoreResult.carriedOver` 와 전용 경고 라인을 추가했다.
+  - **0.8.1 이전 프로필에는 provider 아티팩트가 없다.** restore 는 프로필이 갖고 있지 않은
+    라이브 파일을 삭제하지 않으므로(의도된 설계) 직전 계정 토큰이 그대로 남는다. 그 상태를
+    조용히 넘기지 않도록 `RestoreResult.carriedOver` 와 전용 경고 라인을 추가했다.
+  - **복구 순서가 중요하다**: 각 Goose 프로필은 **그 프로필의 계정으로 로그인한 상태에서**
+    재캡처하라. carry-over 경고가 뜬 직후에 재캡처하면 방금 전환한 프로필에 **직전 계정의**
+    자격증명을 저장하게 되므로 그때는 재캡처하지 말고 해당 계정으로 다시 로그인하라.
   - `saveAs` 이름·프로필 레이아웃·identity/freshness 계약은 불변이라 마이그레이션은 불필요하다.
 - 경로 리터럴을 `src/core/goose-provider-cache.ts` **한 곳**으로 모으고, `sources.ts`/`doctor.ts`
   의 하드닝 가드가 같은 배열에서 멤버십을 파생하도록 바꿨다. 0.8.0 은 같은 문자열이 세 곳에

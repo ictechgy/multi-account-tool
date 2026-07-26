@@ -300,7 +300,7 @@ const REGISTRY: Record<string, SupportMetadata> = {
         ],
         risks: [
           'Unknown provider layouts and token schemas remain opaque; missing secret-tool does not prove Goose is not using libsecret.',
-          'Releases before 0.8.1 recorded these caches one directory too deep (~/.config/goose/providers/...), so profiles captured before 0.8.1 hold no provider artifacts and must be re-snapshotted.',
+          'Releases before 0.8.1 recorded these caches one directory too deep (~/.config/goose/providers/...), so profiles captured before 0.8.1 hold no provider artifacts. Re-capture each profile while its own account is logged in to Goose; never re-capture right after a switch reported a carried-over artifact, because the live cache then belongs to the previous account.',
           'Goose creates provider cache directories with no explicit mode, so a group-writable umask yields 0775 and MAT fails closed on the private-parent check. Run "mat doctor" to see which artifact is affected.'
         ]
       }

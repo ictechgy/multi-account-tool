@@ -323,8 +323,12 @@ describe('support registry — support/explain reports', () => {
     // risks 는 반대로 구 경로를 **의도적으로 언급**해야 한다 — 0.8.1 이전 프로필은 provider
     // 아티팩트를 갖고 있지 않아 재스냅샷이 필요하다는 사실이 기계 판독 출력에도 남아야 한다.
     const risks = contracts.flatMap(c => c.risks ?? []).join('\n');
-    expect(risks).toMatch(/re-snapshot/i);
     expect(risks).toContain('goose/providers');
+    // 복구 안내는 **순서 조건**을 반드시 포함해야 한다. "각 프로필을 재캡처하라" 만 적으면
+    // switch UX 의 "지금 재캡처하지 마세요" 경고와 정면으로 모순되고, 그대로 따르는 사용자는
+    // 직전 계정의 자격증명을 방금 전환한 프로필에 저장하게 된다.
+    expect(risks).toMatch(/re-capture each profile while its own account is logged in/i);
+    expect(risks).toMatch(/never re-capture right after a switch reported a carried-over artifact/i);
   });
 
   it('explains Crush freshness as supported conservative byte-diff with pin evidence', () => {
