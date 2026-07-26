@@ -78,13 +78,19 @@ async function snapshotLiveToProfileUnlocked(
   const values: Array<{ src: Source; value: string | null }> = [];
   // Read/preflight every source before any profile mutation.
   for (const src of def.sources) {
-    // 이 루프는 프로필을 만들기 전에 돌기 때문에(mutation 없음) 실패 시 그대로 전파되지만,
-    // 하드닝 sentinel 은 경로를 지운 상태라 어느 아티팩트가 막혔는지 알 수 없다. 예외에
-    // saveAs 를 붙여 귀속시킨다 — saveAs 는 doctor/switch 출력에 이미 노출되는 비밀 아닌
-    // 값이므로 누출 계약을 깨지 않는다. 사용자가 `mat doctor` 로 바로 좁혀갈 수 있어야 한다.
+    // 이 루프는 프로필을 만들기 전에 돌기 때문에(mutation 없음) 실패는 그대로 전파되지만,
+    // 하드닝 sentinel 은 경로를 지운 상태라 어느 아티팩트가 막혔는지 알 수 없다. saveAs 를
+    // 붙여 귀속시킨다 — saveAs 는 doctor/switch 출력에 이미 노출되는 비밀 아닌 값이다.
+    //
+    // 단 **원본 에러 객체를 교체하지 않는다**:
+    //  - `new Error(...)` 로 감싸면 `err.code` 와 `KeychainAccountMissingError.service` 같은
+    //    커스텀 필드가 사라져 그 필드로 분기하는 호출자가 깨진다.
+    //  - 메시지 **앞**에 무엇이든 붙이면 `errorText`(`^` 앵커)와 `providerPublicError`
+    //    (`^…$` 완전 앵커)의 sentinel 매칭이 깨져 공개 문구가 `operation failed` 로 붕괴한다.
+    // 따라서 원본을 그대로 재throw 하고 귀속은 **접미어**로만 덧붙인다.
     const value = await readSource(src).catch((err: unknown) => {
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new Error(`${src.saveAs}: ${detail} — 'mat doctor' 로 어떤 아티팩트가 막혔는지 확인하세요.`);
+      if (err instanceof Error) err.message = `${err.message} (${src.saveAs}; 'mat doctor' 로 확인)`;
+      throw err;
     });
     values.push({ src, value });
     if (value == null) {
@@ -154,8 +160,13 @@ export interface RestoreResult {
    * 않은 자격증명을 mat 이 삭제하면 데이터 손실 위험이 크다). 그 결과 **직전 계정의 자격증명이
    * 그대로 활성 상태로 남는다.** `missing` 만으로는 "그냥 없어서 건너뜀"과 구별되지 않으므로
    * 별도 필드로 노출한다. 특히 소스 집합이 확장된 직후(예: 0.8.1 의 Goose provider 캐시 정정)
-   * 기존 프로필은 새 아티팩트를 갖고 있지 않아 이 상태가 정상적으로 발생하며, 사용자는
-   * 해당 프로필을 재스냅샷해야 한다.
+   * 기존 프로필은 새 아티팩트를 갖고 있지 않아 이 상태가 정상적으로 발생한다.
+   *
+   * **복구 순서가 중요하다**: 이 필드가 채워진 직후에 방금 전환한 프로필을 재캡처하면 안 된다 —
+   * 그 시점의 라이브 값은 *직전* 계정 것이므로 다른 계정 자격증명을 이 프로필에 저장하게 된다.
+   * 올바른 조치는 해당 계정으로 다시 로그인해 아티팩트를 새로 만드는 것이고, 라이브 값이 다른
+   * 프로필 것이면 그 프로필을 먼저 재캡처하는 것이다. 사용자 대면 문구는 `formatSwitchResult`
+   * 가 소유하며 README/CHANGELOG/support 의 안내와 같은 순서 조건을 공유해야 한다.
    *
    * 전환 자체를 fail-closed 로 막지는 않는다 — 그러면 소스 집합을 확장할 때마다 기존 모든
    * 프로필이 전환 불가가 되는 자체 유발 denial-of-switch 가 된다. 격리 원칙이 금지하는 것은
