@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -112,13 +113,6 @@ describe('goose provider cache — 근접 실패 (각 케이스 독립)', () => 
     expect(normalize(denormalized)).toBe(join(homedir(), '.config/goose/gemini_oauth/tokens.json'));
   });
 
-  it('대소문자 변형은 인정되지 않는다 (0.8.0 과 동일한 잔여 상태이며 신규 회귀가 아니다)', () => {
-    // 판정은 파일시스템 identity 가 아니라 정규 표기 문자열 멤버십이다. 대소문자 무시
-    // 파일시스템에서는 같은 실물을 가리키면서 'outside' 로 분류된다 — 구 prefix 판정도
-    // 동일하게 이 표기를 하드닝하지 않았으므로 이번 변경이 만든 구멍이 아니다.
-    expect(isAdmittedGooseProviderCacheFile('~/.config/Goose/gemini_oauth/tokens.json')).toBe(false);
-  });
-
   it('goose 구역 밖 경로는 그대로 일반 source 로 취급된다', () => {
     expect(classifyGoosePath('~/.config/other/tokens.json')).toBe('outside');
     expect(isAdmittedGooseProviderCacheFile('~/.config/other/tokens.json')).toBe(false);
@@ -132,16 +126,44 @@ describe('goose provider cache — 근접 실패 (각 케이스 독립)', () => 
   });
 
   it('판정이 process.cwd() 에 의존하지 않는다', () => {
-    const path = '~/.config/goose/xai_oauth/tokens.json';
-    const original = process.cwd();
-    const first = isAdmittedGooseProviderCacheFile(path);
-    try {
-      process.chdir('/');
-      expect(isAdmittedGooseProviderCacheFile(path)).toBe(first);
-      expect(first).toBe(true);
-    } finally {
-      process.chdir(original);
+    // `process.chdir()` 로 검증하지 않는다 — vitest 의 worker-thread pool 에서는 지원되지 않아
+    // 러너 설정에 따라 테스트가 깨진다. 대신 cwd 의존성이 들어올 수 있는 유일한 경로인
+    // `resolve()` 가 판정에 쓰이지 않음을 소스 수준에서 고정하고, cwd 와 무관한 상대 경로가
+    // 인정되지 않음을 단정한다.
+    // 주석에는 "왜 resolve() 가 아닌가" 설명이 있으므로 주석을 제거한 **코드**만 검사한다.
+    const code = readFileSync(new URL('../../src/core/goose-provider-cache.ts', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    expect(code).not.toMatch(/\bresolve\s*\(/);
+    expect(code).toContain("import { normalize, sep } from 'node:path'");
+
+    // 상대 표기는 cwd 에 따라 의미가 달라지므로 어떤 cwd 에서도 인정돼선 안 된다.
+    expect(isAdmittedGooseProviderCacheFile('gemini_oauth/tokens.json')).toBe(false);
+    expect(classifyGoosePath('gemini_oauth/tokens.json')).toBe('outside');
+    // 반면 정경 표기는 cwd 와 무관하게 항상 인정된다.
+    expect(isAdmittedGooseProviderCacheFile('~/.config/goose/xai_oauth/tokens.json')).toBe(true);
+  });
+
+  it('대소문자를 구분하지 않는 플랫폼에서 케이스 변형이 예약구역 거부를 우회하지 못한다', () => {
+    // darwin/win32 는 `~/.config/Goose/...` 가 인정 경로와 같은 실물을 가리킨다. 문자열 동등성만
+    // 쓰면 'outside' 로 새어나가 plugin 이 하드닝 없는 쓰기를 얻는다.
+    const variant = '~/.config/Goose/gemini_oauth/tokens.json';
+    if (process.platform === 'darwin' || process.platform === 'win32') {
+      expect(classifyGoosePath(variant)).toBe('admitted');
+      expect(isAdmittedGooseProviderCacheFile(variant)).toBe(true);
+    } else {
+      expect(classifyGoosePath(variant)).toBe('outside');
     }
+  });
+
+  it('예약구역 판정이 플랫폼 경로 구분자를 쓴다', () => {
+    // Windows 에서 `normalize` 는 백슬래시를 만들므로 `/` 로 고정 비교하면 구역 내부 경로가
+    // 전부 'outside' 로 새어나가 보호가 사라진다.
+    const code = readFileSync(new URL('../../src/core/goose-provider-cache.ts', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    expect(code).not.toMatch(/startsWith\(`\$\{root\}\/`\)/);
+    expect(code).toMatch(/startsWith\(`\$\{root\}\$\{sep\}`\)/);
   });
 });
 

@@ -36,12 +36,16 @@
  * `config_dir()` 는 `GOOSE_PATH_ROOT` 와 XDG 를 존중하지만 mat 은 `~/.config/goose` 를 하드코딩한다.
  * 그 환경에서는 전 source 가 missing 이 되어 같은 클래스의 조용한 실패가 난다 — 완화책으로
  * `ambient.ts` 가 `GOOSE_PATH_ROOT`/`XDG_CONFIG_HOME` 을 경고하지만 해결은 아니다.
- * 또한 아래 판정은 **정규 표기 문자열 멤버십**이며 파일시스템 identity 보증이 아니다.
- * 대소문자 무시 파일시스템(APFS 등)에서 `~/.config/Goose/...` 는 같은 실물을 가리키면서
- * `'outside'` 로 분류된다 (0.8.0 과 동일한 잔여 상태이며 신규 권한 획득은 없다).
+ *
+ * 아래 판정은 **표기 문자열 멤버십**이며 파일시스템 identity 보증이 아니다. 대소문자를 구분하지
+ * 않는 플랫폼(darwin/win32)에서는 `comparableGoosePath` 가 접어서 비교하므로 `~/.config/Goose/...`
+ * 같은 변형도 구역 안으로 잡히지만, 대소문자를 구분하도록 포맷된 macOS 볼륨에서는 그 접기가
+ * 서로 다른 실물을 같은 것으로 취급할 수 있다 — 두 방향 모두 **더 엄격해지는** 쪽이라 보호가
+ * 약해지지는 않는다. hardlink / 마운트 경유 별칭은 여전히 이 판정의 범위 밖이며,
+ * `sources.ts` 의 부모 identity pinning 과 no-follow 검사가 실제 경계를 담당한다.
  */
 
-import { normalize } from 'node:path';
+import { normalize, sep } from 'node:path';
 import { expandTilde } from './paths.js';
 import type { DirectorySource, FileSource, Source } from './types.js';
 
@@ -103,20 +107,39 @@ export function normalizeGoosePath(p: string): string {
   return normalize(expandTilde(p));
 }
 
-/** 정규화된 인정 **파일** 경로 집합. 하드닝 가드 전용이라 YAML/디렉토리는 포함하지 않는다. */
+/**
+ * 파일시스템의 대소문자 구분 여부를 반영한 **비교 전용** 정규화.
+ *
+ * macOS(APFS/HFS+ 기본)와 Windows 는 대소문자를 구분하지 않으므로
+ * `~/.config/Goose/gemini_oauth/tokens.json` 은 인정 경로와 **같은 실물**을 가리킨다. 문자열
+ * 동등성만 쓰면 그 표기가 `'outside'` 로 분류되어, plugin 이 그 경로를 선언했을 때 예약구역
+ * 거부를 우회해 라이브 provider 토큰에 **하드닝 없는 쓰기**를 할 수 있다.
+ *
+ * 접기(fold)는 양방향 모두 안전한 방향이다: 예약구역 판정에서는 더 많은 경로가 구역 안으로
+ * 들어와 **거부가 늘어나고**, 하드닝 판정에서는 더 많은 경로가 인정되어 **보호가 늘어난다**.
+ * 저장된 경로 문자열 자체는 절대 바꾸지 않는다 — 비교에만 쓴다.
+ */
+function comparableGoosePath(p: string): string {
+  const normalized = normalizeGoosePath(p);
+  return caseInsensitiveFs ? normalized.toLowerCase() : normalized;
+}
+
+const caseInsensitiveFs = process.platform === 'darwin' || process.platform === 'win32';
+
+/** 인정 **파일** 경로의 비교용 집합. 하드닝 가드 전용이라 YAML/디렉토리는 포함하지 않는다. */
 function admittedProviderCacheFilePaths(): ReadonlySet<string> {
   return new Set(
     gooseProviderCacheSources()
       .filter((src): src is FileSource => src.type === 'file')
-      .map((src) => normalizeGoosePath(src.path))
+      .map((src) => comparableGoosePath(src.path))
   );
 }
 
-/** 예약구역 정경 표기 9개(provider 7 + YAML 2)의 정규화 경로 집합. */
-function canonicalGoosePaths(): ReadonlySet<string> {
+/** 예약구역 정경 표기 9개(provider 7 + YAML 2)의 비교용 경로 집합. */
+function canonicalComparableGoosePaths(): ReadonlySet<string> {
   return new Set(
     [...gooseProviderCacheSources(), ...gooseConfigSources()]
-      .map((src) => ('path' in src ? normalizeGoosePath(src.path) : ''))
+      .map((src) => ('path' in src ? comparableGoosePath(src.path) : ''))
       .filter((p) => p.length > 0)
   );
 }
@@ -129,7 +152,7 @@ function canonicalGoosePaths(): ReadonlySet<string> {
  * 일반 파일 경로로 다뤄야 한다(하드닝 경로로 끌어오면 기존 사용자의 스냅샷이 실패로 뒤집힌다).
  */
 export function isAdmittedGooseProviderCacheFile(path: string): boolean {
-  return admittedProviderCacheFilePaths().has(normalizeGoosePath(path));
+  return admittedProviderCacheFilePaths().has(comparableGoosePath(path));
 }
 
 /**
@@ -147,8 +170,10 @@ export function isAdmittedGooseProviderCacheFile(path: string): boolean {
  * 캡처되어 이중 캡처와 복원 순서 충돌이 생긴다.
  */
 export function classifyGoosePath(path: string): 'admitted' | 'reserved-nonadmitted' | 'outside' {
-  const normalized = normalizeGoosePath(path);
-  if (canonicalGoosePaths().has(normalized)) return 'admitted';
-  const root = normalizeGoosePath(GOOSE_CONFIG_ROOT);
-  return normalized.startsWith(`${root}/`) ? 'reserved-nonadmitted' : 'outside';
+  const normalized = comparableGoosePath(path);
+  if (canonicalComparableGoosePaths().has(normalized)) return 'admitted';
+  const root = comparableGoosePath(GOOSE_CONFIG_ROOT);
+  // 플랫폼 구분자를 쓴다. Windows 에서 `normalize` 는 백슬래시를 만들므로 `/` 로 고정 비교하면
+  // 예약구역 안의 경로가 전부 'outside' 로 새어나가 보호가 사라진다.
+  return normalized.startsWith(`${root}${sep}`) ? 'reserved-nonadmitted' : 'outside';
 }
