@@ -14,6 +14,7 @@
 
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -453,6 +454,48 @@ describe('validatePluginDefinition / validatePluginDirectory (static plugin lint
   afterEach(async () => {
     resetCliDefCache();
     await tmp.cleanup();
+  });
+
+  describe('file source path admission (0.8.1 — 로더를 실제로 호출한다)', () => {
+    const def = (path: string) => ({
+      id: 'pathcheck',
+      name: 'PathCheck',
+      sources: [{ type: 'file', path, saveAs: 'credentials.json' }]
+    });
+    const errorsOf = (path: string) => {
+      const r = validatePluginDefinition(def(path));
+      return r.diagnostics.filter((d) => d.severity === 'error').map((d) => d.message).join('\n');
+    };
+
+    it('상대경로를 거부한다 — 실행 디렉토리에 따라 다른 파일을 가리키기 때문', () => {
+      expect(errorsOf('gemini_oauth/tokens.json')).toMatch(/절대경로/);
+      expect(validatePluginDefinition(def('gemini_oauth/tokens.json')).def).toBeUndefined();
+    });
+
+    it('비정규 표기(`..`)를 거부한다 — 판정 문자열과 I/O 대상이 갈라지기 때문', () => {
+      const denormalized = `${homedir()}/.config/other/x/../auth.json`;
+      expect(errorsOf(denormalized)).toMatch(/정규화된 경로/);
+      expect(validatePluginDefinition(def(denormalized)).def).toBeUndefined();
+    });
+
+    it('goose 예약구역 내 비인정 경로를 거부한다 — 하드닝 우회 무검증 쓰기 차단', () => {
+      for (const p of [
+        '~/.config/goose/whatever.json',
+        '~/.config/goose/providers/gemini_oauth/tokens.json',
+        '~/.config/goose/githubcopilot/sub/x.json',
+        '~/.config/goose'
+      ]) {
+        expect(errorsOf(p), p).toMatch(/Goose 자격증명 구역/);
+        expect(validatePluginDefinition(def(p)).def, p).toBeUndefined();
+      }
+    });
+
+    it('구역 밖 절대/틸데 경로와 정경 표기는 계속 허용된다 (과잉 거부 방지)', () => {
+      for (const p of ['~/.config/other/auth.json', `${homedir()}/.config/other/auth.json`, '~']) {
+        expect(errorsOf(p), p).toBe('');
+        expect(validatePluginDefinition(def(p)).def?.id, p).toBe('pathcheck');
+      }
+    });
   });
 
   it('schema-valid risky plugin fields are warnings, not schema errors', () => {
