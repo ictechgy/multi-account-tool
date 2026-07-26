@@ -78,7 +78,24 @@ async function snapshotLiveToProfileUnlocked(
   const values: Array<{ src: Source; value: string | null }> = [];
   // Read/preflight every source before any profile mutation.
   for (const src of def.sources) {
-    const value = await readSource(src);
+    // 이 루프는 프로필을 만들기 전에 돌기 때문에(mutation 없음) 실패는 그대로 전파되지만,
+    // 하드닝 sentinel 은 경로를 지운 상태라 어느 아티팩트가 막혔는지 알 수 없다. saveAs 를
+    // 붙여 귀속시킨다 — saveAs 는 doctor/switch 출력에 이미 노출되는 비밀 아닌 값이다.
+    //
+    // 단 **원본 에러 객체를 교체하지 않는다**:
+    //  - `new Error(...)` 로 감싸면 `err.code` 와 `KeychainAccountMissingError.service` 같은
+    //    커스텀 필드가 사라져 그 필드로 분기하는 호출자가 깨진다.
+    //  - 메시지 **앞**에 무엇이든 붙이면 `errorText`(`^` 앵커)의 sentinel 매칭이 깨져
+    //    공개 문구가 `operation failed` 로 붕괴한다. 그래서 귀속은 **접미어**로만 붙인다.
+    //
+    // 접미어가 안전한 이유는 접미어 자체가 무해해서가 **아니다** — `providerPublicError` 는
+    // `^…$` 완전 앵커라 접미어도 매칭을 깬다. 안전한 이유는 그 sanitize 가 `sources.ts` 의
+    // 4개 진입점에서 **이 catch 보다 먼저** 끝나고 이후 재적용되지 않기 때문이다. 따라서
+    // 나중에 이 메시지를 다시 `providerPublicError` 로 통과시키는 경로를 추가하면 안 된다.
+    const value = await readSource(src).catch((err: unknown) => {
+      if (err instanceof Error) err.message = `${err.message} (${src.saveAs}; 'mat doctor' 로 확인)`;
+      throw err;
+    });
     values.push({ src, value });
     if (value == null) {
       empty.push(src.saveAs);
@@ -140,6 +157,26 @@ export interface RestoreResult {
   restored: string[];
   /** 프로필에 저장된 파일이 없어 건너뛴 source 의 saveAs 명 */
   missing: string[];
+  /**
+   * `missing` 중에서도 **라이브에 값이 남아 있는** source 의 saveAs 명 (`carriedOver ⊆ missing`).
+   *
+   * 프로필에 없으면 restore 는 라이브 파일을 건드리지 않는다(의도된 설계 — 프로필이 캡처하지
+   * 않은 자격증명을 mat 이 삭제하면 데이터 손실 위험이 크다). 그 결과 **직전 계정의 자격증명이
+   * 그대로 활성 상태로 남는다.** `missing` 만으로는 "그냥 없어서 건너뜀"과 구별되지 않으므로
+   * 별도 필드로 노출한다. 특히 소스 집합이 확장된 직후(예: 0.8.1 의 Goose provider 캐시 정정)
+   * 기존 프로필은 새 아티팩트를 갖고 있지 않아 이 상태가 정상적으로 발생한다.
+   *
+   * **복구 순서가 중요하다**: 이 필드가 채워진 직후에 방금 전환한 프로필을 재캡처하면 안 된다 —
+   * 그 시점의 라이브 값은 *직전* 계정 것이므로 다른 계정 자격증명을 이 프로필에 저장하게 된다.
+   * 올바른 조치는 해당 계정으로 다시 로그인해 아티팩트를 새로 만드는 것이고, 라이브 값이 다른
+   * 프로필 것이면 그 프로필을 먼저 재캡처하는 것이다. 사용자 대면 문구는 `formatSwitchResult`
+   * 가 소유하며 README/CHANGELOG/support 의 안내와 같은 순서 조건을 공유해야 한다.
+   *
+   * 전환 자체를 fail-closed 로 막지는 않는다 — 그러면 소스 집합을 확장할 때마다 기존 모든
+   * 프로필이 전환 불가가 되는 자체 유발 denial-of-switch 가 된다. 격리 원칙이 금지하는 것은
+   * **조용한** 저하이므로, 구조적 필드 + 구분된 경고로 비침묵성과 귀속성을 확보한다.
+   */
+  carriedOver: string[];
 }
 
 /** 복원 plan: source 별 stored (프로필) + liveBackup (롤백용 라이브 백업) */
@@ -176,11 +213,12 @@ async function restoreProfileToLiveUnlocked(
   }
   const restored: string[] = [];
   const missing: string[] = [];
+  const carriedOver: string[] = [];
 
-  const plan = await collectRestorePlan(def, cliId, profileName, missing);
+  const plan = await collectRestorePlan(def, cliId, profileName, missing, carriedOver);
   await applyRestorePlan(plan, restored);
 
-  return { cliId, profileName, restored, missing };
+  return { cliId, profileName, restored, missing, carriedOver };
 }
 
 /** 복원 전 preflight: 모든 source 의 stored + 현재 라이브 값을 메모리에 수집. */
@@ -188,7 +226,8 @@ async function collectRestorePlan(
   def: CliDef,
   cliId: string,
   profileName: string,
-  missing: string[]
+  missing: string[],
+  carriedOver: string[]
 ): Promise<RestorePlan[]> {
   const plan: RestorePlan[] = [];
   for (const src of def.sources) {
@@ -198,6 +237,9 @@ async function collectRestorePlan(
     const liveBackup = await readSource(src);
     if (stored == null) {
       missing.push(src.saveAs);
+      // 프로필에는 없는데 라이브에는 값이 있다 → 직전 계정 자격증명이 활성 상태로 남는다.
+      // liveBackup 은 위에서 이미 무조건 계산하므로 추가 I/O 가 없다.
+      if (liveBackup != null) carriedOver.push(src.saveAs);
       plan.push({ src, stored: null, liveBackup });
       continue;
     }
@@ -238,7 +280,11 @@ async function applyRestorePlan(plan: RestorePlan[], restored: string[]): Promis
 }
 
 function errorText(err: unknown): string {
-  if (err instanceof Error && /^(?:unsafe directory source:|Goose provider cache |profile capture )/.test(err.message)) return err.message;
+  // `unsafe Goose provider cache …` 계열을 반드시 포함할 것 — 이 sentinel 들은 `unsafe ` 로
+  // 시작하므로 `unsafe directory source:` 대안에 걸리지 않아, 누락되면 롤백 집계에서
+  // `operation failed` 로 붕괴해 어떤 하드닝 검사가 실패했는지 알 수 없게 된다.
+  // (`providerPublicError` 의 whitelist 는 이미 이 계열을 원문 통과시킨다 — 그쪽과 대칭을 맞춘다.)
+  if (err instanceof Error && /^(?:unsafe directory source:|unsafe Goose provider cache |Goose provider cache |profile capture )/.test(err.message)) return err.message;
   const code = errorCode(err);
   return `operation failed${code ? ` (${code})` : ''}`;
 }
@@ -329,9 +375,14 @@ async function switchProfileUnlocked(
   // 성공을 보고하지 않는다. 기존 restoreProfileToLiveUnlocked 의 missing-profile
   // guard 로 fall through 해 깨진 상태를 surface 한다.
   if (current != null && current === toProfile && (await profileExists(cliId, toProfile))) {
+    // 이 경로는 restore 를 **실행하지 않는** idempotent no-op 이므로 세 배열이 모두 비어 있다.
+    // `carriedOver: []` 는 "이월이 없다" 는 보증이 아니라 "이번 호출이 아무것도 복원하지 않아
+    // 평가 대상이 없다" 는 뜻이다 — 이미 활성인 프로필을 다시 선택했을 때 라이브에 남아 있는
+    // 아티팩트를 이 필드로 판단하면 안 된다. 라이브 대 프로필 실제 상태는 `mat doctor` 와
+    // `mat freshness` 가 권위 있는 채널이다.
     return {
       fromSnapshot: undefined,
-      restore: { cliId, profileName: toProfile, restored: [], missing: [] },
+      restore: { cliId, profileName: toProfile, restored: [], missing: [], carriedOver: [] },
       preSwapLiveFreshness: undefined
     };
   }

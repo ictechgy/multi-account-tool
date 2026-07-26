@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-26
+
+### Fixed
+
+- **Goose provider OAuth 캐시 경로 정정 (중요).** 0.7.x–0.8.0 은 7개 Goose provider 캐시를
+  `~/.config/goose/providers/…` 로 선언했지만 업스트림에는 `providers/` 세그먼트가 **존재하지
+  않는다**(v1.35.0–v1.44.0 전 태그에서 확인). 부재 source 는 skip 되므로 mat 은 Goose provider
+  OAuth 캐시를 **한 번도 캡처·복원한 적이 없으면서** 프로필 전환을 성공으로 보고했다 — 이전 계정의
+  provider 토큰이 그대로 활성 상태로 남는 격리 위반. 정정된 경로는 `~/.config/goose/` 직하다.
+  - **0.8.1 이전 프로필에는 provider 아티팩트가 없다.** restore 는 프로필이 갖고 있지 않은
+    라이브 파일을 삭제하지 않으므로(의도된 설계) 직전 계정 토큰이 그대로 남는다. 그 상태를
+    조용히 넘기지 않도록 `RestoreResult.carriedOver` 와 전용 경고 라인을 추가했다.
+  - **복구 순서가 중요하다**: 각 Goose 프로필은 **그 프로필의 계정으로 로그인한 상태에서**
+    재캡처하라. carry-over 경고가 뜬 직후에 재캡처하면 방금 전환한 프로필에 **직전 계정의**
+    자격증명을 저장하게 되므로 그때는 재캡처하지 말고 해당 계정으로 다시 로그인하라.
+  - `saveAs` 이름·프로필 레이아웃·identity/freshness 계약은 불변이라 마이그레이션은 불필요하다.
+- 경로 리터럴을 `src/core/goose-provider-cache.ts` **한 곳**으로 모으고, `sources.ts`/`doctor.ts`
+  의 하드닝 가드가 같은 배열에서 멤버십을 파생하도록 바꿨다. 0.8.0 은 같은 문자열이 세 곳에
+  재기술돼 있었고 세 곳이 똑같이 틀렸기 때문에 어떤 테스트도 결함을 잡지 못했다.
+- `mat support goose --json` 이 내보내던 라이브 오탐 정정 — 존재하지 않는 경로를 스왑한다고
+  단정하던 `summary` 와 `lastVerified: 2026-07-15` 를 갱신했다.
+- 롤백 집계에서 `unsafe Goose provider cache …` sentinel 이 `operation failed` 로 붕괴하던 문제
+  수정(`errorText` 정규식). 또한 snapshot 단계의 하드닝 실패에 `saveAs` 를 붙여 어떤 아티팩트가
+  막혔는지 알 수 있게 했다.
+- `sources.ts` 의 도달 불가 분기(`const parents = null` 과 그에 딸린 3개 조건, provider 조기
+  return 이후의 nlink 항 2개) 정리 — 일반 remove 경로에도 부모 pinning 이 있는 것처럼 읽혔다.
+
+### Added
+
+- **Ambient 경고 확장.** `claude` 에 `ANTHROPIC_BASE_URL`, `goose` 에 `ANTHROPIC_HOST` ·
+  `GOOSE_PATH_ROOT` · `XDG_CONFIG_HOME` 을 추가했다. 앞의 둘은 자격증명이 아니라 **목적지**를
+  바꿔 프로필 swap 보고를 무의미하게 만들고(z.ai GLM Coding Plan 같은 env 전용 통합이 이 채널을
+  쓴다), 뒤의 둘은 Goose config 디렉토리를 재배치해 mat 의 고정 경로를 전부 무효화한다.
+  goose 는 `ANTHROPIC_BASE_URL` 을 읽지 않으므로(`ANTHROPIC_HOST` 를 읽는다) 해당 규칙에는
+  넣지 않았다. `ANTHROPIC_DEFAULT_*_MODEL` 과 `ANTHROPIC_API_VERSION` 은 계정 경계가 아니라 제외.
+- plugin `file` source 경로 검증 강화 — 상대경로, 비정규 표기(`..`/`.`/중복 슬래시), 그리고
+  builtin 이 소유한 `~/.config/goose` 구역 내 비인정 경로를 로드 시점에 명시 거부한다.
+  (기존에 이 구역을 선언하던 plugin 이 있다면 영향을 받는다.)
+- 신규 `docs/upstream-evidence/2026-07-26-compatibility-audit.md` — 경로 정정 근거, 마이그레이션
+  영향, GLM builtin 지원 거절 근거, 그리고 Claude Code 2.1.220 / Codex rust-v0.145.0 /
+  Gemini 0.52.0 / Aider 0.86.0 / Kimi 1.49.0 / Qwen 0.21.0 / Crush 0.87.0 / OpenCode 1.18.5 /
+  Goose 1.44.0 / Grok 0.2.112 / Antigravity 1.1.7 무변경 스윕을 기록했다.
+
+### Known issues
+
+- Goose 는 provider 캐시 디렉토리를 명시 mode 없이 만들기 때문에 group-writable umask 환경에서는
+  `0775` 가 되어 mat 의 private-parent 검사가 fail-closed 로 전환을 막는다. **0.8.1 이 만든
+  문제가 아니라 0.8.0 부터 존재하던 진단**이며(0.8.0 코드도 `~/.config/goose` 가 0775 면 같은
+  예외를 던진다), 0.8.1 은 leaf provider 디렉토리까지 검사 범위에 들어온다. 업그레이드 직후
+  `mat doctor` 를 실행해 어떤 아티팩트가 막혔는지 확인한 뒤 해당 디렉토리에 `chmod g-w,o-w` 를
+  적용하라. mat 은 사용자 소유 디렉토리의 권한을 자동으로 바꾸지 않는다.
+
 ## [0.8.0] - 2026-07-15
 
 ### Added

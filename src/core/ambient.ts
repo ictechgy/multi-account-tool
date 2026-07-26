@@ -29,7 +29,15 @@ interface AmbientRule {
 
 const AMBIENT_RULES: Record<string, AmbientRule> = {
   claude: {
-    envNames: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']
+    // `ANTHROPIC_BASE_URL` 은 자격증명 자체가 아니라 **목적지**를 바꾼다 — 설정돼 있으면 mat 이
+    // 프로필 swap 을 성공으로 보고해도 세션 전체가 다른 provider/계정으로 라우팅된다
+    // (예: z.ai GLM Coding Plan 은 `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` 조합의
+    // env 전용 통합이다 — docs.z.ai/devpack/tool/claude). 토큰만 경고하고 목적지 재지정을
+    // 놓치면 격리 보고가 사실과 어긋난다.
+    // `ANTHROPIC_DEFAULT_*_MODEL` 은 제외한다: mat 은 claude 의 routing 아티팩트를 캡처하지
+    // 않으므로 env 가 모순시킬 캡처 대상이 없다 (goose 는 config.yaml 이 캡처되므로 대칭이
+    // 성립해 GOOSE_MODEL 을 경고한다).
+    envNames: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']
   },
   codex: {
     envNames: ['OPENAI_API_KEY', 'CODEX_HOME']
@@ -75,7 +83,24 @@ const AMBIENT_RULES: Record<string, AmbientRule> = {
     cwdEntries: ['.opencode', 'opencode.json', 'opencode.jsonc']
   },
   goose: {
-    envNames: ['GOOSE_DISABLE_KEYRING', 'GOOSE_PROVIDER', 'GOOSE_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'HF_TOKEN']
+    // `ANTHROPIC_HOST` (≠ `ANTHROPIC_BASE_URL`): goose 의 anthropic provider 가 실제로 읽는
+    // 이름이다 — `crates/goose/src/providers/anthropic_def.rs:38-40` 의
+    // `config.get_param("ANTHROPIC_HOST")` (기본 `https://api.anthropic.com`). 그리고
+    // `Config::get_param` 은 `env::var(KEY)` 를 **먼저** 확인하고 즉시 반환하므로
+    // (`crates/goose/src/config/base.rs:733-738`) env 가 캡처된 `config.yaml` 을 덮어쓴다.
+    // mat 이 goose-config.yaml 을 캡처하므로 GOOSE_MODEL 경고와 동일 논리가 더 강하게 성립한다.
+    // `ANTHROPIC_API_VERSION` 은 프로토콜 노브이며 계정 경계가 아니라 제외한다.
+    //
+    // `GOOSE_PATH_ROOT` / `XDG_CONFIG_HOME` 은 goose 의 `config_dir()` 리졸버 입력이다. 둘 중
+    // 하나라도 설정되면 mat 의 고정 `~/.config/goose/**` 경로가 전부 존재하지 않게 되어,
+    // 부재 source 는 skip 되므로 **전환이 성공을 보고하면서 실제로는 아무것도 스왑하지 않는다**
+    // — 0.8.0 의 `providers/` 결함과 같은 클래스의 조용한 실패다. 경고는 완화이지 해결이 아니며
+    //   근본 해결(리졸버 반영)은 후속 과제다.
+    envNames: [
+      'GOOSE_DISABLE_KEYRING', 'GOOSE_PROVIDER', 'GOOSE_MODEL',
+      'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'HF_TOKEN',
+      'ANTHROPIC_HOST', 'GOOSE_PATH_ROOT', 'XDG_CONFIG_HOME'
+    ]
   },
   grok: {
     envNames: ['XAI_API_KEY'],

@@ -8,6 +8,15 @@
  *   access_token:string, refresh_token:string, expires_in:integer, expires_at:integer
  * No additional properties. No stable non-secret account identity is persisted.
  *
+ * Upstream observation (2026-07-26, **not** an admission change): Crush v0.87.0 의
+ * `internal/oauth/token.go` 는 `Token` 에 `Client *OAuthClient`(`json:"client,omitempty"`)
+ * 를 추가하고 `refresh_token` 을 `omitempty` 로 바꿨다. `compareCrush()` 는 바이트
+ * 동등성만 보고 `isAdmittedOauthShape()` / `findAdmittedOauthProviders()` 는 compare
+ * 경로에 없으므로 **동작 영향은 없다**. 위 `pin` 과 `OAUTH_REQUIRED_FIELDS` 는 그 4키
+ * 정확일치 shape 이 실제로 검증된 시점(v0.84.1 / `7b24cc09…`)을 계속 가리킨다 — pin 만
+ * 0.87.0 으로 올리면 "0.87.0 에서 4키 정확일치를 검증했다"는 거짓 주장이 된다.
+ * shape 을 실제로 확장하려면 redacted fixture 와 함께 별도 re-plan 이 필요하다.
+ *
  * Only Hyper and Copilot store refreshable OAuth at this pin. Login aliases
  * `github` / `github-copilot` normalize to stored `copilot` upstream and are
  * not admitted as independent provider keys.

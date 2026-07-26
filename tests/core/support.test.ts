@@ -298,14 +298,37 @@ describe('support registry — support/explain reports', () => {
     expect(buildCliSupportReport('aider').capabilities.freshness.status).toBe('partial');
   });
 
-  it('pins every builtin and known-blocked drift contract to the 2026-07-15 audit', () => {
+  it('pins every builtin and known-blocked drift contract to its audit date', () => {
+    // Goose 는 0.8.1 에서 provider 캐시 경로가 정정되며 재검증됐다 — 그 이전 문구는
+    // 존재하지 않는 `~/.config/goose/providers/**` 를 스왑한다고 단정하는 라이브 오탐이었다.
+    // 나머지는 2026-07-15 감사 기준을 유지한다.
+    const REVERIFIED: Record<string, string> = { goose: '2026-07-26' };
     for (const cliId of [...BUILTIN_CLI_DEFS.map((def) => def.id), 'agy']) {
       const contracts = buildCliSupportReport(cliId).driftContracts;
       expect(contracts.length, `${cliId} must expose an audited drift contract`).toBeGreaterThan(0);
       expect(contracts.map((contract) => contract.lastVerified), cliId).toEqual(
-        contracts.map(() => '2026-07-15')
+        contracts.map(() => REVERIFIED[cliId] ?? '2026-07-15')
       );
     }
+  });
+
+  it('goose drift contract no longer claims the stale providers/ layout', () => {
+    const contracts = buildCliSupportReport('goose').driftContracts;
+    // summary/evidence 는 **현재 계약**이므로 구 레이아웃을 주장해선 안 된다.
+    for (const contract of contracts) {
+      expect(contract.summary).not.toContain('goose/providers');
+      expect(contract.evidence.join('\n')).not.toContain('goose/providers');
+    }
+    expect(contracts.map(c => c.summary).join('\n')).toContain('beneath ~/.config/goose');
+    // risks 는 반대로 구 경로를 **의도적으로 언급**해야 한다 — 0.8.1 이전 프로필은 provider
+    // 아티팩트를 갖고 있지 않아 재스냅샷이 필요하다는 사실이 기계 판독 출력에도 남아야 한다.
+    const risks = contracts.flatMap(c => c.risks ?? []).join('\n');
+    expect(risks).toContain('goose/providers');
+    // 복구 안내는 **순서 조건**을 반드시 포함해야 한다. "각 프로필을 재캡처하라" 만 적으면
+    // switch UX 의 "지금 재캡처하지 마세요" 경고와 정면으로 모순되고, 그대로 따르는 사용자는
+    // 직전 계정의 자격증명을 방금 전환한 프로필에 저장하게 된다.
+    expect(risks).toMatch(/re-capture each profile while its own account is logged in/i);
+    expect(risks).toMatch(/never re-capture right after a switch reported a carried-over artifact/i);
   });
 
   it('explains Crush freshness as supported conservative byte-diff with pin evidence', () => {

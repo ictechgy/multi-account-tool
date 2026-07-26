@@ -49,6 +49,19 @@ export function formatSwitchResult(r: SwitchResult, to: string): string {
   if (r.restore.missing.length) {
     lines.push(`  (프로필에 없어 건너뜀: ${r.restore.missing.join(', ')})`);
   }
+  // 위 중립 안내와 **반드시 구별되는 별도 경고 라인**. "건너뜀" 은 그냥 없다는 뜻으로 읽히지만
+  // 이쪽은 직전 계정의 자격증명이 여전히 활성이라는 뜻이라 의미가 전혀 다르다.
+  if (r.restore.carriedOver.length) {
+    lines.push(`  ⚠ 이전 계정 자격증명이 라이브에 그대로 남아 있습니다: ${r.restore.carriedOver.join(', ')}`);
+    // 여기서 "이 프로필을 재캡처하라" 고 안내하면 **안 된다** — 라이브 아티팩트는 직전 계정 것이라
+    // 지금 ${to} 를 재캡처하면 다른 계정의 자격증명을 ${to} 프로필에 저장하게 된다.
+    lines.push(`    → 지금 ${to} 를 재캡처하면 다른 계정의 자격증명이 ${to} 에 저장됩니다. 재캡처하지 마세요.`);
+    // "라이브가 다른 프로필 것이면 그 프로필을 재캡처하라" 는 안내는 하지 않는다 — 부분 전환
+    // 이후 라이브가 섞여 있을 수 있고, 사용자는 라이브 값이 어느 계정 것인지 알 수 없다.
+    // 그 상태로 다른 프로필을 재캡처하면 계정 교차 저장이 된다. 먼저 확인하도록 유도한다.
+    lines.push(`    → ${to} 계정으로 다시 로그인한 뒤에는 ${to} 재캡처가 올바른 조치입니다.`);
+    lines.push(`    → 라이브 값이 어느 계정 것인지는 'mat freshness' / 'mat doctor' 로 먼저 확인하세요.`);
+  }
   return lines.join('\n');
 }
 

@@ -16,10 +16,11 @@
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { hasUnsafeDisplayChar } from './display-safety.js';
 import { validatePublicEnvSecretSource } from './env-secret-source.js';
-import { dataDir, validateCliId, validateProfileFileName } from './paths.js';
+import { classifyGoosePath } from './goose-provider-cache.js';
+import { dataDir, isNormalizedPathSpelling, validateCliId, validateProfileFileName } from './paths.js';
 import { redactSecretLikeText } from './redaction.js';
 import { validateWindowsCredentialBinding } from './windows-credential-manager.js';
 import { assertValidSourceList } from './validators.js';
@@ -103,6 +104,24 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     }
     if (hasUnsafeDisplayChar(raw.path)) {
       return { error: `sources[${idx}].path 에 제어/서식 문자가 포함될 수 없습니다.` };
+    }
+    // 상대경로는 mat 을 **어느 디렉토리에서 실행했는지**에 따라 다른 파일을 가리키므로
+    // 안정적인 자격증명 위치가 될 수 없다. 0.8.0 까지는 통과했으나 의미 있게 동작한 적이 없다.
+    // `~` 단독은 expandTilde 가 home 으로 확장하는 정당한 표기다 — 지나치게 넓은 경로라는
+    // 문제는 기존 `broad_file_path` **경고**가 담당하므로 여기서 에러로 승격시키지 않는다.
+    if (raw.path !== '~' && !raw.path.startsWith('~/') && !isAbsolute(raw.path)) {
+      return { error: `sources[${idx}].path 는 '~/' 로 시작하거나 절대경로여야 합니다. 상대경로는 실행 디렉토리에 따라 다른 파일을 가리킵니다.` };
+    }
+    // 비정규 표기(`..`/`.`/중복 슬래시)는 안전성 판정과 실제 I/O 대상을 어긋나게 만든다 —
+    // 자세한 근거는 isNormalizedPathSpelling 의 JSDoc 참고.
+    if (!isNormalizedPathSpelling(raw.path)) {
+      return { error: `sources[${idx}].path 는 정규화된 경로여야 합니다 ('.', '..', 중복 슬래시 없이). 예: '~/.config/app/auth.json'` };
+    }
+    // builtin 이 소유한 Goose 자격증명 구역에는 라이브 provider OAuth 토큰이 있다. 인정된 고정
+    // 경로가 아닌 구역 내부 경로를 조용히 일반 쓰기 경로로 흘려보내면, 하드닝(부모 identity
+    // pinning·nlink·no-follow)을 우회한 무검증 쓰기를 허용하게 되므로 로드 시점에 거부한다.
+    if (classifyGoosePath(raw.path) === 'reserved-nonadmitted') {
+      return { error: `sources[${idx}].path 가 mat builtin 이 관리하는 Goose 자격증명 구역(~/.config/goose) 안에 있지만 인정된 고정 경로가 아닙니다. builtin goose 지원을 쓰거나 구역 밖 경로를 지정하세요.` };
     }
     const src: FileSource = { type: 'file', path: raw.path, saveAs: safeSaveAs };
     return { source: src };

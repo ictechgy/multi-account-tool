@@ -283,15 +283,26 @@ const REGISTRY: Record<string, SupportMetadata> = {
   },
   goose: {
     ambientRisks: [
-      'GOOSE_DISABLE_KEYRING changes backend selection; GOOSE_PROVIDER/model, HF_TOKEN, provider API-key env vars, project config, and unknown provider paths can bypass profile intent.'
+      'GOOSE_DISABLE_KEYRING changes backend selection; GOOSE_PROVIDER/model, ANTHROPIC_HOST, HF_TOKEN, provider API-key env vars, project config, and unknown provider paths can bypass profile intent.',
+      'GOOSE_PATH_ROOT and XDG_CONFIG_HOME relocate the Goose config directory. MAT reads the fixed ~/.config/goose paths only, so a relocated config directory makes every Goose artifact appear absent and a switch swaps nothing while still reporting success.'
     ],
     driftContracts: [
       {
         id: 'goose-keyring-backend',
-        summary: 'Goose swaps its existing backend/YAML artifacts plus seven fixed v1.43 provider cache artifacts; this is not session isolation.',
-        lastVerified: '2026-07-15',
-        evidence: ['aaif-goose/goose v1.43.0 commit 5a9eb7edea1e081e2d54473ae41481f0289b826a', 'crates/goose-local-inference/src/huggingface_auth.rs', 'cli-defs gooseSources()', 'README Goose boundary'],
-        risks: ['Unknown provider layouts and token schemas remain opaque; missing secret-tool does not prove Goose is not using libsecret.']
+        summary: 'Goose swaps its existing backend/YAML artifacts plus seven fixed provider cache artifacts directly beneath ~/.config/goose; this is not session isolation.',
+        lastVerified: '2026-07-26',
+        evidence: [
+          'aaif-goose/goose v1.43.0 commit 5a9eb7edea1e081e2d54473ae41481f0289b826a',
+          'crates/goose/src/providers/provider_secrets.rs PROVIDER_CACHE_SECRET_DEFINITIONS',
+          'crates/goose/src/providers/huggingface_auth.rs HUGGINGFACE_OAUTH_CACHE_PATH',
+          'core goose-provider-cache.ts admitted path table',
+          'README Goose boundary'
+        ],
+        risks: [
+          'Unknown provider layouts and token schemas remain opaque; missing secret-tool does not prove Goose is not using libsecret.',
+          'Releases before 0.8.1 recorded these caches one directory too deep (~/.config/goose/providers/...), so profiles captured before 0.8.1 hold no provider artifacts. Re-capture each profile while its own account is logged in to Goose; never re-capture right after a switch reported a carried-over artifact, because the live cache then belongs to the previous account.',
+          'Goose creates provider cache directories with no explicit mode, so a group-writable umask yields 0775 and MAT fails closed on the private-parent check. Run "mat doctor" to see which artifact is affected.'
+        ]
       }
     ]
   },

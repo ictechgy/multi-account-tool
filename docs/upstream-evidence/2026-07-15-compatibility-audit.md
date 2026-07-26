@@ -72,3 +72,28 @@ parsed or logged.
 - No Windows Goose support.
 - No schema-derived identity claim for any fixed Goose provider cache.
 - No claim that Gemini personal-tier availability implies Antigravity credential compatibility.
+
+## Erratum (added 2026-07-26, original text left intact)
+
+The Goose Hugging Face path stated above as
+`~/.config/goose/providers/huggingface/oauth/tokens.json` is **wrong**, and so is
+every other `providers/`-prefixed Goose provider cache path recorded in this
+document. Upstream has never used a `providers/` segment: the cache is resolved as
+`Paths::in_config_dir("huggingface/oauth/tokens.json")` =
+`<goose config dir>/huggingface/oauth/tokens.json`, i.e.
+`~/.config/goose/huggingface/oauth/tokens.json`. The constant is
+`HUGGINGFACE_OAUTH_CACHE_PATH` in `crates/goose/src/providers/huggingface_auth.rs`
+at the very commit this audit pins (`5a9eb7e`), and the segment is absent at every
+tag from v1.35.0 through v1.44.0.
+
+This document repeated an error that originated in the implementation; the earlier
+evidence file [`goose-v1.40.0-provider-cache.md`](./goose-v1.40.0-provider-cache.md)
+recorded the relative paths correctly. Because of the wrong paths, releases up to
+0.8.0 never captured or restored any Goose provider cache while still reporting a
+successful profile switch.
+
+Corrected in v0.8.1. Full analysis, migration impact, and the re-verified
+baselines are in
+[`2026-07-26-compatibility-audit.md`](./2026-07-26-compatibility-audit.md).
+The text above is preserved unedited so the audit trail shows what was believed on
+2026-07-15.
