@@ -74,9 +74,14 @@ describe('자격증명 경로 별칭 우회 — Gate 1 소유권 판정', () => 
     expect(await loadedIds()).not.toContain('hardalias');
   });
 
-  it('로드 시점에 대상이 **부재**했다가 나중에 생겨도 별칭은 정경으로 접힌다', async () => {
+  it('대상 파일이 **아직 없어도** 별칭은 정경으로 접힌다', async () => {
     // bounded resolve 는 존재하는 최장 접두만 해석하고 꼬리를 이어 붙이므로, 대상 파일이
-    // 아직 없어도 `~/aliasdir/notyet.json` 은 `~/.codex/notyet.json` 으로 접힌다.
+    // 아직 없어도 `~/aliasdir/auth.json` 은 `~/.codex/auth.json` 으로 접힌다.
+    //
+    // leaf 를 **실제로 지워야** 이 테스트가 의미를 갖는다. 공유 beforeEach 가 auth.json 을
+    // 만들어 두므로 그대로 두면 "leaf 가 존재할 때만 별칭을 접는" fail-open 회귀가 이 테스트를
+    // 통과해 버린다 (리뷰가 잡은 결함 — 주석은 부재를 말하는데 픽스처는 존재했다).
+    await fs.rm(join(tmp.home, '.codex', 'auth.json'));
     await fs.symlink(join(tmp.home, '.codex'), join(tmp.home, 'aliasdir'));
     await writePlugin(tmp.home, 'absentalias', '~/aliasdir/auth.json');
     expect(await loadedIds()).not.toContain('absentalias');

@@ -15,7 +15,7 @@
 import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, relative, sep } from 'node:path';
 import { expandTilde } from './paths.js';
-import { resolveParentKeepLeaf, resolvePathIdentity, resolvedHome } from './path-identity.js';
+import { resolveParentKeepLeaf, resolvedHome } from './path-identity.js';
 import { assertSourceMayBeAccessed } from './live-resource-guard.js';
 import { isAdmittedGooseProviderCacheFile } from './goose-provider-cache.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
@@ -470,6 +470,24 @@ export async function writeGooseProviderFileForTests(src: FileSource, value: str
   try { await checkedProviderWriteImpl(src, value); } catch (err) { throw providerPublicError(err); }
 }
 
+/**
+ * 일반(비-goose) 파일 source 의 I/O 대상 경로. Gate 2 가 판정한 것과 **같은 해석**을 쓴다.
+ *
+ * 이전에는 게이트가 해석된 경로로 소유권을 판정한 뒤, 실제 I/O 는 선언 표기(`src.path`)를 그대로
+ * 열었다. 두 경로는 보통 같은 실물로 귀결되지만 **같다는 보장이 없다** — 사이에 조상이 바뀌면
+ * 판정한 대상과 연 대상이 갈라진다. 최소한 둘이 같은 해석 규칙을 쓰게 만든다.
+ *
+ * 이걸로 경합이 사라지지는 않는다. Node 에는 `openat`/dirfd 가 없어 "검증한 디렉토리 핸들에
+ * 상대 open" 을 할 수 없고, 따라서 해석과 open 사이의 창은 원리적으로 남는다. goose 경로만
+ * 부모 dev/ino pinning + 단계별 재확인으로 그 창을 **탐지**한다. CHANGELOG 와 README 에 이
+ * 잔여 경합을 명시했다.
+ */
+async function ordinaryFilePath(src: FileSource): Promise<string> {
+  const path = await resolveParentKeepLeaf(src.path);
+  if (path === null) throw new Error('unsafe source path');
+  return path;
+}
+
 /** 임의 source 의 현재 라이브 값을 캡처해 문자열로 반환 (저장 가능한 형태). */
 export async function readSource(src: Source): Promise<string | null> {
   // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
@@ -477,7 +495,7 @@ export async function readSource(src: Source): Promise<string | null> {
   assertSourceMayBeAccessed(src);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? readGooseProviderFileForTests(src) : readFileOrNull(src.path);
+      return isGooseProviderFile(src) ? readGooseProviderFileForTests(src) : readFileOrNull(await ordinaryFilePath(src));
     case 'directory':
       return readDirectorySource(src);
     case 'keychain':
@@ -500,7 +518,7 @@ export async function writeSource(src: Source, value: string): Promise<void> {
   assertSourceMayBeAccessed(src);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? writeGooseProviderFileForTests(src, value) : writeFileAtomic(expandTilde(src.path), value);
+      return isGooseProviderFile(src) ? writeGooseProviderFileForTests(src, value) : writeFileAtomic(await ordinaryFilePath(src), value);
     case 'directory':
       return writeDirectorySource(src, value);
     case 'keychain':
@@ -523,7 +541,7 @@ export async function sourceExists(src: Source): Promise<boolean> {
   assertSourceMayBeAccessed(src);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? providerFileExistsChecked(src) : fileExists(src.path);
+      return isGooseProviderFile(src) ? providerFileExistsChecked(src) : fileExists(await ordinaryFilePath(src));
     case 'directory':
       return directorySourceExists(src);
     case 'keychain':
@@ -556,7 +574,7 @@ export async function removeSource(src: Source): Promise<void> {
       // 그쪽에만 존재한다. (0.8.0 에는 `const parents = null` 과 도달 불가한
       // `isGooseProviderFile(src) && …` 항이 남아 있어 이 경로에도 하드닝이 있는 것처럼
       // 읽혔다 — 실제로는 항상 false 인 죽은 코드였다.)
-      const path = expandTilde(src.path);
+      const path = await ordinaryFilePath(src);
       const st = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
       if (st == null) return;
       if (st.isSymbolicLink() || !st.isFile()) throw new Error('unsafe source removal');

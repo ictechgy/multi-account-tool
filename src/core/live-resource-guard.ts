@@ -93,7 +93,9 @@ export function assertSourceMayBeAccessed(src: Source): void {
   const index = buildLiveResourceIndex(BUILTIN_CLI_DEFS, reservedLiveResources());
   const collision = findSourceCollision(src, index);
   if (!collision) return;
-  // 선언 표기가 이미 그 소유자의 정경 표기라면 별칭이 아니다 (위 "면제 규칙" 참고).
-  if (index.lookup(declared)?.cliId === collision.ownerCliId) return;
+  // 선언 표기가 그 소유자의 **선언 표기**와 같으면 별칭이 아니다 (위 "면제 규칙" 참고).
+  // `lookup` 이 아니라 `lookupDeclared` 여야 한다 — `lookup` 은 해석 키도 맞히므로, 조상이
+  // symlink 인 환경에서 해석된 정경 표기를 그대로 선언한 공격자까지 면제해 버린다.
+  if (index.lookupDeclared(declared)?.cliId === collision.ownerCliId) return;
   throw new LiveResourceGuardError(collision.ownerCliId);
 }

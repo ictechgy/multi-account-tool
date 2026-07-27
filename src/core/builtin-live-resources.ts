@@ -132,6 +132,14 @@ export function liveResourceKeyOf(src: Source): LiveResourceKey | null {
 
 export class LiveResourceIndex {
   private readonly owners = new Map<string, LiveResourceOwner>();
+  /**
+   * **선언 표기**로 등록된 키만 따로 둔다. I/O 시점 게이트의 면제 판정이 이걸 쓴다.
+   *
+   * `owners` 에는 해석 키도 함께 들어 있어서 그걸로 면제를 판정하면, 조상이 symlink 인 환경에서
+   * 공격자가 **해석된 정경 표기**를 그대로 선언했을 때 "정경이니 면제" 로 통과한다(실측).
+   * builtin 자신은 언제나 `~/...` 선언 표기로 접근하므로 면제에는 이 집합만 있으면 충분하다.
+   */
+  private readonly lexicalOwners = new Map<string, LiveResourceOwner>();
   /** builtin 파일 리소스의 **선언 경로**. hardlink 판정 시 그 자리에서 lstat 한다. */
   private readonly filePathsByOwner: Array<{ cliId: string; declared: string }> = [];
 
@@ -147,13 +155,33 @@ export class LiveResourceIndex {
   add(def: CliDef): void {
     for (const src of def.sources) {
       const lexical = liveResourceKeyOf(src);
-      if (lexical) this.own(def.id, lexical);
-      const r = resolvedLiveResourceKeyOf(src);
-      // builtin 인덱스 구축 중 해석 실패는 그 리소스를 등록하지 않는다(그 자체가 거부 신호는 아님).
-      if (r === null || r === 'unresolvable') continue;
-      this.own(def.id, r.key);
-      if (r.key.kind === 'file' && 'path' in src) this.filePathsByOwner.push({ cliId: def.id, declared: src.path });
+      if (!lexical) continue;
+      this.register(def.id, lexical, 'path' in src ? src.path : undefined);
     }
+  }
+
+  /**
+   * 리소스 하나를 등록하는 **유일한** 경로. `add`(def 유래)와 `reserve`(플랫폼/env 예약)가
+   * 반드시 이 함수를 거친다.
+   *
+   * 두 등록 경로가 서로 다른 축을 넣으면 그 차이가 곧 우회로가 된다. 실제로 그렇게 됐다:
+   * `reserve` 가 어휘 키만 넣던 동안, `~/.claude` 를 symlink 로 관리하는 macOS 사용자에게
+   * `~/.claude/.credentials.json` 은 **예약 전용** 리소스라 해석 키가 어디에도 없었고, plugin 이
+   * 해석된 정경 표기를 직접 선언하면 두 게이트를 모두 통과해 진짜 자격증명을 읽었다(실측).
+   * `nlink === 1` 이라 inode 폴백도 건너뛰어 아무것도 잡지 못했다.
+   */
+  private register(cliId: string, lexical: LiveResourceKey, declaredPath?: string): void {
+    this.own(cliId, lexical);
+    const lexicalId = `${lexical.kind} ${lexical.key}`;
+    if (!this.lexicalOwners.has(lexicalId)) this.lexicalOwners.set(lexicalId, { cliId, kind: lexical.kind });
+    if (lexical.kind !== 'file' || declaredPath === undefined) return;
+    // inode 축은 **해석 성공 여부와 무관**하게 등록한다. `lookupInode` 는 조회 시점에 다시 lstat
+    // 하므로, 지금 해석이 안 되는 경로(부재 부모, 일시적 EACCES)도 나중에 생기면 그때 잡혀야
+    // 한다. 해석 성공 분기 안에 두면 그런 경로는 영영 inode 축에서 빠진다.
+    this.filePathsByOwner.push({ cliId, declared: declaredPath });
+    const id = resolvePathIdentitySync(declaredPath);
+    // 해석 실패는 그 **경로 키**만 등록하지 않는다(거부 신호는 아니다 — 어휘 키는 이미 들어갔다).
+    if (id.kind !== 'unresolvable') this.own(cliId, { kind: 'file', key: id.comparable });
   }
 
   private own(cliId: string, key: LiveResourceKey): void {
@@ -182,11 +210,7 @@ export class LiveResourceIndex {
 
   /** 플랫폼/env 분기 때문에 현재 def 배열에 나타나지 않는 리소스를 예약한다. */
   reserve(cliId: string, key: LiveResourceKey, declaredPath?: string): void {
-    this.own(cliId, key);
-    // 예약 리소스에도 inode 축이 필요하다. `reservedLiveResources()` 에는 실제 **파일** 항목이
-    // 있고(claude 의 비-darwin 파일 경로, opencode 의 xdg 기본 경로), 이 목록에 넣지 않으면
-    // 그 경로들에 대한 hardlink 는 경로 비교로도 inode 비교로도 잡히지 않는다.
-    if (key.kind === 'file' && declaredPath) this.filePathsByOwner.push({ cliId, declared: declaredPath });
+    this.register(cliId, key, declaredPath);
   }
 
   /**
@@ -211,6 +235,11 @@ export class LiveResourceIndex {
       return undefined;
     }
     return this.owners.get(`os-keyring-family ${svc} ${ACCOUNT_WILDCARD}`);
+  }
+
+  /** 이 키가 **선언 표기**로 등록돼 있는가. 면제 판정 전용 (위 `lexicalOwners` 주석 참고). */
+  lookupDeclared(key: LiveResourceKey): LiveResourceOwner | undefined {
+    return this.lexicalOwners.get(`${key.kind} ${key.key}`);
   }
 
   get size(): number {

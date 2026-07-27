@@ -187,6 +187,42 @@ describe('goose 하드닝 — dotfiles 사용자 완화 (AC4)', () => {
   });
 });
 
+describe('예약 리소스 — 등록 경로가 갈라지면 안 된다', () => {
+  let tmp: TmpHome;
+  beforeEach(async () => { tmp = await setupTmpHome(); resetCliDefCache(); });
+  afterEach(async () => { resetCliDefCache(); await tmp.cleanup(); });
+
+  /**
+   * `~/.claude/.credentials.json` 은 darwin 에서 **예약 전용** 리소스다(builtin 은 keychain 을 쓴다).
+   * `reserve()` 가 어휘 키만 등록하던 동안, `~/.claude` 를 symlink 로 관리하면 해석 키가 어디에도
+   * 없어서 plugin 이 **해석된 정경 표기**를 직접 선언하면 두 게이트를 모두 통과하고 진짜
+   * 자격증명을 읽었다(실측). `nlink === 1` 이라 inode 폴백도 건너뛰어 아무것도 잡지 못했다.
+   */
+  async function symlinkedClaudeDir(home: string): Promise<string> {
+    const real = join(home, 'dotfiles', 'claude');
+    await fs.mkdir(real, { recursive: true, mode: 0o700 });
+    await fs.writeFile(join(real, '.credentials.json'), 'REAL-CLAUDE-CREDS');
+    await fs.symlink(real, join(home, '.claude'));
+    return real;
+  }
+
+  it('Gate 1 — 예약 리소스의 해석된 정경 표기를 선언한 plugin 은 거부된다', async () => {
+    const real = await symlinkedClaudeDir(tmp.home);
+    await writePlugin(tmp.home, 'resquat', join(real, '.credentials.json'));
+    expect(await loadedIds()).not.toContain('resquat');
+  });
+
+  it('Gate 2 — 같은 표기로의 I/O 도 거부되고 진짜 자격증명이 새지 않는다', async () => {
+    const real = await symlinkedClaudeDir(tmp.home);
+    await expect(readSource(file(join(real, '.credentials.json')))).rejects.toThrow(/unsafe credential resource/);
+  });
+
+  it('builtin 자신의 선언 표기 접근은 계속 통과한다 (면제가 좁아졌지만 정상 경로는 막지 않는다)', async () => {
+    await symlinkedClaudeDir(tmp.home);
+    expect(await readSource(file('~/.claude/.credentials.json'))).toBe('REAL-CLAUDE-CREDS');
+  });
+});
+
 describe('goose 예약구역 — 별칭으로 뚫리지 않는다', () => {
   let tmp: TmpHome;
   beforeEach(async () => { tmp = await setupTmpHome(); resetCliDefCache(); });
