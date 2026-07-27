@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Gate 2(I/O 시점)** — `readSource`/`writeSource`/`sourceExists`/`removeSource` 진입부에서
     다시 판정한다. Gate 1 은 로드 순간의 형상만 보므로, 로드 이후에 별칭이 생기면 이미 수락된
     def 가 그 별칭을 타고 builtin 자격증명에 도달한다. Gate 2 가 그 경로를 닫는다.
+    **경합이 없다는 보장은 아니다** — goose 가 아닌 파일 source 는 판정과 실제 open 사이에
+    경로를 고정하지 않으므로 그 창 안의 조상 교체는 탐지하지 못한다(아래 "닫히지 않는 것" 참고).
   - **goose 예약구역 판정도 identity 로 바꿨다.** 예약구역은 "builtin 이 지금 쓰는 경로" 보다
     넓어서 소유권 검사만으로는 안 잡힌다. 실측 두 형태가 뚫려 있었다 — 별칭 표기
     (`~/gsalias/tokens.json` → 구역 안), 그리고 dotfiles 사용자의 **해석된 정경 표기**
@@ -34,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   성공하며 바이트는 링크가 가리키는 실제 위치(예: dotfiles 저장소 안)에 놓인다. 자격증명이
   버전 관리 대상 디렉토리로 들어갈 수 있다는 뜻이므로, 그런 구성이라면 goose 캐시 경로가
   `.gitignore` 에 있는지 확인하라.
+- **완화는 조상에만 적용된다.** 자격증명 파일 자신(또는 디렉토리 source 루트 자신)이 symlink 면
+  v0.8.2 와 동일하게 거부된다. 경로 해석은 부모까지만 하고 마지막 세그먼트는 어휘 표기로 남긴다 —
+  전면 해석은 leaf symlink 까지 따라가 공격자 파일을 읽고 그쪽에 토큰을 쓰게 된다(리뷰에서 실측으로
+  잡혔고 회귀 테스트로 고정했다).
 - 이 완화는 **순이득이 아니라 거래다.** 조상 symlink 거부는 정직한 dotfiles 사용자를 막았지만
   공격자는 표기만 바꾸면 통과했다(위 실측). 그 거부를 identity 비교로 대체하면 정직한 사용자는
   풀리고 별칭은 막히지만, "조상에 symlink 가 없다" 는 성질 자체는 더 이상 강제하지 않는다.
