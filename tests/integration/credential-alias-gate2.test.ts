@@ -261,13 +261,25 @@ describe('goose 예약구역 — 별칭으로 뚫리지 않는다', () => {
     await expect(readSource(file('~/gsalias/tokens.json'))).rejects.toThrow(/unsafe credential resource/);
   });
 
-  it('구역 루트를 해석할 수 없으면 구역 밖임을 증명할 수 없으므로 거부한다', async () => {
-    // 실측: `~/.config` 를 ELOOP symlink 로 만들면 구역 루트가 `unresolvable` 이 되고, 그 순간
-    // identity 분류가 **모든 경로에 대해** 'outside' 를 반환해 예약구역 검사가 통째로 사라졌다.
-    // 대상 해석 실패는 소유권 게이트가 별도 축에서 거부하지만, 루트 실패는 덮어 줄 축이 없다.
+  it('구역 루트를 해석할 수 없어도 무관한 파일 I/O 를 막지 않는다', async () => {
+    // 이 판정은 리뷰 도중 두 번 뒤집혔다. 최종 근거:
+    //
+    // 대상이 해석됐는데 구역 루트가 해석되지 않는다면, 구역 **안**의 어떤 경로도 해석될 수 없다
+    // (같은 깨진 구성요소를 지나야 한다). 즉 그 조합 자체가 대상이 구역 밖임을 증명한다.
+    // 한때 여기서 거부하도록 했더니, 이 판정이 Gate 2 의 모든 일반 파일 경로에 쓰이는 탓에
+    // `~/.config` 가 ELOOP 이면 goose 와 무관한 파일 읽기까지 막혔다 — 도달 불가능한 fail-open 을
+    // 닫으려다 실재하는 가용성 회귀를 얻은 것이다.
+    await fs.mkdir(join(tmp.home, 'myapp'), { recursive: true, mode: 0o700 });
+    await fs.writeFile(join(tmp.home, 'myapp', 'creds.json'), 'MINE');
+    await fs.symlink(join(tmp.home, '.config'), join(tmp.home, '.config'));   // ELOOP
+    expect(await readSource(file('~/myapp/creds.json'))).toBe('MINE');
+  });
+
+  it('구역 루트를 해석할 수 없어도 어휘적으로 구역 안인 경로는 계속 거부된다', async () => {
+    // 완화의 반대쪽 경계. 어휘 판정이 먼저 걸러내므로 루트 해석과 무관하게 유지된다.
     const { classifyGoosePathByIdentity } = await import('../../src/core/goose-provider-cache.js');
-    await fs.symlink(join(tmp.home, '.config'), join(tmp.home, '.config'));
-    expect(classifyGoosePathByIdentity('~/anything/tokens.json')).toBe('reserved-nonadmitted');
+    await fs.symlink(join(tmp.home, '.config'), join(tmp.home, '.config'));   // ELOOP
+    expect(classifyGoosePathByIdentity('~/.config/goose/newprovider/tokens.json')).toBe('reserved-nonadmitted');
   });
 
   it('구역 밖 dotfiles 경로는 통과한다 (과잉 거부 방지)', async () => {

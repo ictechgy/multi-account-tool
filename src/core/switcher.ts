@@ -296,10 +296,12 @@ function errorText(err: unknown): string {
   // 시작하므로 `unsafe directory source:` 대안에 걸리지 않아, 누락되면 롤백 집계에서
   // `operation failed` 로 붕괴해 어떤 하드닝 검사가 실패했는지 알 수 없게 된다.
   // (`providerPublicError` 의 whitelist 는 이미 이 계열을 원문 통과시킨다 — 그쪽과 대칭을 맞춘다.)
+  // `unsafe source path` 는 경로 해석 실패 sentinel 이다 — 빠뜨리면 롤백 집계에서
+  // `operation failed` 로 붕괴해 이 함수가 막으려던 진단 손실이 그대로 재현된다.
   // `unsafe credential resource:` 는 Gate 2 sentinel 이다. 롤백 중 이게 뜨면 그 source 가
   // 로드 이후 builtin 자격증명의 별칭이 됐다는 뜻이므로, 롤백 실패로 **크게** 보고하는 것이
   // 맞다 — 조용히 성공 처리하면 쓰지 못한 롤백을 썼다고 보고하게 된다.
-  if (err instanceof Error && /^(?:unsafe directory source:|unsafe credential resource:|unsafe Goose provider cache |Goose provider cache |profile capture )/.test(err.message)) return err.message;
+  if (err instanceof Error && /^(?:unsafe directory source:|unsafe credential resource:|unsafe source path|unsafe Goose provider cache |Goose provider cache |profile capture )/.test(err.message)) return err.message;
   const code = errorCode(err);
   return `operation failed${code ? ` (${code})` : ''}`;
 }

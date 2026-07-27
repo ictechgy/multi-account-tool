@@ -74,7 +74,9 @@ async function pathExists(path: string): Promise<boolean> {
  */
 async function resolveDirectoryRoot(src: DirectorySource): Promise<string> {
   const root = await resolveParentKeepLeaf(src.path);
-  if (root === null) fail('root outside HOME');
+  // `null` 은 EACCES/ELOOP/접두 부재이지 HOME 경계 위반이 아니다. 같은 메시지를 쓰면 퍼미션이나
+  // symlink 루프 문제를 디버깅하는 사용자를 엉뚱한 곳으로 보낸다.
+  if (root === null) fail('unresolvable root');
   return root;
 }
 
