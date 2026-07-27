@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-27
+
 ### Security
 
 - **plugin 이 builtin 의 라이브 자격증명을 자기 source 로 선언할 수 없게 막았다.** v0.8.1 까지
@@ -35,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **v0.8.1 의 `mat plugin validate` 는 이 규칙을 알지 못하므로 업그레이드 전 검증 수단이
   되지 않는다.** 업그레이드 후 `mat plugin validate` 를 다시 실행하라.
 - plugin↔plugin 충돌 시 파일명 정렬 순서상 먼저 오는 쪽이 리소스를 소유한다.
+
+### Added
+
+- `RestoreResult.carryOverEvaluated` — `carriedOver: []` 가 "이월 없음" 인지 "이번 호출이
+  판정하지 않음" 인지 구별할 수 있게 했다. 이미 활성인 프로필을 재선택하는 idempotent no-op
+  경로는 restore 를 실행하지 않으므로 후자다. 그 경로에서 실제로 판정하지 않는 이유는
+  `readSource` 가 goose/darwin 에서 `security` 를 spawn 하고(무해한 no-op 이 keychain 프롬프트를
+  띄울 수 있다) 하드닝 실패 시 throw 해 멱등 no-op 을 실패로 뒤집기 때문이다.
+- 그 경로의 switch 출력이 오도적인 `복원 → X : 0개 파일` 대신 복원을 수행하지 않았고 이월을
+  판정하지 않았음을 명시하고 `mat doctor` / `mat freshness` 로 유도한다.
 
 ### Known issues — 이번 릴리스가 닫지 **않은** 것
 

@@ -1,6 +1,6 @@
 {
   "name": "multi-account-tool",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "여러 AI CLI(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build) 계정을 하나의 TUI에서 전환해 사용하는 도구. OAuth refresh-token rotation 인지 + mat exec/session/freshness CLI.",
   "type": "module",
   "bin": {
