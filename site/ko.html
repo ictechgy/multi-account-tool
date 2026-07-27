@@ -687,15 +687,27 @@ mat explain agy
 </ul>
 <h3 id="기본-보호-장치">기본 보호 장치</h3>
 <ul>
-<li>모든 외부 명령은 <code>spawn(argv)</code>만 사용 — 셸 미경유, injection 차단</li>
-<li><code>security</code>는 절대경로 <code>/usr/bin/security</code>만 호출(PATH shim 공격 방지)</li>
-<li>모든 파일 쓰기는 단일 atomic 헬퍼 (<code>.tmp → rename</code>, <code>O_EXCL + O_NOFOLLOW</code>, <code>0600</code>)</li>
-<li>config 변경은 <code>mutateConfig</code> 헬퍼로 직렬화 (in-process race 차단)</li>
-<li>프로필 이름: <code>[a-zA-Z0-9가-힣_.-]{1,40}</code> + NFC 정규화 + <code>.</code> / <code>..</code> / <code>/</code> / <code>\</code> / NUL 명시 차단</li>
-<li>Keychain swap: 백업 → 정확 acct 매칭 delete → add. add 실패 시 자동 롤백, 롤백도 실패하면 에러 메시지에 함께 노출.</li>
-<li>multi-source CLI 복원은 부분 실패에 안전 (한 source 실패 시 이미 복원된 source를 라이브 백업으로 되돌림)</li>
-<li>에러 메시지의 JWT 및 50자+ base64-like 시퀀스는 redact 처리하고, session allow-list 경로는 stderr 노출 전 terminal control char를 sanitize</li>
-<li>의존성: <code>npm audit</code> clean</li>
+<li><p>모든 외부 명령은 <code>spawn(argv)</code>만 사용 — 셸 미경유, injection 차단</p>
+</li>
+<li><p><code>security</code>는 절대경로 <code>/usr/bin/security</code>만 호출(PATH shim 공격 방지)</p>
+</li>
+<li><p>모든 파일 쓰기는 단일 atomic 헬퍼 (<code>.tmp → rename</code>, <code>O_EXCL + O_NOFOLLOW</code>, <code>0600</code>)</p>
+</li>
+<li><p>config 변경은 <code>mutateConfig</code> 헬퍼로 직렬화 (in-process race 차단)</p>
+</li>
+<li><p>프로필 이름: <code>[a-zA-Z0-9가-힣_.-]{1,40}</code> + NFC 정규화 + <code>.</code> / <code>..</code> / <code>/</code> / <code>\</code> / NUL 명시 차단</p>
+</li>
+<li><p>Keychain swap: 백업 → 정확 acct 매칭 delete → add. add 실패 시 자동 롤백, 롤백도 실패하면 에러 메시지에 함께 노출.</p>
+</li>
+<li><p>multi-source CLI 복원은 부분 실패에 안전 (한 source 실패 시 이미 복원된 source를 라이브 백업으로 되돌림)</p>
+</li>
+<li><p>에러 메시지의 JWT 및 50자+ base64-like 시퀀스는 redact 처리하고, session allow-list 경로는 stderr 노출 전 terminal control char를 sanitize</p>
+</li>
+<li><p><strong>자격증명 소유권을 경로 표기가 아니라 파일시스템 identity 로 판정한다.</strong> plugin 이 별칭(디렉토리 symlink, 파일 symlink, hardlink)을 선언해서 builtin CLI 의 라이브 자격증명에 도달할 수 없다. 경로는 해석 후 비교하고, hardlink 는 별도 dev/ino 축으로 잡으며, 해석에 실패한 경로는 통과가 아니라 거부다. 판정은 plugin 로드 시점과 매 read/write/exists/remove 시점에 각각 이뤄지므로 <strong>로드 이후에 만들어진 별칭도</strong> 거부된다.</p>
+</li>
+<li><p>의존성: <code>npm audit</code> clean</p>
+<p>stow/chezmoi 로 <code>~/.config</code> 를 관리한다면 반대급부가 있다: Goose provider 캐시가 이제 해석된 실물 위치에 쓰이며, 그 위치가 dotfiles 저장소 안일 수 있다. 해당 경로가 <code>.gitignore</code> 에 있는지 확인하라.</p>
+</li>
 </ul>
 <h3 id="사용을-권하지-않는-환경">사용을 권하지 않는 환경</h3>
 <ul>

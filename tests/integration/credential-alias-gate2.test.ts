@@ -1,0 +1,195 @@
+/**
+ * Gate 2(I/O 시점 게이트) + goose 하드닝 identity 재키잉 회귀 테스트.
+ *
+ * Gate 1(`credential-alias-bypass.test.ts`)은 **선언**을 심사한다. 여기서는 그 다음 두 가지를 고정한다:
+ *
+ * 1. **로드 이후에 생긴 별칭** — Gate 1 을 통과한 def 가 나중에 별칭이 되어도 I/O 가 거부된다.
+ * 2. **완화가 실제로 작동한다** — `~/.config` 를 symlink 로 관리하는 사용자의 goose provider
+ *    캐시 read/write 가 성공한다. v0.8.2 에서는 `unsafe Goose provider cache parent` 로 실패했다.
+ *
+ * (2)는 **보호를 넓히는 변경이 아니라 푸는 변경**이라 특히 회귀 고정이 필요하다. 그래서
+ * "비-private 조상은 여전히 거부된다"(I7)를 같은 파일에 함께 둔다 — 완화가 무결성 검사까지
+ * 지워버리면 그 테스트가 빨개진다.
+ *
+ * 실제 파일시스템을 쓴다(mock 아님). symlink 시맨틱이 판정 대상이므로 mock 은 무의미하다.
+ */
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
+
+import { resetCliDefCache } from '../../src/core/cli-defs.js';
+import { readSource, removeSource, sourceExists, writeSource } from '../../src/core/sources.js';
+import type { DirectorySource, FileSource } from '../../src/core/types.js';
+import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
+
+const REAL_TOKEN = 'REAL-CODEX-TOKEN';
+
+const file = (path: string): FileSource => ({ type: 'file', path, saveAs: 'x.json' });
+const gooseTokens = file('~/.config/goose/gemini_oauth/tokens.json');
+const gooseDir: DirectorySource = {
+  type: 'directory', path: '~/.config/goose/githubcopilot',
+  saveAs: 'd.json', maxEntries: 8, maxBytes: 4096, maxDepth: 3
+};
+
+async function writePlugin(home: string, id: string, path: string): Promise<void> {
+  const dir = join(home, '.multi-account-tool', 'cli-defs');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(join(dir, `${id}.json`), JSON.stringify({ id, name: id, sources: [{ type: 'file', path, saveAs: 'x.json' }] }));
+}
+
+async function loadedIds(): Promise<string[]> {
+  resetCliDefCache();
+  const { getAllCliDefs } = await import('../../src/core/cli-defs.js');
+  return getAllCliDefs().map(d => d.id);
+}
+
+/** `~/.config` 를 `~/dotfiles/config` 로 관리하는 stow/chezmoi 사용자 환경. */
+async function symlinkDotfilesConfig(home: string): Promise<string> {
+  const real = join(home, 'dotfiles', 'config');
+  await fs.mkdir(real, { recursive: true });
+  await fs.symlink(real, join(home, '.config'));
+  return real;
+}
+
+describe('Gate 2 — 로드 이후에 생긴 별칭은 I/O 시점에 거부된다', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+    resetCliDefCache();
+    await fs.mkdir(join(tmp.home, '.codex'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.codex', 'auth.json'), REAL_TOKEN);
+    // 로드 시점에는 별칭이 아닌 자기 디렉토리 — Gate 1 을 정당하게 통과한다.
+    await fs.mkdir(join(tmp.home, 'myapp'), { recursive: true });
+    await fs.writeFile(join(tmp.home, 'myapp', 'auth.json'), 'PLUGIN-OWN');
+    await writePlugin(tmp.home, 'later', '~/myapp/auth.json');
+  });
+
+  afterEach(async () => { resetCliDefCache(); await tmp.cleanup(); });
+
+  /** 로드 후 `~/myapp` 를 `~/.codex` 로 바꿔치기한다. */
+  async function swapInAlias(): Promise<void> {
+    expect(await loadedIds()).toContain('later');   // 전제: Gate 1 은 통과했다
+    await fs.rm(join(tmp.home, 'myapp'), { recursive: true });
+    await fs.symlink(join(tmp.home, '.codex'), join(tmp.home, 'myapp'));
+  }
+
+  const src = file('~/myapp/auth.json');
+
+  it('readSource 가 실제 토큰을 반환하지 않는다', async () => {
+    await swapInAlias();
+    await expect(readSource(src)).rejects.toThrow(/unsafe credential resource/);
+  });
+
+  it('sourceExists / writeSource / removeSource 도 모두 거부되고 실제 파일은 그대로다', async () => {
+    await swapInAlias();
+    await expect(sourceExists(src)).rejects.toThrow(/unsafe credential resource/);
+    await expect(writeSource(src, 'ATTACKER')).rejects.toThrow(/unsafe credential resource/);
+    await expect(removeSource(src)).rejects.toThrow(/unsafe credential resource/);
+    expect(await fs.readFile(join(tmp.home, '.codex', 'auth.json'), 'utf8')).toBe(REAL_TOKEN);
+  });
+
+  it('거부 메시지에 경로가 들어가지 않는다 (detector/doctor 를 통해 화면까지 도달한다)', async () => {
+    await swapInAlias();
+    // 메시지는 고정 문자열이어야 한다 — HOME 절대경로도, 해석된 실물 경로도, 선언 표기도 없다.
+    const err = await readSource(src).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).not.toContain(tmp.home);
+    expect(message).not.toContain('myapp');
+    expect(message).not.toContain('.codex');
+  });
+});
+
+describe('Gate 2 — 정상 접근은 막지 않는다', () => {
+  let tmp: TmpHome;
+  beforeEach(async () => { tmp = await setupTmpHome(); resetCliDefCache(); });
+  afterEach(async () => { resetCliDefCache(); await tmp.cleanup(); });
+
+  it('builtin 정경 경로 접근은 통과한다 (면제는 객체 identity 가 아니라 정경 표기로 판정한다)', async () => {
+    // 같은 경로를 가리키는 **새로 만든** source 객체다. 객체 identity 로 면제했다면 여기서 막힌다.
+    await fs.mkdir(join(tmp.home, '.codex'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.codex', 'auth.json'), REAL_TOKEN);
+    expect(await readSource(file('~/.codex/auth.json'))).toBe(REAL_TOKEN);
+  });
+
+  it('구역 밖 자기 경로는 통과한다', async () => {
+    await fs.mkdir(join(tmp.home, '.config', 'myapp'), { recursive: true });
+    await fs.writeFile(join(tmp.home, '.config', 'myapp', 'creds.json'), 'MINE');
+    expect(await readSource(file('~/.config/myapp/creds.json'))).toBe('MINE');
+  });
+
+  it('부재 source 는 오늘과 동일하게 조용히 skip 된다 (AC6)', async () => {
+    expect(await readSource(file('~/.config/myapp/notyet.json'))).toBeNull();
+    expect(await sourceExists(file('~/.config/myapp/notyet.json'))).toBe(false);
+  });
+});
+
+describe('goose 하드닝 — dotfiles 사용자 완화 (AC4)', () => {
+  let tmp: TmpHome;
+  beforeEach(async () => { tmp = await setupTmpHome(); resetCliDefCache(); });
+  afterEach(async () => { resetCliDefCache(); await tmp.cleanup(); });
+
+  it('`~/.config` 가 symlink 여도 provider 캐시를 쓰고 읽을 수 있다', async () => {
+    // v0.8.2 에서는 이 테스트가 `unsafe Goose provider cache parent` 로 실패했다.
+    const real = await symlinkDotfilesConfig(tmp.home);
+    await writeSource(gooseTokens, 'GOOSE-TOKEN');
+    expect(await readSource(gooseTokens)).toBe('GOOSE-TOKEN');
+    // 바이트가 **해석된 실물 위치**에 놓인다 — 완화의 관측 가능한 결과다(§CHANGELOG Changed).
+    expect(await fs.readFile(join(real, 'goose', 'gemini_oauth', 'tokens.json'), 'utf8')).toBe('GOOSE-TOKEN');
+  });
+
+  it('`~/.config` 가 symlink 여도 provider 디렉토리 source 가 동작한다', async () => {
+    const real = await symlinkDotfilesConfig(tmp.home);
+    await fs.mkdir(join(real, 'goose', 'githubcopilot'), { recursive: true, mode: 0o700 });
+    await fs.writeFile(join(real, 'goose', 'githubcopilot', 'hosts.json'), 'COPILOT');
+    expect(await sourceExists(gooseDir)).toBe(true);
+    expect(await readSource(gooseDir)).toContain('hosts.json');
+  });
+
+  it('removeSource 도 symlink 환경에서 동작한다 (롤백 경로)', async () => {
+    await symlinkDotfilesConfig(tmp.home);
+    await writeSource(gooseTokens, 'GOOSE-TOKEN');
+    await removeSource(gooseTokens);
+    expect(await sourceExists(gooseTokens)).toBe(false);
+  });
+
+  it('완화 이후에도 **비-private 조상**은 계속 거부된다 (I7 — 완화가 무결성 검사를 지우지 않았다)', async () => {
+    const real = await symlinkDotfilesConfig(tmp.home);
+    await fs.mkdir(join(real, 'goose'), { recursive: true });
+    await fs.chmod(join(real, 'goose'), 0o777);
+    await expect(readSource(gooseTokens)).rejects.toThrow(/unsafe Goose provider cache parent/);
+  });
+});
+
+describe('goose 예약구역 — 별칭으로 뚫리지 않는다', () => {
+  let tmp: TmpHome;
+  beforeEach(async () => { tmp = await setupTmpHome(); resetCliDefCache(); });
+  afterEach(async () => { resetCliDefCache(); await tmp.cleanup(); });
+
+  it('별칭 표기로 예약구역 안을 선언하면 거부된다', async () => {
+    // 예약구역은 "builtin 이 지금 쓰는 경로" 보다 넓다. 그래서 소유권 검사만으로는 안 잡히고
+    // 구역 판정이 identity 를 봐야 잡힌다.
+    await fs.mkdir(join(tmp.home, '.config', 'goose', 'newprovider'), { recursive: true });
+    await fs.symlink(join(tmp.home, '.config', 'goose', 'newprovider'), join(tmp.home, 'gsalias'));
+    await writePlugin(tmp.home, 'zonealias', '~/gsalias/tokens.json');
+    expect(await loadedIds()).not.toContain('zonealias');
+  });
+
+  it('해석된 정경 표기를 **직접** 선언해도 거부된다 (구역 루트도 해석해야 닫힌다)', async () => {
+    // dotfiles 사용자의 진짜 구역은 `~/dotfiles/config/goose/` 다. 대상만 해석하는 구현은
+    // 이 입력을 놓친다 — 이미 해석형이라 해석해도 그대로이기 때문이다.
+    const real = await symlinkDotfilesConfig(tmp.home);
+    await fs.mkdir(join(real, 'goose', 'newprovider'), { recursive: true });
+    await writePlugin(tmp.home, 'zonedirect', `${real}/goose/newprovider/tokens.json`);
+    expect(await loadedIds()).not.toContain('zonedirect');
+  });
+
+  it('구역 밖 dotfiles 경로는 통과한다 (과잉 거부 방지)', async () => {
+    const real = await symlinkDotfilesConfig(tmp.home);
+    await fs.mkdir(join(real, 'myapp'), { recursive: true });
+    await writePlugin(tmp.home, 'dotmine', `${real}/myapp/creds.json`);
+    expect(await loadedIds()).toContain('dotmine');
+  });
+});

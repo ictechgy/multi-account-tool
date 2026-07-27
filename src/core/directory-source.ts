@@ -4,6 +4,7 @@ import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type { DirectorySource } from './types.js';
 import { expandTilde } from './paths.js';
+import { resolvePathIdentity, resolvedHome } from './path-identity.js';
 import { removePinnedChild } from './pinned-remove.js';
 
 type Entry = { kind: 'dir'; path: string } | { kind: 'file'; path: string; contentBase64: string };
@@ -59,9 +60,26 @@ async function pathExists(path: string): Promise<boolean> {
   catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false; throw err; }
 }
 
+/**
+ * 디렉토리 source 루트를 **한 번만** 해석한다.
+ *
+ * `reviewParents` 가 해석된 HOME 에서 걸어 내려오므로 루트도 해석된 표기여야 한다. 섞이면
+ * `parent identity changed` 로 오탐이 나고, `~/.config` 를 symlink 로 관리하는 사용자의 goose
+ * 디렉토리 source 2 개(`githubcopilot`, `databricks/oauth`)가 전부 실패한다.
+ *
+ * `unresolvable` 은 거부다 — 해석을 실패시키면 통과하는 fail-open 을 만들지 않는다.
+ */
+async function resolveDirectoryRoot(src: DirectorySource): Promise<string> {
+  const id = await resolvePathIdentity(src.path);
+  if (id.kind === 'unresolvable') fail('root outside HOME');
+  return id.path;
+}
+
 /** Review every HOME-to-parent component and retain identities for immediate rechecks. */
 async function reviewParents(path: string, createMissing: boolean): Promise<Identity[]> {
-  const home = process.env.HOME;
+  // 해석된 HOME 기준선 — `sources.ts` 의 provider walk 와 같은 이유다(미해석 HOME 은 해석된
+  // 대상 경로와 접두가 어긋나 정상 경로를 전부 거부한다).
+  const home = await resolvedHome();
   const parent = dirname(path);
   if (!home || (parent !== home && !parent.startsWith(home + sep))) fail('root outside HOME');
   const parts = parent === home ? [] : relative(home, parent).split(sep);
@@ -352,7 +370,7 @@ async function recoverDirectoryTxn(src: DirectorySource, parent: string, root: s
 /** Capture a canonical V1 tree without following links or serializing metadata. */
 export async function readDirectorySource(src: DirectorySource): Promise<string | null> {
   try {
-    const root = expandTilde(src.path);
+    const root = await resolveDirectoryRoot(src);
     try { await reviewParents(root, false); }
     catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
     await recoverDirectoryTxn(src, dirname(root), root);
@@ -364,7 +382,7 @@ export async function readDirectorySource(src: DirectorySource): Promise<string 
 /** Metadata-only topology check used by doctor/detector; regular files are never opened. */
 export async function directorySourceExists(src: DirectorySource): Promise<boolean> {
   try {
-    const root = expandTilde(src.path);
+    const root = await resolveDirectoryRoot(src);
     try { await reviewParents(root, false); }
     catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false; throw err; }
     await recoverDirectoryTxn(src, dirname(root), root);
@@ -432,7 +450,7 @@ async function restoreBackupAfterVerificationFailure(src: DirectorySource, root:
 /** Restore from a validated V1 tree by staged same-parent activation and byte-for-byte verification. */
 export async function writeDirectorySource(src: DirectorySource, value: string): Promise<void> {
   try {
-  const snapshot = parseDirectorySnapshot(value, src); const intended = encodeSnapshot(snapshot); const root = expandTilde(src.path);
+  const snapshot = parseDirectorySnapshot(value, src); const intended = encodeSnapshot(snapshot); const root = await resolveDirectoryRoot(src);
   await reviewParents(root, true); await recoverDirectoryTxn(src, dirname(root), root); await reviewParents(root, true);
   const parent = dirname(root); const stage = join(parent, `.${basename(root)}.mat-stage-${randomBytes(6).toString('hex')}`); const backup = join(parent, `.${basename(root)}.mat-backup-${randomBytes(6).toString('hex')}`);
   const parentProof = await reviewParents(stage, false);
@@ -513,7 +531,7 @@ export async function writeDirectorySource(src: DirectorySource, value: string):
 
 export async function removeDirectorySource(src: DirectorySource): Promise<void> {
   try {
-    const root = expandTilde(src.path);
+    const root = await resolveDirectoryRoot(src);
     try { await reviewParents(root, false); }
     catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; throw err; }
     await recoverDirectoryTxn(src, dirname(root), root);

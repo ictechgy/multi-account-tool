@@ -687,15 +687,27 @@ mat explain agy
 </ul>
 <h3 id="built-in-safeguards">Built-in safeguards</h3>
 <ul>
-<li>All external commands use <code>spawn(argv)</code> only — no shell, no injection surface</li>
-<li><code>security</code> is invoked only via the absolute path <code>/usr/bin/security</code> (defends against PATH-shim attacks)</li>
-<li>All file writes go through a single atomic helper (<code>.tmp → rename</code>, <code>O_EXCL + O_NOFOLLOW</code>, <code>0600</code>)</li>
-<li>Config mutations are funneled through <code>mutateConfig</code> (in-process serialization)</li>
-<li>Profile names: <code>[a-zA-Z0-9가-힣_.-]{1,40}</code> + NFC normalization + explicit rejection of <code>.</code> / <code>..</code> / <code>/</code> / <code>\</code> / NUL</li>
-<li>Keychain swap: backup → exact-acct delete → add. If <code>add</code> fails, the backup is auto-restored; if the rollback also fails, both errors surface together.</li>
-<li>Restore is rollback-safe for multi-source CLIs (already-restored sources are reverted to the live backup on partial failure)</li>
-<li>Error messages are redacted (JWT pattern + 50+ char base64-like sequences → <code>[redacted]</code>), and session allow-list paths are sanitized for terminal control characters before they can reach stderr</li>
-<li>Dependencies: <code>npm audit</code> clean</li>
+<li><p>All external commands use <code>spawn(argv)</code> only — no shell, no injection surface</p>
+</li>
+<li><p><code>security</code> is invoked only via the absolute path <code>/usr/bin/security</code> (defends against PATH-shim attacks)</p>
+</li>
+<li><p>All file writes go through a single atomic helper (<code>.tmp → rename</code>, <code>O_EXCL + O_NOFOLLOW</code>, <code>0600</code>)</p>
+</li>
+<li><p>Config mutations are funneled through <code>mutateConfig</code> (in-process serialization)</p>
+</li>
+<li><p>Profile names: <code>[a-zA-Z0-9가-힣_.-]{1,40}</code> + NFC normalization + explicit rejection of <code>.</code> / <code>..</code> / <code>/</code> / <code>\</code> / NUL</p>
+</li>
+<li><p>Keychain swap: backup → exact-acct delete → add. If <code>add</code> fails, the backup is auto-restored; if the rollback also fails, both errors surface together.</p>
+</li>
+<li><p>Restore is rollback-safe for multi-source CLIs (already-restored sources are reverted to the live backup on partial failure)</p>
+</li>
+<li><p>Error messages are redacted (JWT pattern + 50+ char base64-like sequences → <code>[redacted]</code>), and session allow-list paths are sanitized for terminal control characters before they can reach stderr</p>
+</li>
+<li><p><strong>Credential ownership is judged by filesystem identity, not path spelling.</strong> A plugin cannot reach a built-in CLI&#39;s live credentials by declaring an alias for them (directory symlink, file symlink, or hardlink). Paths are compared after resolution, hardlinks are caught on a separate dev/ino axis, and a path that cannot be resolved is rejected rather than allowed. The check runs both when plugins load and again at every read/write/exists/remove, so an alias created <em>after</em> load is still refused.</p>
+</li>
+<li><p>Dependencies: <code>npm audit</code> clean</p>
+<p>If you manage <code>~/.config</code> with stow/chezmoi, note the flip side: Goose provider caches now write to the resolved real location, which may sit inside your dotfiles repo. Confirm that path is in your <code>.gitignore</code>.</p>
+</li>
 </ul>
 <h3 id="not-recommended-for">Not recommended for</h3>
 <ul>

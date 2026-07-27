@@ -63,12 +63,24 @@ export type PathIdentity =
  * 기준선을 한 곳으로 모은다.
  */
 export function resolvedHomeSync(): string {
-  const home = process.env.HOME && process.env.HOME.length > 0 ? process.env.HOME : homedir();
   try {
-    return realpathSync(home);
+    return realpathSync(rawHome());
   } catch {
-    return home;
+    return rawHome();
   }
+}
+
+/** `resolvedHomeSync` 의 비동기 변형. `sources.ts` / `directory-source.ts` 의 부모 walk 기준선. */
+export async function resolvedHome(): Promise<string> {
+  try {
+    return await fsp.realpath(rawHome());
+  } catch {
+    return rawHome();
+  }
+}
+
+function rawHome(): string {
+  return process.env.HOME && process.env.HOME.length > 0 ? process.env.HOME : homedir();
 }
 
 /** 존재하는 최장 접두를 찾아 해석하고, 남은 꼬리를 어휘적으로 이어 붙인다. */

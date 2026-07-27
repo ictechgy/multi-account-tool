@@ -132,17 +132,30 @@ export class LiveResourceIndex {
   /** builtin 파일 리소스의 **선언 경로**. hardlink 판정 시 그 자리에서 lstat 한다. */
   private readonly filePathsByOwner: Array<{ cliId: string; declared: string }> = [];
 
-  /** 이 def 의 모든 source 를 소유자로 등록한다. */
+  /**
+   * 이 def 의 모든 source 를 소유자로 등록한다.
+   *
+   * **어휘 키와 해석 키를 둘 다** 등록한다. 둘은 대체 관계가 아니다:
+   * - 해석 키는 별칭을 접어 잡지만, 대상이 부재하고 접두조차 없으면(`unresolvable`) 키가 없다.
+   * - 어휘 키는 부재 경로도 항상 잡지만 별칭에 우회된다.
+   * 하나만 등록하면 그 하나의 사각지대가 그대로 우회 경로가 된다. 또 I/O 시점 게이트는
+   * "선언 표기가 정경인가" 를 물어야 하므로 어휘 키 조회가 반드시 가능해야 한다.
+   */
   add(def: CliDef): void {
     for (const src of def.sources) {
+      const lexical = liveResourceKeyOf(src);
+      if (lexical) this.own(def.id, lexical);
       const r = resolvedLiveResourceKeyOf(src);
       // builtin 인덱스 구축 중 해석 실패는 그 리소스를 등록하지 않는다(그 자체가 거부 신호는 아님).
       if (r === null || r === 'unresolvable') continue;
-      const k = r.key;
-      const id = `${k.kind} ${k.key}`;
-      if (!this.owners.has(id)) this.owners.set(id, { cliId: def.id, kind: k.kind });
-      if (k.kind === 'file' && 'path' in src) this.filePathsByOwner.push({ cliId: def.id, declared: src.path });
+      this.own(def.id, r.key);
+      if (r.key.kind === 'file' && 'path' in src) this.filePathsByOwner.push({ cliId: def.id, declared: src.path });
     }
+  }
+
+  private own(cliId: string, key: LiveResourceKey): void {
+    const id = `${key.kind} ${key.key}`;
+    if (!this.owners.has(id)) this.owners.set(id, { cliId, kind: key.kind });
   }
 
   /**
@@ -213,30 +226,42 @@ export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readon
  */
 export function findLiveResourceCollision(def: CliDef, index: LiveResourceIndex): LiveResourceCollision | undefined {
   for (const [sourceIndex, src] of def.sources.entries()) {
-    const r = resolvedLiveResourceKeyOf(src);
-    if (r === null) continue;
-    const declaredOf = () => 'path' in src ? src.path
-      : src.type === 'win-credential' ? src.targetName
-      : 'service' in src ? src.service
-      : src.saveAs;
-    // 해석 실패는 **거부**다. 통과로 접으면 공격자는 해석을 실패시키기만 하면 된다.
-    if (r === 'unresolvable') {
-      return { sourceIndex, kind: 'file', ownerCliId: '(해석 불가)', declared: declaredOf() };
-    }
-    const k = r.key;
-    let owner = index.lookup(k);
-    // 경로 해석으로 접히지 않는 축: hardlink. `nlink === 1` 이면 그 inode 를 가리키는 디렉토리
-    // 엔트리가 자기 자신뿐이라 어떤 builtin 파일과도 hardlink 관계일 수 없으므로 건너뛴다.
-    if (!owner && k.kind === 'file' && r.nlink !== undefined && r.nlink > 1) {
-      const probe = resolvePathIdentitySync('path' in src ? src.path : '');
-      if (probe.kind === 'resolved') owner = index.lookupInode(probe.dev, probe.ino);
-    }
-    if (!owner) continue;
-    const declared = 'path' in src ? src.path
-      : src.type === 'win-credential' ? src.targetName
-      : 'service' in src ? src.service
-      : src.saveAs;
-    return { sourceIndex, kind: k.kind, ownerCliId: owner.cliId, declared };
+    const hit = findSourceCollision(src, index);
+    if (hit) return { sourceIndex, ...hit };
   }
   return undefined;
 }
+
+/** 사용자에게 보여줄 원본 표기. 표시 안전성은 호출자 책임(`formatPluginWarning`). */
+function declaredOf(src: Source): string {
+  return 'path' in src ? src.path
+    : src.type === 'win-credential' ? src.targetName
+    : 'service' in src ? src.service
+    : src.saveAs;
+}
+
+/**
+ * source **하나**의 충돌 판정 — 로드 시점 게이트와 I/O 시점 게이트가 공유하는 단일 규칙.
+ *
+ * 두 게이트가 각자 규칙을 재기술하면 갈라진다. 갈라지는 방향이 "로드는 막는데 I/O 는 통과" 면
+ * 그대로 우회 경로가 되므로, 규칙은 반드시 여기 한 곳에만 둔다.
+ */
+export function findSourceCollision(src: Source, index: LiveResourceIndex): Omit<LiveResourceCollision, 'sourceIndex'> | undefined {
+  const r = resolvedLiveResourceKeyOf(src);
+  if (r === null) return undefined;
+  // 해석 실패는 **거부**다. 통과로 접으면 공격자는 해석을 실패시키기만 하면 된다.
+  if (r === 'unresolvable') return { kind: 'file', ownerCliId: UNRESOLVABLE_OWNER, declared: declaredOf(src) };
+  const k = r.key;
+  let owner = index.lookup(k);
+  // 경로 해석으로 접히지 않는 축: hardlink. `nlink === 1` 이면 그 inode 를 가리키는 디렉토리
+  // 엔트리가 자기 자신뿐이라 어떤 builtin 파일과도 hardlink 관계일 수 없으므로 건너뛴다.
+  if (!owner && k.kind === 'file' && r.nlink !== undefined && r.nlink > 1) {
+    const probe = resolvePathIdentitySync(declaredOf(src));
+    if (probe.kind === 'resolved') owner = index.lookupInode(probe.dev, probe.ino);
+  }
+  if (!owner) return undefined;
+  return { kind: k.kind, ownerCliId: owner.cliId, declared: declaredOf(src) };
+}
+
+/** 해석 실패 거부의 소유자 자리표시자. 실제 cliId 가 아니다. */
+export const UNRESOLVABLE_OWNER = '(해석 불가)';

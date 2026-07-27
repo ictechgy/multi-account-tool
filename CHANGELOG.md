@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **자격증명 경로 판정을 표기 비교에서 파일시스템 identity 비교로 바꿨다.** v0.8.2 까지 소유권
+  가드와 goose 하드닝이 **둘 다 경로 표기**로 판정해서 별칭 하나로 동시에 우회됐다.
+  실측(v0.8.2 빌드): `~/aliasdir` → `~/.codex` 를 만들고 plugin 이 `~/aliasdir/auth.json` 을
+  선언하면 로드에 성공하고, `readSource` 가 **실제 codex 토큰을 반환**했으며 `writeSource` 가
+  **실제 파일을 덮어썼다**. 파일 symlink·hardlink 형태도 로드와 읽기가 통과했다(쓰기는
+  `io-atomic` 의 `O_EXCL|O_NOFOLLOW`+rename 이 막고 있었을 뿐, 소유권 판정 덕분이 아니다).
+  즉 **읽기가 보편적 유출 채널**이었다.
+  - **Gate 1(로드 시점)** — 소유권을 해석된 경로로 판정한다. 경로 해석으로 접히지 않는
+    hardlink 를 위해 dev/ino 보조 축을 둔다. 해석 실패(EACCES/ELOOP 등)는 **거부**다.
+  - **Gate 2(I/O 시점)** — `readSource`/`writeSource`/`sourceExists`/`removeSource` 진입부에서
+    다시 판정한다. Gate 1 은 로드 순간의 형상만 보므로, 로드 이후에 별칭이 생기면 이미 수락된
+    def 가 그 별칭을 타고 builtin 자격증명에 도달한다. Gate 2 가 그 경로를 닫는다.
+  - **goose 예약구역 판정도 identity 로 바꿨다.** 예약구역은 "builtin 이 지금 쓰는 경로" 보다
+    넓어서 소유권 검사만으로는 안 잡힌다. 실측 두 형태가 뚫려 있었다 — 별칭 표기
+    (`~/gsalias/tokens.json` → 구역 안), 그리고 dotfiles 사용자의 **해석된 정경 표기**
+    (`~/dotfiles/config/goose/...`) 직접 선언. 후자 때문에 대상뿐 아니라 **구역 루트도**
+    해석해서 비교한다.
+
+### Changed
+
+- **goose provider 캐시가 해석된 실물 위치에 쓰인다.** `~/.config` 를 symlink 로 관리하는
+  경우(stow/chezmoi 등) 이전에는 `unsafe Goose provider cache parent` 로 **막혀 있었고**, 이제
+  성공하며 바이트는 링크가 가리키는 실제 위치(예: dotfiles 저장소 안)에 놓인다. 자격증명이
+  버전 관리 대상 디렉토리로 들어갈 수 있다는 뜻이므로, 그런 구성이라면 goose 캐시 경로가
+  `.gitignore` 에 있는지 확인하라.
+- 이 완화는 **순이득이 아니라 거래다.** 조상 symlink 거부는 정직한 dotfiles 사용자를 막았지만
+  공격자는 표기만 바꾸면 통과했다(위 실측). 그 거부를 identity 비교로 대체하면 정직한 사용자는
+  풀리고 별칭은 막히지만, "조상에 symlink 가 없다" 는 성질 자체는 더 이상 강제하지 않는다.
+  대신 비-private 조상 거부, 부모 dev/ino pinning, `O_NOFOLLOW`, 단계별 재확인은 전부 유지되며
+  회귀 테스트로 고정했다.
+
+### 이번 릴리스에서 닫히지 않는 것
+
+- **HOME 밖으로 나가는 dotfiles 는 계속 거부된다.** `~/.config` 가 `/Volumes/ext/config` 처럼
+  HOME 외부로 향하면 부모 walk 가 여전히 거부한다(walk 기준선이 HOME 이다).
+- **group-writable 조상도 계속 거부된다.** umask 002 환경에서 goose 가 만든 0775 디렉토리는
+  v0.8.0 부터의 진단 그대로 막힌다.
+- **goose 외 builtin 파일 source 의 무결성 하드닝은 아직 없다.** 별칭을 *선언*하는 경로는
+  막지만, `~/.codex` 같은 정경 경로의 조상이 실행 중에 교체되는 TOCTOU 는 미방어다.
+- **plugin 없이 성립하는 조상 교체는 범주 밖이다.** 정직한 `~/.codex → ~/dotfiles/codex` 와
+  악의적 `~/.codex → ~/attacker` 는 파일시스템 형상이 완전히 동일해 무상태 술어로 구별할 수
+  없다. 이건 비용 문제가 아니라 범주 문제이므로 향후 스윕으로도 닫히지 않는다 — 자격증명 루트
+  identity 원장 같은 **상태 기반** 설계가 필요하다.
+- keychain / os-keyring / win-credential 은 경로가 없어 별칭 개념이 없다. service 표기 소유권은
+  v0.8.2 의 어휘 키가 그대로 권위다(service 명 동형 위장은 별개 미해결).
+
 ## [0.8.2] - 2026-07-27
 
 ### Security
