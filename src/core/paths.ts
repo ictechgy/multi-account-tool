@@ -157,3 +157,30 @@ export function isNormalizedPathSpelling(p: string): boolean {
   const expanded = expandTilde(p);
   return normalize(expanded) === expanded;
 }
+
+/**
+ * 두 경로가 **같은 실물을 가리키는지** 비교하기 위한 정규화. 비교 전용이며 저장된 경로
+ * 문자열은 절대 바꾸지 않는다.
+ *
+ * `expandTilde` → `normalize` → NFC → (대소문자 무시 플랫폼에서) case fold 순으로 접는다.
+ *
+ * - **NFC**: macOS(APFS)는 파일명을 NFD 로 저장하므로 비ASCII HOME 세그먼트가 있으면 같은
+ *   경로가 서로 다른 유니코드 표기로 들어올 수 있다. `validators.ts` 가 `saveAs` 에 이미
+ *   적용하는 정규화와 대칭이다.
+ * - **case fold**: darwin/win32 는 기본이 대소문자 무시라 `~/.Codex/Auth.json` 이 같은 실물이다.
+ *
+ * 접기는 **항상 "더 많이 같다고 판정하는" 방향**이다. 소유권 충돌 판정에서는 거부가 늘고,
+ * 하드닝 판정에서는 보호가 는다 — 두 쪽 모두 안전한 방향이다.
+ *
+ * `process.platform` 은 **호출 시점**에 읽는다. 모듈 로드 시점 const 로 굳히면 테스트가
+ * 플랫폼을 stub 해도 반영되지 않아, 판정이 틀려도 초록으로 통과하는 상태가 된다.
+ */
+export function comparablePath(p: string): string {
+  const normalized = normalize(expandTilde(p)).normalize('NFC');
+  return isCaseInsensitiveFs() ? normalized.toLowerCase() : normalized;
+}
+
+/** darwin/win32 기본 파일시스템은 대소문자를 구분하지 않는다. 호출 시점 판정 (comparablePath JSDoc 참고). */
+export function isCaseInsensitiveFs(): boolean {
+  return process.platform === 'darwin' || process.platform === 'win32';
+}

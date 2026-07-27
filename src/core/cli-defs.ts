@@ -17,6 +17,8 @@
 import { join } from 'node:path';
 
 import { loadUserCliDefs } from './cli-defs-plugin.js';
+import { buildLiveResourceIndex, findLiveResourceCollision, liveResourceKeyOf } from './builtin-live-resources.js';
+import type { LiveResourceKey, LiveResourceOwner } from './builtin-live-resources.js';
 import { gooseConfigSources, gooseProviderCacheSources } from './goose-provider-cache.js';
 import type { CliDef, Source } from './types.js';
 import { assertValidSourceList } from './validators.js';
@@ -26,11 +28,15 @@ import { assertValidSourceList } from './validators.js';
  * macOS 에서는 Keychain (`Claude Code-credentials`) 에,
  * 그 외 OS 에서는 `~/.claude/.credentials.json` 파일에 저장된다.
  */
+/** Claude 자격증명의 두 플랫폼 표현 — 소유권 인덱스가 둘 다 예약해야 한다 (RESERVED_LIVE_RESOURCES 참고). */
+const CLAUDE_KEYCHAIN_IDENTITY = { service: 'Claude Code-credentials' } as const;
+const CLAUDE_FILE_PATH = '~/.claude/.credentials.json';
+
 function claudeSource(): Source {
   if (process.platform === 'darwin') {
-    return { type: 'keychain', service: 'Claude Code-credentials', allowAnyApp: true, saveAs: 'credentials.json' };
+    return { type: 'keychain', ...CLAUDE_KEYCHAIN_IDENTITY, allowAnyApp: true, saveAs: 'credentials.json' };
   }
-  return { type: 'file', path: '~/.claude/.credentials.json', saveAs: 'credentials.json' };
+  return { type: 'file', path: CLAUDE_FILE_PATH, saveAs: 'credentials.json' };
 }
 
 /**
@@ -97,6 +103,12 @@ function claudeSource(): Source {
  * 한계: `~/.config/goose/config.yaml` 의 file-backend 설정은 자동 감지하지 않는다. 그 경우
  * `GOOSE_DISABLE_KEYRING=1` 을 함께 지정해 os-keyring source 를 명시적으로 끈다.
  */
+/**
+ * Goose keyring 항목의 정체성 — darwin 은 keychain, linux 는 os-keyring 으로 **같은**
+ * service/account 를 쓴다. 소유권 인덱스가 두 표현을 모두 예약해야 하므로 상수로 뽑았다.
+ */
+const GOOSE_KEYRING_IDENTITY = { service: 'goose', account: 'secrets' } as const;
+
 function gooseUsesFileBackend(): boolean {
   // Goose 와 동일하게 **presence-only** 판정 — base.rs 의
   // `env::var("GOOSE_DISABLE_KEYRING").is_ok()` 는 값과 무관하게 변수가 **존재하면**
@@ -118,7 +130,7 @@ function gooseSources(): Source[] {
   // file backend 일 때 stale keychain 항목을 swap 하는 wrong-account 위험 차단 (Linux 와 대칭).
   if (process.platform === 'darwin' && !gooseUsesFileBackend()) {
     return [
-      { type: 'keychain', service: 'goose', account: 'secrets', allowAnyApp: true, saveAs: 'goose-keyring.json' },
+      { type: 'keychain', ...GOOSE_KEYRING_IDENTITY, allowAnyApp: true, saveAs: 'goose-keyring.json' },
       ...yamlSources, ...providerSources
     ];
   }
@@ -129,8 +141,7 @@ function gooseSources(): Source[] {
     return [
       {
         type: 'os-keyring',
-        service: 'goose',
-        account: 'secrets',
+        ...GOOSE_KEYRING_IDENTITY,
         backend: 'secret-service',
         saveAs: 'goose-keyring.json'
       },
@@ -376,6 +387,37 @@ export const BUILTIN_CLI_DEFS: CliDef[] = [
 
 for (const def of BUILTIN_CLI_DEFS) assertValidSourceList(def.sources);
 
+/**
+ * 플랫폼/env 분기 때문에 **현재 프로세스의 `BUILTIN_CLI_DEFS` 에는 나타나지 않지만** builtin 이
+ * 소유하는 라이브 자격증명 리소스. 소유권 인덱스는 이 합집합까지 예약해야 한다.
+ *
+ * 이게 없으면 두 가지가 뚫린다:
+ *  - **이식성**: darwin 인덱스에는 goose 의 `os-keyring` 표현이 없으므로 그 형태를 선언한
+ *    plugin JSON 이 darwin 에서 통과하고, 같은 파일을 linux 로 옮기면 진짜 항목을 스쿼팅한다.
+ *  - **같은 머신 라이브 우회**: `GOOSE_DISABLE_KEYRING` 은 mat 자신의 env 에서 읽히므로
+ *    (`gooseUsesFileBackend`), mat 호출에만 그 변수를 걸면 keyring 리소스가 인덱스에서 사라지는데
+ *    goose 는 여전히 keyring 을 쓴다.
+ *
+ * 합집합 예약은 항상 "더 거부하는" 방향이라 안전하다. 대가로 darwin 사용자가 linux 전용 표기를
+ * 선언해도 거부되는데, 그것이 의도한 결과다.
+ */
+export function reservedLiveResources(): Array<LiveResourceOwner & LiveResourceKey> {
+  const reserve = (cliId: string, src: Source): Array<LiveResourceOwner & LiveResourceKey> => {
+    const key = liveResourceKeyOf(src);
+    return key ? [{ cliId, kind: key.kind, key: key.key }] : [];
+  };
+  return [
+    // claude: darwin 은 keychain, 그 외는 파일 — 서로 배타적이라 한쪽만 인덱스에 들어간다.
+    ...reserve('claude', { type: 'keychain', ...CLAUDE_KEYCHAIN_IDENTITY, saveAs: 'credentials.json' }),
+    ...reserve('claude', { type: 'file', path: CLAUDE_FILE_PATH, saveAs: 'credentials.json' }),
+    // goose keyring: darwin=keychain / linux=os-keyring, 그리고 GOOSE_DISABLE_KEYRING 이면 아예 빠진다.
+    ...reserve('goose', { type: 'keychain', ...GOOSE_KEYRING_IDENTITY, saveAs: 'goose-keyring.json' }),
+    ...reserve('goose', { type: 'os-keyring', ...GOOSE_KEYRING_IDENTITY, backend: 'secret-service', saveAs: 'goose-keyring.json' }),
+    // opencode: XDG_DATA_HOME 이 설정되면 xdg 기본 경로가 인덱스에서 빠진다.
+    ...reserve('opencode', { type: 'file', path: '~/.local/share/opencode/auth.json', saveAs: 'opencode-auth.json' })
+  ];
+}
+
 let cachedAllDefs: CliDef[] | null = null;
 let cachedWarnings: string[] = [];
 
@@ -385,15 +427,33 @@ let cachedWarnings: string[] = [];
  */
 export function getAllCliDefs(): CliDef[] {
   if (cachedAllDefs) return cachedAllDefs;
-  const { defs: userDefs, warnings } = loadUserCliDefs();
+  const { defs: userDefs, warnings, provenance } = loadUserCliDefs();
   const builtinIds = new Set(BUILTIN_CLI_DEFS.map(c => c.id));
   const merged: CliDef[] = [...BUILTIN_CLI_DEFS];
   const collectedWarnings = [...warnings];
+  // 소유권 인덱스는 **호출 시점**에 만든다 — 모듈 레벨 const 로 굳히면 테스트가 platform/env 를
+  // stub 해도 반영되지 않아, 인덱스가 비어 있어도 전부 초록으로 통과하는 상태가 된다.
+  const liveResources = buildLiveResourceIndex(BUILTIN_CLI_DEFS, reservedLiveResources());
   for (const def of userDefs) {
     if (builtinIds.has(def.id)) {
       collectedWarnings.push(`${def.id}: builtin 과 id 충돌 — plugin 무시됨`);
       continue;
     }
+    // plugin 이 builtin(또는 이미 수락된 다른 plugin)의 라이브 자격증명을 주장하면 def 전체를
+    // 버린다. source 하나만 떨어뜨리면 "성공을 보고하면서 일부만 swap" 하는 상태가 되어
+    // v0.8.0 결함 클래스를 재생산한다 (validateCliDefRaw 도 같은 이유로 def 전체를 버린다).
+    const collision = findLiveResourceCollision(def, liveResources);
+    if (collision) {
+      const where = provenance.get(def.id) ?? def.id;
+      collectedWarnings.push(
+        `${where}: plugin '${def.id}' 의 sources[${collision.sourceIndex}] 가 ` +
+        `builtin '${collision.ownerCliId}' 소유의 라이브 자격증명(${collision.kind}: ${collision.declared})을 ` +
+        `주장하여 plugin 전체를 로드하지 않았습니다. ` +
+        `저장된 프로필은 ~/.multi-account-tool/profiles/${def.id}/ 에 그대로 있으며 삭제되지 않았습니다.`
+      );
+      continue;
+    }
+    liveResources.add(def);
     merged.push(def);
   }
   cachedAllDefs = merged;

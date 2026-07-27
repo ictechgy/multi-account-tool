@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **plugin 이 builtin 의 라이브 자격증명을 자기 source 로 선언할 수 없게 막았다.** v0.8.1 까지
+  plugin CliDef 는 `~/.codex/auth.json`, `~/.claude/.credentials.json`, goose 정경 경로,
+  그리고 `{type:'keychain', service:'goose', account:'secrets'}` 같은 builtin 소유 자격증명을
+  그대로 주장할 수 있었다(실측 12건 통과).
+  - 이건 유출이 아니라 **파괴**다. account 를 생략한 keychain source 를 restore 하면
+    `-s <service>` 만으로 builtin 항목을 찾아 **삭제**한다. 또 plugin source 는 `allowAnyApp`
+    을 설정하지 않으므로 `Claude Code-credentials` 를 다시 쓰면 `-A` ACL 이 영구 강등된다.
+  - 락이 cliId 단위라 스쿼팅 plugin 은 진짜 CLI 와 **다른 락**을 잡고 동시 실행됐다.
+  - 판정은 builtin 과 plugin 을 함께 보는 유일한 지점(`getAllCliDefs`)에서 하고, 같은 판정을
+    `mat plugin validate` 에도 배선해 **로드 전에** 진단한다.
+  - 인덱스는 플랫폼·env 조건부가 되지 않도록 모든 분기의 합집합을 예약한다. 특히
+    `GOOSE_DISABLE_KEYRING` 은 mat 자신의 env 에서 읽히므로, 그것만으로 keyring 리소스가
+    인덱스에서 사라지면 같은 머신에서 라이브 스쿼팅이 가능했다.
+- plugin 로딩 경고를 **stderr 로 실제 출력**한다. 이전에는 `mat doctor` 에서만 볼 수 있어,
+  거부된 plugin 이 사용자에게 조용히 사라진 것처럼 보였다.
+
+### Changed — plugin 작성자 대상 파괴적 변경
+
+- builtin 이 소유한 라이브 자격증명(파일 경로 / OS keyring service+account / win-credential
+  targetName+account)을 주장하는 plugin def 는 **전체가 로드되지 않는다.** source 하나만
+  떨어뜨리면 "성공을 보고하면서 일부만 swap" 하는 상태가 되므로 def 단위로 거부한다.
+  경고에 plugin 파일명·id·`sources[i]`·충돌 builtin id 가 포함되며, **저장된 프로필은 삭제되지
+  않는다**(`~/.multi-account-tool/profiles/<id>/` 에 그대로 있다).
+- **v0.8.1 의 `mat plugin validate` 는 이 규칙을 알지 못하므로 업그레이드 전 검증 수단이
+  되지 않는다.** 업그레이드 후 `mat plugin validate` 를 다시 실행하라.
+- plugin↔plugin 충돌 시 파일명 정렬 순서상 먼저 오는 쪽이 리소스를 소유한다.
+
+### Known issues — 이번 릴리스가 닫지 **않은** 것
+
+- **symlink / hardlink 별칭 우회는 열려 있다.** 판정은 어휘적 경로 비교이며 파일시스템
+  identity 보증이 아니다. `sources.ts` 의 부모 identity pinning·no-follow 는 goose 하드닝
+  경로에만 적용되고 `~/.codex/auth.json` 류에는 없다. 다음 보안 우선순위로 다룬다.
+- **디렉토리 containment arm 과 win-credential arm 은 현 릴리스에서 실제 효과가 0 이다.**
+  builtin `directory` source 2 개는 모두 goose 구역 안이라 기존 zone 체크가 먼저 잡고,
+  builtin `win-credential` source 는 아직 존재하지 않는다. 향후 대비로만 포함했다.
+- 보증 범위는 **mat 프로세스 시작 시점에 해석된 리소스**다. plugin JSON 은 이식 가능하지만
+  검증 결과가 플랫폼 독립적이지는 않다.
+
 ## [0.8.1] - 2026-07-26
 
 ### Fixed
