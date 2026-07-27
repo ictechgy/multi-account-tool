@@ -54,8 +54,17 @@ export interface LiveResourceKey {
   key: string;
 }
 
-/** 예약 리소스. 파일 종류는 hardlink 판정을 위해 **선언 표기**도 함께 실어야 한다. */
-export type ReservedLiveResource = LiveResourceOwner & LiveResourceKey & { declaredPath?: string };
+/**
+ * 예약 리소스.
+ *
+ * 파일 종류는 `declaredPath` 가 **필수**다 — 이 값이 identity 축과 inode 축을 만든다. optional 로
+ * 두면 호출자가 빠뜨렸을 때 어휘 키만 남고 조용히 보호가 사라진다(v0.8.3 리뷰에서 실제로 그
+ * 상태였고, `~/.claude` 를 symlink 로 관리하는 macOS 사용자에게서 실측으로 뚫렸다).
+ * 판별 유니온으로 두어 **컴파일 타임에** 강제한다 — 호출자의 기억에 맡기지 않는다.
+ */
+export type ReservedLiveResource =
+  | (LiveResourceOwner & { kind: 'file'; key: string; declaredPath: string })
+  | (LiveResourceOwner & { kind: Exclude<LiveResourceKind, 'file'>; key: string; declaredPath?: undefined });
 
 export interface LiveResourceOwner {
   cliId: string;

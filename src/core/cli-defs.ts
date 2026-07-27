@@ -405,8 +405,13 @@ export function reservedLiveResources(): ReservedLiveResource[] {
   const reserve = (cliId: string, src: Source): ReservedLiveResource[] => {
     const key = liveResourceKeyOf(src);
     if (!key) return [];
-    // 파일 예약은 선언 표기를 함께 넘긴다 — 인덱스가 그걸로 lstat 해 hardlink 축을 세운다.
-    return [{ cliId, kind: key.kind, key: key.key, ...('path' in src ? { declaredPath: src.path } : {}) }];
+    // 파일 예약은 선언 표기를 함께 넘긴다 — 인덱스가 그걸로 해석 키와 inode 축을 세운다.
+    // 타입이 이걸 강제하므로 빠뜨리면 컴파일이 깨진다.
+    if (key.kind === 'file') {
+      if (!('path' in src)) return [];
+      return [{ cliId, kind: 'file', key: key.key, declaredPath: src.path }];
+    }
+    return [{ cliId, kind: key.kind, key: key.key }];
   };
   return [
     // claude: darwin 은 keychain, 그 외는 파일 — 서로 배타적이라 한쪽만 인덱스에 들어간다.

@@ -3,7 +3,6 @@ import { createHash, randomBytes } from 'node:crypto';
 import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type { DirectorySource } from './types.js';
-import { expandTilde } from './paths.js';
 import { resolveParentKeepLeaf, resolvedHome } from './path-identity.js';
 import { removePinnedChild } from './pinned-remove.js';
 

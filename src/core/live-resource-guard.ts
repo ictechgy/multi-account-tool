@@ -76,22 +76,31 @@ export class LiveResourceGuardError extends Error {
  * 부른다. 진입부인 이유: 그 아래 분기(goose 하드닝 경로 / 일반 파일 경로 / keychain …)마다
  * 따로 부르면 새 분기가 추가될 때 조용히 빠지고, 빠진 자리가 그대로 우회 경로가 된다.
  */
-export function assertSourceMayBeAccessed(src: Source): void {
+export function assertSourceMayBeAccessed(src: Source, ioPath?: string): void {
   const declared = liveResourceKeyOf(src);
   if (!declared || declared.kind !== 'file') return;
-  const path = 'path' in src ? src.path : '';
+  // 소유권은 **실제로 열 경로**로 판정하고, 면제는 **선언 표기**로 판정한다. 둘을 나누지 않으면
+  // 어느 한쪽이 깨진다: 판정을 선언 표기로 하면 게이트가 승인한 경로와 여는 경로가 서로 다른
+  // 대상일 수 있고(리뷰가 지적한 지점), 면제를 열 경로로 하면 조상이 symlink 인 dotfiles
+  // 환경에서 builtin 자신의 접근이 "정경 표기가 아니다" 로 거부된다.
+  const path = ioPath ?? ('path' in src ? src.path : '');
+  const judged: Source = ioPath !== undefined && 'path' in src ? { ...src, path: ioPath } : src;
 
   // (1) goose **예약구역**. 소유권보다 넓다 — 구역 안이지만 어떤 builtin source 도 아닌 경로가
   //     있고(예: 아직 mat 이 모르는 provider 캐시), 그런 경로는 아래 소유권 검사에 걸리지 않는다.
   //     로드 시점에만 구역을 보면, 로드 후에 구역 안으로 별칭된 source 가 그대로 접근한다.
   //     선언 표기가 이미 구역 안이면 그건 Gate 1 이 심사한 사안이므로 여기서 다시 막지 않는다.
-  if (classifyGoosePath(path) === 'outside' && classifyGoosePathByIdentity(path) === 'reserved-nonadmitted') {
+  // "이미 구역 안을 선언했는가" 는 **선언 표기**로 물어야 한다(그건 Gate 1 이 심사한 사안이다).
+  // 실제 구역 소속은 **열 경로**의 identity 로 판정한다. 여기에 해석 경로를 넣으면 선언 표기가
+  // 구역 밖이던 별칭까지 "이미 구역 안 선언" 으로 오인해 그냥 통과한다.
+  const declaredPath = 'path' in src ? src.path : '';
+  if (classifyGoosePath(declaredPath) === 'outside' && classifyGoosePathByIdentity(path) === 'reserved-nonadmitted') {
     throw new LiveResourceGuardError('goose');
   }
 
   // (2) builtin 소유권.
   const index = buildLiveResourceIndex(BUILTIN_CLI_DEFS, reservedLiveResources());
-  const collision = findSourceCollision(src, index);
+  const collision = findSourceCollision(judged, index);
   if (!collision) return;
   // 선언 표기가 그 소유자의 **선언 표기**와 같으면 별칭이 아니다 (위 "면제 규칙" 참고).
   // `lookup` 이 아니라 `lookupDeclared` 여야 한다 — `lookup` 은 해석 키도 맞히므로, 조상이

@@ -477,7 +477,7 @@ Files are created with `0600`, directories with `0700`.
 - **Credential ownership is judged by filesystem identity, not path spelling.** A plugin cannot reach a built-in CLI's live credentials by declaring an alias for them (directory symlink, file symlink, or hardlink). Paths are compared after resolution, hardlinks are caught on a separate dev/ino axis, and a path that cannot be resolved is rejected rather than allowed. The check runs both when plugins load and again at every read/write/exists/remove, so a source that has *become* an alias since load is refused on its next access. It is not a race-free guarantee: for non-Goose file sources nothing pins the path between that check and the actual open, so an ancestor swapped inside that window is not detected. Goose provider caches additionally pin parent dev/ino and open with `O_NOFOLLOW`.
 - Dependencies: `npm audit` clean
 
-  If you manage `~/.config` with stow/chezmoi, note the flip side: Goose provider caches now write to the resolved real location, which may sit inside your dotfiles repo. Confirm that path is in your `.gitignore`.
+If you manage `~/.config` with stow/chezmoi, note the flip side: Goose provider caches now write to the resolved real location, which may sit inside your dotfiles repo. Confirm that path is in your `.gitignore`.
 
 ### Not recommended for
 

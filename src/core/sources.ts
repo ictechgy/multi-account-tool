@@ -492,10 +492,13 @@ async function ordinaryFilePath(src: FileSource): Promise<string> {
 export async function readSource(src: Source): Promise<string | null> {
   // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
   // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
-  assertSourceMayBeAccessed(src);
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? readGooseProviderFileForTests(src) : readFileOrNull(await ordinaryFilePath(src));
+      return isGooseProviderFile(src) ? readGooseProviderFileForTests(src) : readFileOrNull(gatePath!);
     case 'directory':
       return readDirectorySource(src);
     case 'keychain':
@@ -515,10 +518,13 @@ export async function readSource(src: Source): Promise<string | null> {
 export async function writeSource(src: Source, value: string): Promise<void> {
   // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
   // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
-  assertSourceMayBeAccessed(src);
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? writeGooseProviderFileForTests(src, value) : writeFileAtomic(await ordinaryFilePath(src), value);
+      return isGooseProviderFile(src) ? writeGooseProviderFileForTests(src, value) : writeFileAtomic(gatePath!, value);
     case 'directory':
       return writeDirectorySource(src, value);
     case 'keychain':
@@ -538,10 +544,13 @@ export async function writeSource(src: Source, value: string): Promise<void> {
 export async function sourceExists(src: Source): Promise<boolean> {
   // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
   // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
-  assertSourceMayBeAccessed(src);
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? providerFileExistsChecked(src) : fileExists(await ordinaryFilePath(src));
+      return isGooseProviderFile(src) ? providerFileExistsChecked(src) : fileExists(gatePath!);
     case 'directory':
       return directorySourceExists(src);
     case 'keychain':
@@ -562,7 +571,10 @@ export async function sourceExists(src: Source): Promise<boolean> {
 export async function removeSource(src: Source): Promise<void> {
   // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
   // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
-  assertSourceMayBeAccessed(src);
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file': {
       if (isGooseProviderFile(src)) {
@@ -574,7 +586,7 @@ export async function removeSource(src: Source): Promise<void> {
       // 그쪽에만 존재한다. (0.8.0 에는 `const parents = null` 과 도달 불가한
       // `isGooseProviderFile(src) && …` 항이 남아 있어 이 경로에도 하드닝이 있는 것처럼
       // 읽혔다 — 실제로는 항상 false 인 죽은 코드였다.)
-      const path = await ordinaryFilePath(src);
+      const path = gatePath!;
       const st = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
       if (st == null) return;
       if (st.isSymbolicLink() || !st.isFile()) throw new Error('unsafe source removal');
