@@ -155,6 +155,30 @@ describe('goose 하드닝 — dotfiles 사용자 완화 (AC4)', () => {
     expect(await sourceExists(gooseTokens)).toBe(false);
   });
 
+  it('자격증명 **파일 자신**이 symlink 면 계속 거부된다 (완화는 조상에만 적용된다)', async () => {
+    // 리뷰가 잡은 회귀. 경로를 전면 해석하면 leaf symlink 까지 따라가, 실측으로 공격자 파일을
+    // 읽고 **피해자 토큰을 공격자 파일에 썼다**. v0.8.2 가 막던 것을 완화가 함께 지워버렸다.
+    const real = await symlinkDotfilesConfig(tmp.home);
+    await fs.mkdir(join(real, 'goose', 'gemini_oauth'), { recursive: true, mode: 0o700 });
+    await fs.mkdir(join(tmp.home, 'evil'), { recursive: true, mode: 0o700 });
+    await fs.writeFile(join(tmp.home, 'evil', 'planted.json'), 'ATTACKER-PLANTED');
+    await fs.symlink(join(tmp.home, 'evil', 'planted.json'), join(real, 'goose', 'gemini_oauth', 'tokens.json'));
+
+    await expect(readSource(gooseTokens)).rejects.toThrow(/unsafe Goose provider cache file/);
+    await expect(writeSource(gooseTokens, 'VICTIM-TOKEN')).rejects.toThrow(/unsafe Goose provider cache file/);
+    // 공격자 파일이 피해자 토큰으로 덮이지 않았다는 것까지 단정한다 — throw 만으로는 부족하다.
+    expect(await fs.readFile(join(tmp.home, 'evil', 'planted.json'), 'utf8')).toBe('ATTACKER-PLANTED');
+  });
+
+  it('디렉토리 source **루트 자신**이 symlink 면 계속 거부된다', async () => {
+    const real = await symlinkDotfilesConfig(tmp.home);
+    await fs.mkdir(join(real, 'goose'), { recursive: true, mode: 0o700 });
+    await fs.mkdir(join(tmp.home, 'evildir'), { recursive: true, mode: 0o700 });
+    await fs.writeFile(join(tmp.home, 'evildir', 'x.json'), 'ATTACKER-DIR');
+    await fs.symlink(join(tmp.home, 'evildir'), join(real, 'goose', 'githubcopilot'));
+    await expect(readSource(gooseDir)).rejects.toThrow(/symlink/);
+  });
+
   it('완화 이후에도 **비-private 조상**은 계속 거부된다 (I7 — 완화가 무결성 검사를 지우지 않았다)', async () => {
     const real = await symlinkDotfilesConfig(tmp.home);
     await fs.mkdir(join(real, 'goose'), { recursive: true });
@@ -184,6 +208,15 @@ describe('goose 예약구역 — 별칭으로 뚫리지 않는다', () => {
     await fs.mkdir(join(real, 'goose', 'newprovider'), { recursive: true });
     await writePlugin(tmp.home, 'zonedirect', `${real}/goose/newprovider/tokens.json`);
     expect(await loadedIds()).not.toContain('zonedirect');
+  });
+
+  it('로드 **이후** 구역 안으로 별칭된 source 는 I/O 시점에 거부된다', async () => {
+    // 예약구역은 소유권보다 넓다 — 구역 안이지만 어떤 builtin source 도 아닌 경로가 있고,
+    // 그런 경로는 소유권 검사에 걸리지 않는다. 로드 시점에만 구역을 보면 여기가 뚫린다.
+    await fs.mkdir(join(tmp.home, '.config', 'goose', 'newprovider'), { recursive: true, mode: 0o700 });
+    await fs.writeFile(join(tmp.home, '.config', 'goose', 'newprovider', 'tokens.json'), 'GOOSE-NEW');
+    await fs.symlink(join(tmp.home, '.config', 'goose', 'newprovider'), join(tmp.home, 'gsalias'));
+    await expect(readSource(file('~/gsalias/tokens.json'))).rejects.toThrow(/unsafe credential resource/);
   });
 
   it('구역 밖 dotfiles 경로는 통과한다 (과잉 거부 방지)', async () => {

@@ -46,6 +46,7 @@
 
 import { BUILTIN_CLI_DEFS, reservedLiveResources } from './cli-defs.js';
 import { buildLiveResourceIndex, findSourceCollision, liveResourceKeyOf } from './builtin-live-resources.js';
+import { classifyGoosePath, classifyGoosePathByIdentity } from './goose-provider-cache.js';
 import type { Source } from './types.js';
 
 /**
@@ -78,6 +79,17 @@ export class LiveResourceGuardError extends Error {
 export function assertSourceMayBeAccessed(src: Source): void {
   const declared = liveResourceKeyOf(src);
   if (!declared || declared.kind !== 'file') return;
+  const path = 'path' in src ? src.path : '';
+
+  // (1) goose **예약구역**. 소유권보다 넓다 — 구역 안이지만 어떤 builtin source 도 아닌 경로가
+  //     있고(예: 아직 mat 이 모르는 provider 캐시), 그런 경로는 아래 소유권 검사에 걸리지 않는다.
+  //     로드 시점에만 구역을 보면, 로드 후에 구역 안으로 별칭된 source 가 그대로 접근한다.
+  //     선언 표기가 이미 구역 안이면 그건 Gate 1 이 심사한 사안이므로 여기서 다시 막지 않는다.
+  if (classifyGoosePath(path) === 'outside' && classifyGoosePathByIdentity(path) === 'reserved-nonadmitted') {
+    throw new LiveResourceGuardError('goose');
+  }
+
+  // (2) builtin 소유권.
   const index = buildLiveResourceIndex(BUILTIN_CLI_DEFS, reservedLiveResources());
   const collision = findSourceCollision(src, index);
   if (!collision) return;

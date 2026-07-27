@@ -45,7 +45,7 @@
 
 import { lstatSync, promises as fsp, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 
 import { comparablePath, expandTilde } from './paths.js';
 
@@ -101,7 +101,13 @@ function boundedResolveWith(
         try {
           const st = ops.lstat(real);
           return { kind: 'resolved', path: real, comparable: comparablePath(real), dev: st.dev, ino: st.ino, nlink: st.nlink };
-        } catch {
+        } catch (err) {
+          // `realpath` 가 방금 성공했으므로 대상은 **존재한다**. 여기서의 lstat 실패를
+          // `absent-tail` 로 접으면 dev/ino 가 사라져 hardlink 축이 조용히 꺼진다 — 공격자가
+          // lstat 을 실패시키기만 하면 되는 fail-open 이다. ENOENT(그 사이 삭제됨)만 부재로
+          // 인정하고 나머지는 거부한다.
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT') return { kind: 'unresolvable', reason: code ?? 'lstat-failed' };
           return { kind: 'absent-tail', path: real, comparable: comparablePath(real) };
         }
       }
@@ -144,7 +150,11 @@ export async function resolvePathIdentity(input: string): Promise<PathIdentity> 
         try {
           const st = await fsp.lstat(real);
           return { kind: 'resolved', path: real, comparable: comparablePath(real), dev: Number(st.dev), ino: Number(st.ino), nlink: Number(st.nlink) };
-        } catch {
+        } catch (err) {
+          // 동기 변형과 **같은 규칙**이어야 한다 — 여기만 무조건 absent-tail 로 접으면
+          // I/O 시점 경로에서만 hardlink 축이 꺼지는 비대칭 fail-open 이 생긴다.
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT') return { kind: 'unresolvable', reason: code ?? 'lstat-failed' };
           return { kind: 'absent-tail', path: real, comparable: comparablePath(real) };
         }
       }
@@ -159,6 +169,31 @@ export async function resolvePathIdentity(input: string): Promise<PathIdentity> 
       cursor = parent;
     }
   }
+}
+
+/**
+ * **부모만** 해석하고 마지막 세그먼트(leaf)는 어휘 표기로 남긴다. I/O 대상 경로를 만들 때 쓴다.
+ *
+ * ## 왜 leaf 를 해석하면 안 되는가
+ *
+ * 전면 해석은 자격증명 **파일 자신**이 symlink 인 경우까지 따라간다. 실측(이 함수를 도입하기 전
+ * 상태): `~/.config/goose/gemini_oauth/tokens.json` 을 `~/evil/planted.json` 으로의 symlink 로
+ * 만들면 `readSource` 가 공격자 내용을 반환했고, `writeSource` 는 **피해자 토큰을 공격자 파일에
+ * 썼다**. v0.8.2 는 `unsafe Goose provider cache file` 로 막던 것이다 — 해석을 도입하면서
+ * 조상 완화만 의도했는데 leaf 검사까지 함께 지워버린 회귀였다.
+ *
+ * leaf 를 어휘로 남기면 뒤따르는 `lstat` + `isSymbolicLink()` 와 `O_NOFOLLOW` 가 v0.8.2 와
+ * 동일하게 동작하고, 조상(`~/.config` 같은 dotfiles symlink)만 해석되어 의도한 완화만 남는다.
+ *
+ * `null` 은 거부 신호다(`unresolvable`).
+ */
+export async function resolveParentKeepLeaf(input: string): Promise<string | null> {
+  const expanded = expandTilde(input);
+  const parent = dirname(expanded);
+  if (parent === expanded) return expanded;   // 파일시스템 루트 — 해석할 부모가 없다
+  const id = await resolvePathIdentity(parent);
+  if (id.kind === 'unresolvable') return null;
+  return join(id.path, basename(expanded));
 }
 
 /** 판정에 쓸 비교 키. `unresolvable` 은 키가 없다 — 호출자가 거부해야 한다. */

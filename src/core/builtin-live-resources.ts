@@ -54,6 +54,9 @@ export interface LiveResourceKey {
   key: string;
 }
 
+/** 예약 리소스. 파일 종류는 hardlink 판정을 위해 **선언 표기**도 함께 실어야 한다. */
+export type ReservedLiveResource = LiveResourceOwner & LiveResourceKey & { declaredPath?: string };
+
 export interface LiveResourceOwner {
   cliId: string;
   kind: LiveResourceKind;
@@ -178,9 +181,12 @@ export class LiveResourceIndex {
   }
 
   /** 플랫폼/env 분기 때문에 현재 def 배열에 나타나지 않는 리소스를 예약한다. */
-  reserve(cliId: string, key: LiveResourceKey): void {
-    const id = `${key.kind} ${key.key}`;
-    if (!this.owners.has(id)) this.owners.set(id, { cliId, kind: key.kind });
+  reserve(cliId: string, key: LiveResourceKey, declaredPath?: string): void {
+    this.own(cliId, key);
+    // 예약 리소스에도 inode 축이 필요하다. `reservedLiveResources()` 에는 실제 **파일** 항목이
+    // 있고(claude 의 비-darwin 파일 경로, opencode 의 xdg 기본 경로), 이 목록에 넣지 않으면
+    // 그 경로들에 대한 hardlink 는 경로 비교로도 inode 비교로도 잡히지 않는다.
+    if (key.kind === 'file' && declaredPath) this.filePathsByOwner.push({ cliId, declared: declaredPath });
   }
 
   /**
@@ -213,10 +219,10 @@ export class LiveResourceIndex {
 }
 
 /** 판정에 쓸 수 있도록 def 목록에서 인덱스를 만든다. 호출 시점 평가 — 모듈 레벨 const 로 굳히지 말 것. */
-export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readonly (LiveResourceOwner & LiveResourceKey)[] = []): LiveResourceIndex {
+export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readonly ReservedLiveResource[] = []): LiveResourceIndex {
   const index = new LiveResourceIndex();
   for (const def of defs) index.add(def);
-  for (const r of reserved) index.reserve(r.cliId, { kind: r.kind, key: r.key });
+  for (const r of reserved) index.reserve(r.cliId, { kind: r.kind, key: r.key }, r.declaredPath);
   return index;
 }
 

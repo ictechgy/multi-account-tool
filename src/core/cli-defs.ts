@@ -18,7 +18,7 @@ import { join } from 'node:path';
 
 import { loadUserCliDefs } from './cli-defs-plugin.js';
 import { buildLiveResourceIndex, findLiveResourceCollision, liveResourceKeyOf } from './builtin-live-resources.js';
-import type { LiveResourceKey, LiveResourceOwner } from './builtin-live-resources.js';
+import type { LiveResourceKey, LiveResourceOwner, ReservedLiveResource } from './builtin-live-resources.js';
 import { gooseConfigSources, gooseProviderCacheSources } from './goose-provider-cache.js';
 import type { CliDef, Source } from './types.js';
 import { assertValidSourceList } from './validators.js';
@@ -401,10 +401,12 @@ for (const def of BUILTIN_CLI_DEFS) assertValidSourceList(def.sources);
  * 합집합 예약은 항상 "더 거부하는" 방향이라 안전하다. 대가로 darwin 사용자가 linux 전용 표기를
  * 선언해도 거부되는데, 그것이 의도한 결과다.
  */
-export function reservedLiveResources(): Array<LiveResourceOwner & LiveResourceKey> {
-  const reserve = (cliId: string, src: Source): Array<LiveResourceOwner & LiveResourceKey> => {
+export function reservedLiveResources(): ReservedLiveResource[] {
+  const reserve = (cliId: string, src: Source): ReservedLiveResource[] => {
     const key = liveResourceKeyOf(src);
-    return key ? [{ cliId, kind: key.kind, key: key.key }] : [];
+    if (!key) return [];
+    // 파일 예약은 선언 표기를 함께 넘긴다 — 인덱스가 그걸로 lstat 해 hardlink 축을 세운다.
+    return [{ cliId, kind: key.kind, key: key.key, ...('path' in src ? { declaredPath: src.path } : {}) }];
   };
   return [
     // claude: darwin 은 keychain, 그 외는 파일 — 서로 배타적이라 한쪽만 인덱스에 들어간다.

@@ -4,7 +4,7 @@ import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type { DirectorySource } from './types.js';
 import { expandTilde } from './paths.js';
-import { resolvePathIdentity, resolvedHome } from './path-identity.js';
+import { resolveParentKeepLeaf, resolvedHome } from './path-identity.js';
 import { removePinnedChild } from './pinned-remove.js';
 
 type Entry = { kind: 'dir'; path: string } | { kind: 'file'; path: string; contentBase64: string };
@@ -67,12 +67,16 @@ async function pathExists(path: string): Promise<boolean> {
  * `parent identity changed` 로 오탐이 나고, `~/.config` 를 symlink 로 관리하는 사용자의 goose
  * 디렉토리 source 2 개(`githubcopilot`, `databricks/oauth`)가 전부 실패한다.
  *
+ * 루트 **자신**은 해석하지 않는다 — 해석하면 `githubcopilot` 이 symlink 인 경우 그 대상을
+ * 캡처·복원하게 된다(실측: 공격자 디렉토리 내용이 스냅샷에 그대로 실렸다). 부모만 해석하고
+ * 마지막 세그먼트는 어휘로 남겨야 뒤따르는 `lstatRequired` 의 symlink 거부가 살아 있다.
+ *
  * `unresolvable` 은 거부다 — 해석을 실패시키면 통과하는 fail-open 을 만들지 않는다.
  */
 async function resolveDirectoryRoot(src: DirectorySource): Promise<string> {
-  const id = await resolvePathIdentity(src.path);
-  if (id.kind === 'unresolvable') fail('root outside HOME');
-  return id.path;
+  const root = await resolveParentKeepLeaf(src.path);
+  if (root === null) fail('root outside HOME');
+  return root;
 }
 
 /** Review every HOME-to-parent component and retain identities for immediate rechecks. */

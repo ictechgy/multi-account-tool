@@ -20,7 +20,7 @@ import { basename, isAbsolute, join } from 'node:path';
 import { hasUnsafeDisplayChar } from './display-safety.js';
 import { validatePublicEnvSecretSource } from './env-secret-source.js';
 import { buildLiveResourceIndex, findLiveResourceCollision } from './builtin-live-resources.js';
-import type { LiveResourceKey, LiveResourceOwner } from './builtin-live-resources.js';
+import type { LiveResourceKey, LiveResourceOwner, ReservedLiveResource } from './builtin-live-resources.js';
 import { classifyGoosePathByIdentity } from './goose-provider-cache.js';
 import { dataDir, isNormalizedPathSpelling, validateCliId, validateProfileFileName } from './paths.js';
 import { redactSecretLikeText } from './redaction.js';
@@ -331,7 +331,7 @@ export interface PluginValidationBatchOptions {
    */
   builtinDefs?: readonly CliDef[];
   /** 플랫폼/env 분기로 builtinDefs 에 나타나지 않는 예약 리소스 (cli-defs.reservedLiveResources). */
-  reservedLiveResources?: readonly (LiveResourceOwner & LiveResourceKey)[];
+  reservedLiveResources?: readonly ReservedLiveResource[];
 }
 
 function diagnostic(input: {

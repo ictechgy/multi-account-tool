@@ -15,7 +15,7 @@
 import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, relative, sep } from 'node:path';
 import { expandTilde } from './paths.js';
-import { resolvePathIdentity, resolvedHome } from './path-identity.js';
+import { resolveParentKeepLeaf, resolvePathIdentity, resolvedHome } from './path-identity.js';
 import { assertSourceMayBeAccessed } from './live-resource-guard.js';
 import { isAdmittedGooseProviderCacheFile } from './goose-provider-cache.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
@@ -64,9 +64,9 @@ function providerPublicError(err: unknown): Error {
  * fail-open 을 막는다.
  */
 async function resolveProviderPath(src: FileSource): Promise<string> {
-  const id = await resolvePathIdentity(src.path);
-  if (id.kind === 'unresolvable') throw new Error('unsafe Goose provider cache parent');
-  return id.path;
+  const path = await resolveParentKeepLeaf(src.path);
+  if (path === null) throw new Error('unsafe Goose provider cache parent');
+  return path;
 }
 
 /** macOS 의 `security` CLI 절대경로. PATH shim 공격을 방지. */
@@ -442,8 +442,8 @@ async function validateProviderParents(path: string, createMissing: boolean): Pr
   // 해석 안정성: 처음 해석과 walk 완료 시점의 해석이 갈라지면 그 사이에 조상이 바뀐 것이다.
   // 부모 dev/ino pinning 은 **관측한** 조상만 지키므로, 관측 자체가 다른 실물을 향하게 된
   // 경우는 이 재해석 비교로만 잡힌다.
-  const again = await resolvePathIdentity(path);
-  if (again.kind === 'unresolvable' || again.path !== path) throw new Error('Goose provider cache parent identity changed');
+  const again = await resolveParentKeepLeaf(path);
+  if (again === null || again !== path) throw new Error('Goose provider cache parent identity changed');
   return identities;
 }
 async function assertProviderParentsUnchanged(expected: ParentIdentity[]): Promise<void> { for (const item of expected) { const st = await fs.lstat(item.path); if (st.isSymbolicLink() || Number(st.dev) !== item.dev || Number(st.ino) !== item.ino) throw new Error('Goose provider cache parent identity changed'); } }
