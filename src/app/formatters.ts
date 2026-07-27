@@ -45,6 +45,14 @@ export function formatSwitchResult(r: SwitchResult, to: string): string {
       lines.push(`  (비어있어 캡처 안 됨: ${r.fromSnapshot.empty.join(', ')})`);
     }
   }
+  if (!r.restore.carryOverEvaluated) {
+    // 이 경로는 restore 를 실행하지 않았다. `복원 → X : 0개 파일` 은 "복원을 시도했는데 0개" 로
+    // 읽혀 오도적이므로 **대체**한다. 그리고 carriedOver 가 비어 있는 것이 "이월 없음" 을
+    // 뜻하지 않는다는 사실을 사용자에게 명시한다.
+    lines.push(`이미 활성인 프로필입니다 — 복원을 수행하지 않았습니다: ${to}`);
+    lines.push(`  이번 호출은 이월 여부를 판정하지 않았습니다. 'mat doctor' / 'mat freshness' 로 확인하세요.`);
+    return lines.join('\n');
+  }
   lines.push(`복원 → ${to} : ${r.restore.restored.length}개 파일`);
   if (r.restore.missing.length) {
     lines.push(`  (프로필에 없어 건너뜀: ${r.restore.missing.join(', ')})`);
