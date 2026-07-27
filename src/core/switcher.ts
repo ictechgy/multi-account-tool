@@ -177,6 +177,18 @@ export interface RestoreResult {
    * **조용한** 저하이므로, 구조적 필드 + 구분된 경고로 비침묵성과 귀속성을 확보한다.
    */
   carriedOver: string[];
+  /**
+   * 이번 호출이 carry-over 판정을 **실제로 수행했는지**.
+   *
+   * `false` 면 `carriedOver` 는 항상 `[]` 이며 그것은 "이월이 없다" 는 뜻이 **아니다**.
+   * idempotent no-op 경로(이미 활성인 프로필 재선택)는 restore 를 실행하지 않으므로 평가할
+   * 대상 자체가 없다. 호출자가 두 상태를 구별할 수 있어야 하므로 주석이 아니라 필드로 노출한다.
+   *
+   * 판정을 그 경로에서 실제로 수행하지 않는 이유: `readSource` 는 goose/darwin 에서
+   * `security find-generic-password` 를 spawn 하고(무해한 no-op 전환이 keychain 프롬프트를
+   * 띄울 수 있다) 하드닝 실패 시 throw 할 수 있어, 항상 성공하던 멱등 no-op 이 실패로 뒤집힌다.
+   */
+  carryOverEvaluated: boolean;
 }
 
 /** 복원 plan: source 별 stored (프로필) + liveBackup (롤백용 라이브 백업) */
@@ -218,7 +230,7 @@ async function restoreProfileToLiveUnlocked(
   const plan = await collectRestorePlan(def, cliId, profileName, missing, carriedOver);
   await applyRestorePlan(plan, restored);
 
-  return { cliId, profileName, restored, missing, carriedOver };
+  return { cliId, profileName, restored, missing, carriedOver, carryOverEvaluated: true };
 }
 
 /** 복원 전 preflight: 모든 source 의 stored + 현재 라이브 값을 메모리에 수집. */
@@ -382,7 +394,7 @@ async function switchProfileUnlocked(
     // `mat freshness` 가 권위 있는 채널이다.
     return {
       fromSnapshot: undefined,
-      restore: { cliId, profileName: toProfile, restored: [], missing: [], carriedOver: [] },
+      restore: { cliId, profileName: toProfile, restored: [], missing: [], carriedOver: [], carryOverEvaluated: false },
       preSwapLiveFreshness: undefined
     };
   }
