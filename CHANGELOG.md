@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-07-27
+
 ### Security
 
 - **자격증명 경로 판정을 표기 비교에서 파일시스템 identity 비교로 바꿨다.** v0.8.2 까지 소유권
