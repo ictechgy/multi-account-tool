@@ -205,7 +205,13 @@ export function classifyGoosePathByIdentity(path: string): 'admitted' | 'reserve
   if (lexical !== 'outside') return lexical;
   const target = resolvedComparable(path);
   const root = resolvedComparable(GOOSE_CONFIG_ROOT);
-  if (target === null || root === null) return lexical;
+  // 대상 해석 실패는 여기서 판정을 바꾸지 않는다 — 소유권 게이트가 `unresolvable` 을 **별도
+  // 축에서** 이미 거부하므로, 여기서 중복 거부하면 원인 메시지만 엉뚱해진다.
+  if (target === null) return lexical;
+  // 반면 **구역 루트** 해석 실패는 덮어 줄 다른 축이 없다. 실측: `~/.config` 를 ELOOP symlink 로
+  // 만들면 root 가 `unresolvable` 이 되고, 그 순간 이 함수가 **모든 경로에 대해** 'outside' 를
+  // 반환해 예약구역 검사가 통째로 사라졌다. 구역 밖임을 증명할 수 없으면 거부해야 한다.
+  if (root === null) return 'reserved-nonadmitted';
   if (target === root) return 'reserved-nonadmitted';
   if (!target.startsWith(`${root}${sep}`)) return 'outside';
   const canonical = [...gooseProviderCacheSources(), ...gooseConfigSources()]

@@ -48,6 +48,11 @@ async function loadedIds(): Promise<string[]> {
 async function symlinkDotfilesConfig(home: string): Promise<string> {
   const real = join(home, 'dotfiles', 'config');
   await fs.mkdir(real, { recursive: true });
+  // **명시 mode 필수.** umask 002(Fedora/RHEL 의 UPG 기본, 다수 CI 이미지)에서는 0775 가 되어
+  // group-writable 조상이 되고, 같은 PR 이 문서화한 "비-private 조상 거부" 에 걸려 완화 테스트가
+  // 거짓 실패한다. `recursive: true` 는 중간 디렉토리에 mode 를 적용하지 않으므로 따로 준다.
+  await fs.chmod(join(home, 'dotfiles'), 0o700);
+  await fs.chmod(real, 0o700);
   await fs.symlink(real, join(home, '.config'));
   return real;
 }
@@ -201,6 +206,7 @@ describe('예약 리소스 — 등록 경로가 갈라지면 안 된다', () => 
   async function symlinkedClaudeDir(home: string): Promise<string> {
     const real = join(home, 'dotfiles', 'claude');
     await fs.mkdir(real, { recursive: true, mode: 0o700 });
+    await fs.chmod(join(home, 'dotfiles'), 0o700);   // 중간 디렉토리는 mode 가 적용되지 않는다
     await fs.writeFile(join(real, '.credentials.json'), 'REAL-CLAUDE-CREDS');
     await fs.symlink(real, join(home, '.claude'));
     return real;
@@ -253,6 +259,15 @@ describe('goose 예약구역 — 별칭으로 뚫리지 않는다', () => {
     await fs.writeFile(join(tmp.home, '.config', 'goose', 'newprovider', 'tokens.json'), 'GOOSE-NEW');
     await fs.symlink(join(tmp.home, '.config', 'goose', 'newprovider'), join(tmp.home, 'gsalias'));
     await expect(readSource(file('~/gsalias/tokens.json'))).rejects.toThrow(/unsafe credential resource/);
+  });
+
+  it('구역 루트를 해석할 수 없으면 구역 밖임을 증명할 수 없으므로 거부한다', async () => {
+    // 실측: `~/.config` 를 ELOOP symlink 로 만들면 구역 루트가 `unresolvable` 이 되고, 그 순간
+    // identity 분류가 **모든 경로에 대해** 'outside' 를 반환해 예약구역 검사가 통째로 사라졌다.
+    // 대상 해석 실패는 소유권 게이트가 별도 축에서 거부하지만, 루트 실패는 덮어 줄 축이 없다.
+    const { classifyGoosePathByIdentity } = await import('../../src/core/goose-provider-cache.js');
+    await fs.symlink(join(tmp.home, '.config'), join(tmp.home, '.config'));
+    expect(classifyGoosePathByIdentity('~/anything/tokens.json')).toBe('reserved-nonadmitted');
   });
 
   it('구역 밖 dotfiles 경로는 통과한다 (과잉 거부 방지)', async () => {

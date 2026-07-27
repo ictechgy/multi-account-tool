@@ -41,6 +41,26 @@ async function loadedIds(): Promise<string[]> {
   return getAllCliDefs().map(d => d.id);
 }
 
+/**
+ * 이 HOME 이 놓인 파일시스템이 대소문자를 구분하지 않는지 **실제로** 확인한다.
+ *
+ * `process.platform` 은 대리 변수일 뿐이다. macOS 는 case-sensitive APFS 볼륨으로도 포맷할 수
+ * 있고, 그런 러너에서는 `~/.CODEX/Auth.json` 이 전혀 다른(부재) 경로라 "거부되어야 한다" 는
+ * 단정이 거짓 실패를 낸다. 반대로 Linux 에서 대소문자 무시 마운트를 쓰면 통과 단정이 깨진다.
+ */
+async function fsFoldsCase(home: string): Promise<boolean> {
+  const probe = join(home, '.mat-case-probe');
+  await fs.writeFile(probe, 'x');
+  try {
+    await fs.stat(join(home, '.MAT-CASE-PROBE'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await fs.rm(probe, { force: true });
+  }
+}
+
 describe('자격증명 경로 별칭 우회 — Gate 1 소유권 판정', () => {
   let tmp: TmpHome;
 
@@ -92,14 +112,14 @@ describe('자격증명 경로 별칭 우회 — Gate 1 소유권 판정', () => 
     expect(await loadedIds()).not.toContain('canon');
   });
 
-  it('대소문자 변형도 거부된다 (darwin/win32)', async () => {
+  it('대소문자 변형은 파일시스템이 대소문자를 접을 때만 거부된다', async () => {
+    // 기대값을 `process.platform` 이 아니라 **실측한 파일시스템 속성**에서 끌어온다
+    // (case-sensitive APFS 볼륨이나 대소문자 무시 마운트에서 거짓 실패/통과를 막는다).
+    const folds = await fsFoldsCase(tmp.home);
     await writePlugin(tmp.home, 'casevar', '~/.CODEX/Auth.json');
     const ids = await loadedIds();
-    if (process.platform === 'darwin' || process.platform === 'win32') {
-      expect(ids).not.toContain('casevar');
-    } else {
-      expect(ids).toContain('casevar');
-    }
+    if (folds) expect(ids).not.toContain('casevar');
+    else expect(ids).toContain('casevar');
   });
 });
 

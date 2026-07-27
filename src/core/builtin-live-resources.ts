@@ -61,6 +61,8 @@ export interface LiveResourceKey {
  * 두면 호출자가 빠뜨렸을 때 어휘 키만 남고 조용히 보호가 사라진다(v0.8.3 리뷰에서 실제로 그
  * 상태였고, `~/.claude` 를 symlink 로 관리하는 macOS 사용자에게서 실측으로 뚫렸다).
  * 판별 유니온으로 두어 **컴파일 타임에** 강제한다 — 호출자의 기억에 맡기지 않는다.
+ * `LiveResourceIndex.reserve` 도 이 타입을 통째로 받는다. 개별 인자로 풀어 받으면
+ * `declaredPath` 가 다시 optional 이 되어 강제가 서명에서 새어나간다.
  */
 export type ReservedLiveResource =
   | (LiveResourceOwner & { kind: 'file'; key: string; declaredPath: string })
@@ -105,14 +107,21 @@ function keyringKey(service: string, account: string | undefined): string {
  * 거부로 다룰 수 있도록 별도 신호를 준다. 공격자가 해석을 실패시키기만 하면 통과하는
  * fail-open 을 막기 위함이다.
  */
-export function resolvedLiveResourceKeyOf(src: Source): { key: LiveResourceKey; nlink?: number } | 'unresolvable' | null {
+export function resolvedLiveResourceKeyOf(src: Source): ResolvedLiveResourceKey | 'unresolvable' | null {
   const lexical = liveResourceKeyOf(src);
   if (!lexical) return null;
   if (lexical.kind !== 'file') return { key: lexical };   // keyring 류는 경로가 아니다
   const id = resolvePathIdentitySync('path' in src ? src.path : '');
   if (id.kind === 'unresolvable') return 'unresolvable';
-  return { key: { kind: 'file', key: id.comparable }, nlink: id.kind === 'resolved' ? id.nlink : undefined };
+  // `nlink` 와 `dev`/`ino` 는 **같은 한 번의 lstat** 에서 나와야 한다. 따로 관측하면 그 사이에
+  // 대상이 바뀌어 "nlink 는 옛 파일 것, inode 는 새 파일 것" 인 조합으로 판정하게 된다.
+  return id.kind === 'resolved'
+    ? { key: { kind: 'file', key: id.comparable }, nlink: id.nlink, dev: id.dev, ino: id.ino }
+    : { key: { kind: 'file', key: id.comparable } };
 }
+
+/** 해석된 소유권 키. 파일이 실재할 때만 hardlink 축(`nlink`/`dev`/`ino`)이 함께 실린다. */
+export type ResolvedLiveResourceKey = { key: LiveResourceKey; nlink?: number; dev?: number; ino?: number };
 
 export function liveResourceKeyOf(src: Source): LiveResourceKey | null {
   switch (src.type) {
@@ -218,8 +227,8 @@ export class LiveResourceIndex {
   }
 
   /** 플랫폼/env 분기 때문에 현재 def 배열에 나타나지 않는 리소스를 예약한다. */
-  reserve(cliId: string, key: LiveResourceKey, declaredPath?: string): void {
-    this.register(cliId, key, declaredPath);
+  reserve(entry: ReservedLiveResource): void {
+    this.register(entry.cliId, { kind: entry.kind, key: entry.key }, entry.declaredPath);
   }
 
   /**
@@ -260,7 +269,7 @@ export class LiveResourceIndex {
 export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readonly ReservedLiveResource[] = []): LiveResourceIndex {
   const index = new LiveResourceIndex();
   for (const def of defs) index.add(def);
-  for (const r of reserved) index.reserve(r.cliId, { kind: r.kind, key: r.key }, r.declaredPath);
+  for (const r of reserved) index.reserve(r);
   return index;
 }
 
@@ -299,9 +308,8 @@ export function findSourceCollision(src: Source, index: LiveResourceIndex): Omit
   let owner = index.lookup(k);
   // 경로 해석으로 접히지 않는 축: hardlink. `nlink === 1` 이면 그 inode 를 가리키는 디렉토리
   // 엔트리가 자기 자신뿐이라 어떤 builtin 파일과도 hardlink 관계일 수 없으므로 건너뛴다.
-  if (!owner && k.kind === 'file' && r.nlink !== undefined && r.nlink > 1) {
-    const probe = resolvePathIdentitySync(declaredOf(src));
-    if (probe.kind === 'resolved') owner = index.lookupInode(probe.dev, probe.ino);
+  if (!owner && k.kind === 'file' && r.nlink !== undefined && r.nlink > 1 && r.dev !== undefined && r.ino !== undefined) {
+    owner = index.lookupInode(r.dev, r.ino);
   }
   if (!owner) return undefined;
   return { kind: k.kind, ownerCliId: owner.cliId, declared: declaredOf(src) };
