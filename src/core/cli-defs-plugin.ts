@@ -20,8 +20,8 @@ import { basename, isAbsolute, join } from 'node:path';
 import { hasUnsafeDisplayChar } from './display-safety.js';
 import { validatePublicEnvSecretSource } from './env-secret-source.js';
 import { buildLiveResourceIndex, findLiveResourceCollision } from './builtin-live-resources.js';
-import type { LiveResourceKey, LiveResourceOwner } from './builtin-live-resources.js';
-import { classifyGoosePath } from './goose-provider-cache.js';
+import type { LiveResourceKey, LiveResourceOwner, ReservedLiveResource } from './builtin-live-resources.js';
+import { classifyGoosePathByIdentity } from './goose-provider-cache.js';
 import { dataDir, isNormalizedPathSpelling, validateCliId, validateProfileFileName } from './paths.js';
 import { redactSecretLikeText } from './redaction.js';
 import { validateWindowsCredentialBinding } from './windows-credential-manager.js';
@@ -129,7 +129,9 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     // builtin 이 소유한 Goose 자격증명 구역에는 라이브 provider OAuth 토큰이 있다. 인정된 고정
     // 경로가 아닌 구역 내부 경로를 조용히 일반 쓰기 경로로 흘려보내면, 하드닝(부모 identity
     // pinning·nlink·no-follow)을 우회한 무검증 쓰기를 허용하게 되므로 로드 시점에 거부한다.
-    if (classifyGoosePath(raw.path) === 'reserved-nonadmitted') {
+    // identity 판정을 쓴다 — 어휘 판정은 별칭 표기와 해석된 정경 표기 양쪽으로 뚫린다
+    // (`classifyGoosePathByIdentity` JSDoc 의 실측 두 경로 참고).
+    if (classifyGoosePathByIdentity(raw.path) === 'reserved-nonadmitted') {
       return { error: `sources[${idx}].path 가 mat builtin 이 관리하는 Goose 자격증명 구역(~/.config/goose) 안에 있지만 인정된 고정 경로가 아닙니다. builtin goose 지원을 쓰거나 구역 밖 경로를 지정하세요.` };
     }
     const src: FileSource = { type: 'file', path: raw.path, saveAs: safeSaveAs };
@@ -329,7 +331,7 @@ export interface PluginValidationBatchOptions {
    */
   builtinDefs?: readonly CliDef[];
   /** 플랫폼/env 분기로 builtinDefs 에 나타나지 않는 예약 리소스 (cli-defs.reservedLiveResources). */
-  reservedLiveResources?: readonly (LiveResourceOwner & LiveResourceKey)[];
+  reservedLiveResources?: readonly ReservedLiveResource[];
 }
 
 function diagnostic(input: {

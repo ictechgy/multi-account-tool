@@ -474,7 +474,10 @@ Files are created with `0600`, directories with `0700`.
 - Keychain swap: backup → exact-acct delete → add. If `add` fails, the backup is auto-restored; if the rollback also fails, both errors surface together.
 - Restore is rollback-safe for multi-source CLIs (already-restored sources are reverted to the live backup on partial failure)
 - Error messages are redacted (JWT pattern + 50+ char base64-like sequences → `[redacted]`), and session allow-list paths are sanitized for terminal control characters before they can reach stderr
+- **Credential ownership is judged by filesystem identity, not path spelling.** A plugin cannot reach a built-in CLI's live credentials by declaring an alias for them (directory symlink, file symlink, or hardlink). Paths are compared after resolution, hardlinks are caught on a separate dev/ino axis, and a path that cannot be resolved is rejected rather than allowed — with one deliberate exception: if the Goose reserved-zone root itself cannot be resolved, zone classification falls back to the lexical verdict, because rejecting there blocked unrelated files. The check runs both when plugins load and again at every read/write/exists/remove, so a source that has *become* an alias since load is refused on its next access. It is not a race-free guarantee: for non-Goose file sources nothing pins the path between that check and the actual open, so an ancestor swapped inside that window is not detected. Goose provider caches additionally pin parent dev/ino and open with `O_NOFOLLOW`.
 - Dependencies: `npm audit` clean
+
+If you manage `~/.config` with stow/chezmoi, note the flip side: Goose provider caches now write to the resolved real location, which may sit inside your dotfiles repo. Confirm that path is in your `.gitignore`.
 
 ### Not recommended for
 

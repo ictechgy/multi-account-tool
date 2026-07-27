@@ -11,7 +11,7 @@
  * `test.concurrent` 를 쓸 때는 race 가 다시 발생할 수 있으므로 사용 금지.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,7 +33,10 @@ export interface TmpHome {
  */
 export async function setupTmpHome(): Promise<TmpHome> {
   const originalHome = process.env.HOME;
-  const home = await mkdtemp(join(tmpdir(), 'mat-test-'));
+  // macOS 의 `os.tmpdir()` 는 `/var/folders/...` → `/private/var/folders/...` symlink 다.
+  // 미해석 경로를 $HOME 으로 쓰면 경로 해석을 도입하는 순간 판정 기준선과 실제 I/O 대상이
+  // 갈라져(`parent.startsWith(home + sep)` 가 false) 테스트가 광역으로 깨진다.
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'mat-test-')));
   process.env.HOME = home;
   return {
     home,

@@ -695,8 +695,10 @@ mat explain agy
 <li>Keychain swap: backup → exact-acct delete → add. If <code>add</code> fails, the backup is auto-restored; if the rollback also fails, both errors surface together.</li>
 <li>Restore is rollback-safe for multi-source CLIs (already-restored sources are reverted to the live backup on partial failure)</li>
 <li>Error messages are redacted (JWT pattern + 50+ char base64-like sequences → <code>[redacted]</code>), and session allow-list paths are sanitized for terminal control characters before they can reach stderr</li>
+<li><strong>Credential ownership is judged by filesystem identity, not path spelling.</strong> A plugin cannot reach a built-in CLI&#39;s live credentials by declaring an alias for them (directory symlink, file symlink, or hardlink). Paths are compared after resolution, hardlinks are caught on a separate dev/ino axis, and a path that cannot be resolved is rejected rather than allowed — with one deliberate exception: if the Goose reserved-zone root itself cannot be resolved, zone classification falls back to the lexical verdict, because rejecting there blocked unrelated files. The check runs both when plugins load and again at every read/write/exists/remove, so a source that has <em>become</em> an alias since load is refused on its next access. It is not a race-free guarantee: for non-Goose file sources nothing pins the path between that check and the actual open, so an ancestor swapped inside that window is not detected. Goose provider caches additionally pin parent dev/ino and open with <code>O_NOFOLLOW</code>.</li>
 <li>Dependencies: <code>npm audit</code> clean</li>
 </ul>
+<p>If you manage <code>~/.config</code> with stow/chezmoi, note the flip side: Goose provider caches now write to the resolved real location, which may sit inside your dotfiles repo. Confirm that path is in your <code>.gitignore</code>.</p>
 <h3 id="not-recommended-for">Not recommended for</h3>
 <ul>
 <li>Shared workstations</li>

@@ -42,6 +42,7 @@
  */
 
 import { comparablePath } from './paths.js';
+import { resolvePathIdentitySync } from './path-identity.js';
 import type { CliDef, Source } from './types.js';
 
 /** keychain / os-keyring 은 같은 논리적 자원(OS keyring 의 service+account)의 플랫폼별 표현이다. */
@@ -52,6 +53,24 @@ export interface LiveResourceKey {
   /** 비교용 정규화 키. 표시용이 아니다. */
   key: string;
 }
+
+/**
+ * 예약 리소스.
+ *
+ * 파일 종류는 `declaredPath` 가 **필수**다 — 이 값이 identity 축과 inode 축을 만든다. optional 로
+ * 두면 호출자가 빠뜨렸을 때 어휘 키만 남고 조용히 보호가 사라진다(v0.8.3 리뷰에서 실제로 그
+ * 상태였고, `~/.claude` 를 symlink 로 관리하는 macOS 사용자에게서 실측으로 뚫렸다).
+ * 판별 유니온으로 두어 **컴파일 타임에** 강제한다 — 호출자의 기억에 맡기지 않는다.
+ * `LiveResourceIndex.reserve` 도 이 타입을 통째로 받는다. 개별 인자로 풀어 받으면
+ * `declaredPath` 가 다시 optional 이 되어 강제가 서명에서 새어나간다.
+ *
+ * 강제 범위는 **`reserve` 의 호출자**까지다. `add` 는 def 의 source 에서 경로를 직접 뽑으므로
+ * 이 타입을 거치지 않는다 — 다만 `liveResourceKeyOf` 가 `'file'` 을 돌려주는 source 종류는
+ * `file`/`directory` 뿐이고 둘 다 `path` 를 갖는 것이 타입으로 보장되어 실질적 구멍은 없다.
+ */
+export type ReservedLiveResource =
+  | (LiveResourceOwner & { kind: 'file'; key: string; declaredPath: string })
+  | (LiveResourceOwner & { kind: Exclude<LiveResourceKind, 'file'>; key: string; declaredPath?: undefined });
 
 export interface LiveResourceOwner {
   cliId: string;
@@ -84,6 +103,30 @@ function keyringKey(service: string, account: string | undefined): string {
  * 추가되면 컴파일이 깨진다. 이게 없으면 6번째 종류가 조용히 통과해 "다음 번 계약 축소"를
  * 스스로 불러온다.
  */
+/**
+ * 경로를 **해석해서** 얻은 소유권 키. 어휘 키만 쓰면 별칭 표기로 우회된다(실측: `~/aliasdir/auth.json`
+ * 이 `~/.codex/auth.json` 을 그대로 읽고 덮어썼다).
+ *
+ * `unresolvable`(EACCES/ELOOP 등)은 **키를 만들지 않고 null 을 반환하지 않는다** — 호출자가
+ * 거부로 다룰 수 있도록 별도 신호를 준다. 공격자가 해석을 실패시키기만 하면 통과하는
+ * fail-open 을 막기 위함이다.
+ */
+export function resolvedLiveResourceKeyOf(src: Source): ResolvedLiveResourceKey | 'unresolvable' | null {
+  const lexical = liveResourceKeyOf(src);
+  if (!lexical) return null;
+  if (lexical.kind !== 'file') return { key: lexical };   // keyring 류는 경로가 아니다
+  const id = resolvePathIdentitySync('path' in src ? src.path : '');
+  if (id.kind === 'unresolvable') return 'unresolvable';
+  // `nlink` 와 `dev`/`ino` 는 **같은 한 번의 lstat** 에서 나와야 한다. 따로 관측하면 그 사이에
+  // 대상이 바뀌어 "nlink 는 옛 파일 것, inode 는 새 파일 것" 인 조합으로 판정하게 된다.
+  return id.kind === 'resolved'
+    ? { key: { kind: 'file', key: id.comparable }, nlink: id.nlink, dev: id.dev, ino: id.ino }
+    : { key: { kind: 'file', key: id.comparable } };
+}
+
+/** 해석된 소유권 키. 파일이 실재할 때만 hardlink 축(`nlink`/`dev`/`ino`)이 함께 실린다. */
+export type ResolvedLiveResourceKey = { key: LiveResourceKey; nlink?: number; dev?: number; ino?: number };
+
 export function liveResourceKeyOf(src: Source): LiveResourceKey | null {
   switch (src.type) {
     case 'file':
@@ -111,21 +154,85 @@ export function liveResourceKeyOf(src: Source): LiveResourceKey | null {
 
 export class LiveResourceIndex {
   private readonly owners = new Map<string, LiveResourceOwner>();
+  /**
+   * **선언 표기**로 등록된 키만 따로 둔다. I/O 시점 게이트의 면제 판정이 이걸 쓴다.
+   *
+   * `owners` 에는 해석 키도 함께 들어 있어서 그걸로 면제를 판정하면, 조상이 symlink 인 환경에서
+   * 공격자가 **해석된 정경 표기**를 그대로 선언했을 때 "정경이니 면제" 로 통과한다(실측).
+   * builtin 자신은 언제나 `~/...` 선언 표기로 접근하므로 면제에는 이 집합만 있으면 충분하다.
+   */
+  private readonly lexicalOwners = new Map<string, LiveResourceOwner>();
+  /** builtin 파일 리소스의 **선언 경로**. hardlink 판정 시 그 자리에서 lstat 한다. */
+  private readonly filePathsByOwner: Array<{ cliId: string; declared: string }> = [];
 
-  /** 이 def 의 모든 source 를 소유자로 등록한다. */
+  /**
+   * 이 def 의 모든 source 를 소유자로 등록한다.
+   *
+   * **어휘 키와 해석 키를 둘 다** 등록한다. 둘은 대체 관계가 아니다:
+   * - 해석 키는 별칭을 접어 잡지만, 대상이 부재하고 접두조차 없으면(`unresolvable`) 키가 없다.
+   * - 어휘 키는 부재 경로도 항상 잡지만 별칭에 우회된다.
+   * 하나만 등록하면 그 하나의 사각지대가 그대로 우회 경로가 된다. 또 I/O 시점 게이트는
+   * "선언 표기가 정경인가" 를 물어야 하므로 어휘 키 조회가 반드시 가능해야 한다.
+   */
   add(def: CliDef): void {
     for (const src of def.sources) {
-      const k = liveResourceKeyOf(src);
-      if (!k) continue;
-      const id = `${k.kind} ${k.key}`;
-      if (!this.owners.has(id)) this.owners.set(id, { cliId: def.id, kind: k.kind });
+      const lexical = liveResourceKeyOf(src);
+      if (!lexical) continue;
+      this.register(def.id, lexical, 'path' in src ? src.path : undefined);
     }
   }
 
-  /** 플랫폼/env 분기 때문에 현재 def 배열에 나타나지 않는 리소스를 예약한다. */
-  reserve(cliId: string, key: LiveResourceKey): void {
+  /**
+   * 리소스 하나를 등록하는 **유일한** 경로. `add`(def 유래)와 `reserve`(플랫폼/env 예약)가
+   * 반드시 이 함수를 거친다.
+   *
+   * 두 등록 경로가 서로 다른 축을 넣으면 그 차이가 곧 우회로가 된다. 실제로 그렇게 됐다:
+   * `reserve` 가 어휘 키만 넣던 동안, `~/.claude` 를 symlink 로 관리하는 macOS 사용자에게
+   * `~/.claude/.credentials.json` 은 **예약 전용** 리소스라 해석 키가 어디에도 없었고, plugin 이
+   * 해석된 정경 표기를 직접 선언하면 두 게이트를 모두 통과해 진짜 자격증명을 읽었다(실측).
+   * `nlink === 1` 이라 inode 폴백도 건너뛰어 아무것도 잡지 못했다.
+   */
+  private register(cliId: string, lexical: LiveResourceKey, declaredPath?: string): void {
+    this.own(cliId, lexical);
+    const lexicalId = `${lexical.kind} ${lexical.key}`;
+    if (!this.lexicalOwners.has(lexicalId)) this.lexicalOwners.set(lexicalId, { cliId, kind: lexical.kind });
+    if (lexical.kind !== 'file' || declaredPath === undefined) return;
+    // inode 축은 **해석 성공 여부와 무관**하게 등록한다. `lookupInode` 는 조회 시점에 다시 lstat
+    // 하므로, 지금 해석이 안 되는 경로(부재 부모, 일시적 EACCES)도 나중에 생기면 그때 잡혀야
+    // 한다. 해석 성공 분기 안에 두면 그런 경로는 영영 inode 축에서 빠진다.
+    this.filePathsByOwner.push({ cliId, declared: declaredPath });
+    const id = resolvePathIdentitySync(declaredPath);
+    // 해석 실패는 그 **경로 키**만 등록하지 않는다(거부 신호는 아니다 — 어휘 키는 이미 들어갔다).
+    if (id.kind !== 'unresolvable') this.own(cliId, { kind: 'file', key: id.comparable });
+  }
+
+  private own(cliId: string, key: LiveResourceKey): void {
     const id = `${key.kind} ${key.key}`;
     if (!this.owners.has(id)) this.owners.set(id, { cliId, kind: key.kind });
+  }
+
+  /**
+   * hardlink 소유자 조회 — dev/ino 를 **그 자리에서** 다시 구한다.
+   *
+   * 로드 시점 dev/ino 를 얼려 두면 구멍이 생긴다: 신규 설치 사용자는 `~/.codex/auth.json` 이
+   * 로드 시점에 **부재**라 inode 가 인덱스에 없고, 이후 로그인으로 파일이 생긴 뒤 plugin 경로가
+   * 그 파일의 hardlink 가 되면 조회가 빈손으로 통과한다. 그래서 매번 lstat 한다.
+   *
+   * 비용은 무시 가능하다 — builtin 파일 리소스 ~20 개 lstat 1-pass 가 0.09ms 이고, 최악의
+   * switcher 루프에서도 1ms 미만이다(keychain `security` 스폰 1회가 ~32ms).
+   */
+  lookupInode(dev: number, ino: number): LiveResourceOwner | undefined {
+    for (const entry of this.filePathsByOwner) {
+      const id = resolvePathIdentitySync(entry.declared);
+      if (id.kind !== 'resolved') continue;
+      if (id.dev === dev && id.ino === ino) return { cliId: entry.cliId, kind: 'file' };
+    }
+    return undefined;
+  }
+
+  /** 플랫폼/env 분기 때문에 현재 def 배열에 나타나지 않는 리소스를 예약한다. */
+  reserve(entry: ReservedLiveResource): void {
+    this.register(entry.cliId, { kind: entry.kind, key: entry.key }, entry.declaredPath);
   }
 
   /**
@@ -152,16 +259,21 @@ export class LiveResourceIndex {
     return this.owners.get(`os-keyring-family ${svc} ${ACCOUNT_WILDCARD}`);
   }
 
+  /** 이 키가 **선언 표기**로 등록돼 있는가. 면제 판정 전용 (위 `lexicalOwners` 주석 참고). */
+  lookupDeclared(key: LiveResourceKey): LiveResourceOwner | undefined {
+    return this.lexicalOwners.get(`${key.kind} ${key.key}`);
+  }
+
   get size(): number {
     return this.owners.size;
   }
 }
 
 /** 판정에 쓸 수 있도록 def 목록에서 인덱스를 만든다. 호출 시점 평가 — 모듈 레벨 const 로 굳히지 말 것. */
-export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readonly (LiveResourceOwner & LiveResourceKey)[] = []): LiveResourceIndex {
+export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readonly ReservedLiveResource[] = []): LiveResourceIndex {
   const index = new LiveResourceIndex();
   for (const def of defs) index.add(def);
-  for (const r of reserved) index.reserve(r.cliId, { kind: r.kind, key: r.key });
+  for (const r of reserved) index.reserve(r);
   return index;
 }
 
@@ -171,15 +283,41 @@ export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readon
  */
 export function findLiveResourceCollision(def: CliDef, index: LiveResourceIndex): LiveResourceCollision | undefined {
   for (const [sourceIndex, src] of def.sources.entries()) {
-    const k = liveResourceKeyOf(src);
-    if (!k) continue;
-    const owner = index.lookup(k);
-    if (!owner) continue;
-    const declared = 'path' in src ? src.path
-      : src.type === 'win-credential' ? src.targetName
-      : 'service' in src ? src.service
-      : src.saveAs;
-    return { sourceIndex, kind: k.kind, ownerCliId: owner.cliId, declared };
+    const hit = findSourceCollision(src, index);
+    if (hit) return { sourceIndex, ...hit };
   }
   return undefined;
 }
+
+/** 사용자에게 보여줄 원본 표기. 표시 안전성은 호출자 책임(`formatPluginWarning`). */
+function declaredOf(src: Source): string {
+  return 'path' in src ? src.path
+    : src.type === 'win-credential' ? src.targetName
+    : 'service' in src ? src.service
+    : src.saveAs;
+}
+
+/**
+ * source **하나**의 충돌 판정 — 로드 시점 게이트와 I/O 시점 게이트가 공유하는 단일 규칙.
+ *
+ * 두 게이트가 각자 규칙을 재기술하면 갈라진다. 갈라지는 방향이 "로드는 막는데 I/O 는 통과" 면
+ * 그대로 우회 경로가 되므로, 규칙은 반드시 여기 한 곳에만 둔다.
+ */
+export function findSourceCollision(src: Source, index: LiveResourceIndex): Omit<LiveResourceCollision, 'sourceIndex'> | undefined {
+  const r = resolvedLiveResourceKeyOf(src);
+  if (r === null) return undefined;
+  // 해석 실패는 **거부**다. 통과로 접으면 공격자는 해석을 실패시키기만 하면 된다.
+  if (r === 'unresolvable') return { kind: 'file', ownerCliId: UNRESOLVABLE_OWNER, declared: declaredOf(src) };
+  const k = r.key;
+  let owner = index.lookup(k);
+  // 경로 해석으로 접히지 않는 축: hardlink. `nlink === 1` 이면 그 inode 를 가리키는 디렉토리
+  // 엔트리가 자기 자신뿐이라 어떤 builtin 파일과도 hardlink 관계일 수 없으므로 건너뛴다.
+  if (!owner && k.kind === 'file' && r.nlink !== undefined && r.nlink > 1 && r.dev !== undefined && r.ino !== undefined) {
+    owner = index.lookupInode(r.dev, r.ino);
+  }
+  if (!owner) return undefined;
+  return { kind: k.kind, ownerCliId: owner.cliId, declared: declaredOf(src) };
+}
+
+/** 해석 실패 거부의 소유자 자리표시자. 실제 cliId 가 아니다. */
+export const UNRESOLVABLE_OWNER = '(해석 불가)';

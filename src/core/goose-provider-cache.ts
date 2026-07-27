@@ -47,6 +47,7 @@
 
 import { normalize, sep } from 'node:path';
 import { comparablePath, expandTilde } from './paths.js';
+import { resolvePathIdentitySync } from './path-identity.js';
 import type { DirectorySource, FileSource, Source } from './types.js';
 
 /** Goose config 디렉토리. 위 JSDoc 의 업스트림 근거 참고. */
@@ -172,4 +173,66 @@ export function classifyGoosePath(path: string): 'admitted' | 'reserved-nonadmit
   // 플랫폼 구분자를 쓴다. Windows 에서 `normalize` 는 백슬래시를 만들므로 `/` 로 고정 비교하면
   // 예약구역 안의 경로가 전부 'outside' 로 새어나가 보호가 사라진다.
   return normalized.startsWith(`${root}${sep}`) ? 'reserved-nonadmitted' : 'outside';
+}
+
+/**
+ * 해석된 비교 키. 해석 불가면 `null`.
+ *
+ * `path-identity.ts` 의 `identityComparable` 과 같은 규칙이다. 갈라지면 로드 시점 판정과 구역
+ * 판정이 어긋나므로, 한쪽을 고치면 반드시 다른 쪽도 함께 본다.
+ */
+function resolvedComparable(p: string): string | null {
+  const id = resolvePathIdentitySync(p);
+  return id.kind === 'unresolvable' ? null : id.comparable;
+}
+
+/**
+ * `classifyGoosePath` 의 **identity 판정** 변형. plugin 선언 심사(`cli-defs-plugin.ts`)가 쓴다.
+ *
+ * ## 어휘 판정만으로 예약구역이 뚫리는 두 가지 실측 경로
+ *
+ * 1. **별칭 표기** — `~/gsalias` → `~/.config/goose/newprovider` 를 만들고 plugin 이
+ *    `~/gsalias/tokens.json` 을 선언하면 어휘 분류가 `'outside'` 라 예약구역 검사가 걸리지
+ *    않는다. 소유권 검사도 그 경로가 builtin source 가 **아니라서** 통과시킨다(예약구역은
+ *    "builtin 이 지금 쓰는 경로" 보다 넓다 — 그게 예약구역을 따로 두는 이유다).
+ * 2. **해석된 정경 표기** — `~/.config` 를 `~/dotfiles/config` 로 관리하는 사용자에게는 진짜
+ *    구역이 `~/dotfiles/config/goose/` 다. plugin 이 그 경로를 **직접** 선언하면 어휘 분류는
+ *    `'outside'` 이지만 실제로는 구역 한복판이다.
+ *
+ * 두 경로 모두 대상만 해석해서는 못 막는다 — (2)는 대상이 이미 해석형이다. **구역 루트도 함께
+ * 해석해서** 비교해야 닫힌다.
+ *
+ * 해석 실패(`unresolvable`)는 여기서 판정을 바꾸지 않고 어휘 결과를 그대로 돌려준다. 그 입력은
+ * 소유권 게이트가 별도 축에서 이미 거부하므로, 여기서 중복 거부하면 원인 메시지만 엉뚱해진다.
+ */
+export function classifyGoosePathByIdentity(path: string): 'admitted' | 'reserved-nonadmitted' | 'outside' {
+  const lexical = classifyGoosePath(path);
+  if (lexical !== 'outside') return lexical;
+  const target = resolvedComparable(path);
+  const root = resolvedComparable(GOOSE_CONFIG_ROOT);
+  // 대상 해석 실패는 여기서 판정을 바꾸지 않는다 — 소유권 게이트가 `unresolvable` 을 **별도
+  // 축에서** 이미 거부하므로, 여기서 중복 거부하면 원인 메시지만 엉뚱해진다.
+  if (target === null) return lexical;
+  // **구역 루트**를 해석할 수 없으면 어휘 결과를 그대로 쓴다. 거부하지 않는 이유:
+  //
+  // 여기까지 왔다는 것은 `target` 이 성공적으로 해석됐다는 뜻이다. 구역 루트가 해석되지 않는
+  // 흔한 원인(경로를 따라 내려가다 만난 EACCES/ELOOP)이라면 구역 **안**의 어떤 경로도 같은
+  // 깨진 구성요소를 지나야 하므로 해석될 수 없다 — 그 경우 "target 은 해석됐고 root 는 안 됐다"
+  // 는 조합이 target 이 구역 밖임을 말해 준다. 어휘적으로 구역 안인 경로는 이 분기에 도달하기
+  // 전에 이미 걸러진다.
+  //
+  // **증명은 아니다.** 루트 해석이 다른 이유로 실패할 수 있고(realpath 성공 후 lstat 실패),
+  // bind mount 처럼 구역으로 가는 경로가 둘 이상이면 루트만 막히고 내부는 다른 경로로 해석될
+  // 수 있다. 그래도 거부하지 않는 쪽을 고른 이유는 아래 실측 때문이다 — 거부는 예약구역과
+  // 무관한 파일까지 막았고, 막으려던 시나리오는 그보다 훨씬 좁고 가설적이다.
+  //
+  // 실측: 한때 여기서 `'reserved-nonadmitted'` 를 반환했는데, 이 함수가 Gate 2 의 **모든 일반
+  // 파일 I/O** 경로에도 쓰이는 탓에 `~/.config` 가 ELOOP 이면 goose 와 아무 상관 없는
+  // `~/myapp/creds.json` 읽기까지 거부됐다.
+  if (root === null) return lexical;
+  if (target === root) return 'reserved-nonadmitted';
+  if (!target.startsWith(`${root}${sep}`)) return 'outside';
+  const canonical = [...gooseProviderCacheSources(), ...gooseConfigSources()]
+    .filter((src): src is FileSource | DirectorySource => 'path' in src);
+  return canonical.some((src) => resolvedComparable(src.path) === target) ? 'admitted' : 'reserved-nonadmitted';
 }

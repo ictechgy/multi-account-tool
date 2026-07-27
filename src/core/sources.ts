@@ -15,6 +15,8 @@
 import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, relative, sep } from 'node:path';
 import { expandTilde } from './paths.js';
+import { resolveParentKeepLeaf, resolvedHome } from './path-identity.js';
+import { assertSourceMayBeAccessed } from './live-resource-guard.js';
 import { isAdmittedGooseProviderCacheFile } from './goose-provider-cache.js';
 import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
 import { unsupportedEnvSecretSource } from './env-secret-source.js';
@@ -47,6 +49,24 @@ function providerPublicError(err: unknown): Error {
   if (safe) return err as Error;
   const code = typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? ` (${err.code})` : '';
   return new Error(`Goose provider cache filesystem operation failed${code}`);
+}
+
+/**
+ * provider 캐시 경로를 **한 번만** 해석하고, 이후 판정과 I/O 가 그 결과 **하나만** 쓰게 한다.
+ *
+ * 두 표기를 섞으면 조용히 깨진다. `validateProviderParents` 는 해석된 HOME 에서 걸어 내려오며
+ * 부모 목록을 만드는데, 대상 경로가 선언 표기 그대로면 마지막 부모(`parents.at(-1).path`)와
+ * `dirname(선언 표기)` 가 달라진다. 두 곳(`checkedProviderWriteImpl`, `removeGooseProviderFile`)이
+ * 바로 그 둘을 비교해 `Goose provider cache parent identity changed` 를 던지므로, `~/.config` 를
+ * symlink 로 관리하는 **모든** 사용자의 goose 쓰기가 실패한다.
+ *
+ * `unresolvable`(EACCES/ELOOP 등)은 거부다 — 공격자가 해석을 실패시키기만 하면 통과하는
+ * fail-open 을 막는다.
+ */
+async function resolveProviderPath(src: FileSource): Promise<string> {
+  const path = await resolveParentKeepLeaf(src.path);
+  if (path === null) throw new Error('unsafe Goose provider cache parent');
+  return path;
 }
 
 /** macOS 의 `security` CLI 절대경로. PATH shim 공격을 방지. */
@@ -345,7 +365,7 @@ function isGooseProviderFile(src: FileSource): boolean {
 }
 
 async function checkedProviderReadImpl(src: FileSource): Promise<string | null> {
-  const path = expandTilde(src.path);
+  const path = await resolveProviderPath(src);
   let parents: ParentIdentity[];
   try { parents = await validateProviderParents(path, false); }
   catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; throw err; }
@@ -375,7 +395,7 @@ export async function readGooseProviderFileForTests(src: FileSource): Promise<st
 /** Metadata-only provider-cache inspection for doctor/detector. */
 export async function providerFileExistsChecked(src: FileSource): Promise<boolean> {
   try {
-  const path = expandTilde(src.path);
+  const path = await resolveProviderPath(src);
   let parents: ParentIdentity[];
   try { parents = await validateProviderParents(path, false); }
   catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false; throw err; }
@@ -402,7 +422,9 @@ function providerParentIsPrivate(st: Awaited<ReturnType<typeof fs.lstat>>): bool
   return !st.isSymbolicLink() && st.isDirectory() && (uid === undefined || st.uid === uid) && (Number(st.mode) & 0o022) === 0;
 }
 async function validateProviderParents(path: string, createMissing: boolean): Promise<ParentIdentity[]> {
-  const home = process.env.HOME; const parent = dirname(path);
+  // 기준선도 **해석된** HOME 이어야 한다. `process.env.HOME` 이 미해석이면(macOS 의 `/var` →
+  // `/private/var` 처럼) 해석된 대상 경로와 접두가 어긋나 정상 경로가 전부 거부된다.
+  const home = await resolvedHome(); const parent = dirname(path);
   if (!home || !parent.startsWith(home + sep)) throw new Error('unsafe Goose provider cache parent');
   const parts = relative(home, parent).split(sep); let current = home; const identities: ParentIdentity[] = [];
   for (const part of ['.', ...parts]) {
@@ -417,12 +439,17 @@ async function validateProviderParents(path: string, createMissing: boolean): Pr
       const st = await fs.lstat(current); if (!providerParentIsPrivate(st)) throw new Error('unsafe Goose provider cache parent'); identities.push({ path: current, dev: Number(st.dev), ino: Number(st.ino) });
     }
   }
+  // 해석 안정성: 처음 해석과 walk 완료 시점의 해석이 갈라지면 그 사이에 조상이 바뀐 것이다.
+  // 부모 dev/ino pinning 은 **관측한** 조상만 지키므로, 관측 자체가 다른 실물을 향하게 된
+  // 경우는 이 재해석 비교로만 잡힌다.
+  const again = await resolveParentKeepLeaf(path);
+  if (again === null || again !== path) throw new Error('Goose provider cache parent identity changed');
   return identities;
 }
 async function assertProviderParentsUnchanged(expected: ParentIdentity[]): Promise<void> { for (const item of expected) { const st = await fs.lstat(item.path); if (st.isSymbolicLink() || Number(st.dev) !== item.dev || Number(st.ino) !== item.ino) throw new Error('Goose provider cache parent identity changed'); } }
 
 async function checkedProviderWriteImpl(src: FileSource, value: string): Promise<void> {
-  const path = expandTilde(src.path);
+  const path = await resolveProviderPath(src);
   const parents = await validateProviderParents(path, true);
   await assertProviderParentsUnchanged(parents);
   const existing = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
@@ -443,11 +470,35 @@ export async function writeGooseProviderFileForTests(src: FileSource, value: str
   try { await checkedProviderWriteImpl(src, value); } catch (err) { throw providerPublicError(err); }
 }
 
+/**
+ * 일반(비-goose) 파일 source 의 I/O 대상 경로. Gate 2 가 판정한 것과 **같은 해석**을 쓴다.
+ *
+ * 이전에는 게이트가 해석된 경로로 소유권을 판정한 뒤, 실제 I/O 는 선언 표기(`src.path`)를 그대로
+ * 열었다. 두 경로는 보통 같은 실물로 귀결되지만 **같다는 보장이 없다** — 사이에 조상이 바뀌면
+ * 판정한 대상과 연 대상이 갈라진다. 최소한 둘이 같은 해석 규칙을 쓰게 만든다.
+ *
+ * 이걸로 경합이 사라지지는 않는다. Node 에는 `openat`/dirfd 가 없어 "검증한 디렉토리 핸들에
+ * 상대 open" 을 할 수 없고, 따라서 해석과 open 사이의 창은 원리적으로 남는다. goose 경로만
+ * 부모 dev/ino pinning + 단계별 재확인으로 그 창을 **탐지**한다. CHANGELOG 와 README 에 이
+ * 잔여 경합을 명시했다.
+ */
+async function ordinaryFilePath(src: FileSource): Promise<string> {
+  const path = await resolveParentKeepLeaf(src.path);
+  if (path === null) throw new Error('unsafe source path');
+  return path;
+}
+
 /** 임의 source 의 현재 라이브 값을 캡처해 문자열로 반환 (저장 가능한 형태). */
 export async function readSource(src: Source): Promise<string | null> {
+  // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
+  // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? readGooseProviderFileForTests(src) : readFileOrNull(src.path);
+      return isGooseProviderFile(src) ? readGooseProviderFileForTests(src) : readFileOrNull(gatePath!);
     case 'directory':
       return readDirectorySource(src);
     case 'keychain':
@@ -465,9 +516,15 @@ export async function readSource(src: Source): Promise<string | null> {
 
 /** 임의 source 에 저장된 문자열을 라이브 위치로 복원. */
 export async function writeSource(src: Source, value: string): Promise<void> {
+  // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
+  // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? writeGooseProviderFileForTests(src, value) : writeFileAtomic(expandTilde(src.path), value);
+      return isGooseProviderFile(src) ? writeGooseProviderFileForTests(src, value) : writeFileAtomic(gatePath!, value);
     case 'directory':
       return writeDirectorySource(src, value);
     case 'keychain':
@@ -485,9 +542,15 @@ export async function writeSource(src: Source, value: string): Promise<void> {
 
 /** 임의 source 의 라이브 존재 여부. */
 export async function sourceExists(src: Source): Promise<boolean> {
+  // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
+  // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file':
-      return isGooseProviderFile(src) ? providerFileExistsChecked(src) : fileExists(src.path);
+      return isGooseProviderFile(src) ? providerFileExistsChecked(src) : fileExists(gatePath!);
     case 'directory':
       return directorySourceExists(src);
     case 'keychain':
@@ -506,6 +569,12 @@ export async function sourceExists(src: Source): Promise<boolean> {
 
 /** Restore rollback to a source that was absent before a failed transaction. */
 export async function removeSource(src: Source): Promise<void> {
+  // Gate 2 — I/O 시점 게이트. **switch 앞**에서 부른다: 분기마다 부르면 새 source 종류나
+  // 새 분기가 추가될 때 조용히 빠지고, 빠진 자리는 그대로 우회 경로가 된다.
+  // 일반 파일은 열 경로를 **먼저** 확정해 그 경로로 판정한다(게이트가 승인한 대상과
+  // 여는 대상을 일치시킨다). goose 경로는 자체 하드닝이 부모를 pinning 하므로 제외한다.
+  const gatePath = src.type === 'file' && !isGooseProviderFile(src) ? await ordinaryFilePath(src) : undefined;
+  assertSourceMayBeAccessed(src, gatePath);
   switch (src.type) {
     case 'file': {
       if (isGooseProviderFile(src)) {
@@ -517,7 +586,7 @@ export async function removeSource(src: Source): Promise<void> {
       // 그쪽에만 존재한다. (0.8.0 에는 `const parents = null` 과 도달 불가한
       // `isGooseProviderFile(src) && …` 항이 남아 있어 이 경로에도 하드닝이 있는 것처럼
       // 읽혔다 — 실제로는 항상 false 인 죽은 코드였다.)
-      const path = expandTilde(src.path);
+      const path = gatePath!;
       const st = await fs.lstat(path).catch((err: NodeJS.ErrnoException) => err.code === 'ENOENT' ? null : Promise.reject(err));
       if (st == null) return;
       if (st.isSymbolicLink() || !st.isFile()) throw new Error('unsafe source removal');
@@ -532,7 +601,7 @@ export async function removeSource(src: Source): Promise<void> {
 }
 
 async function removeGooseProviderFile(src: FileSource): Promise<void> {
-  const path = expandTilde(src.path);
+  const path = await resolveProviderPath(src);
   let parents: ParentIdentity[];
   try { parents = await validateProviderParents(path, false); }
   catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; throw err; }

@@ -474,7 +474,10 @@ mat explain agy
 - Keychain swap: 백업 → 정확 acct 매칭 delete → add. add 실패 시 자동 롤백, 롤백도 실패하면 에러 메시지에 함께 노출.
 - multi-source CLI 복원은 부분 실패에 안전 (한 source 실패 시 이미 복원된 source를 라이브 백업으로 되돌림)
 - 에러 메시지의 JWT 및 50자+ base64-like 시퀀스는 redact 처리하고, session allow-list 경로는 stderr 노출 전 terminal control char를 sanitize
+- **자격증명 소유권을 경로 표기가 아니라 파일시스템 identity 로 판정한다.** plugin 이 별칭(디렉토리 symlink, 파일 symlink, hardlink)을 선언해서 builtin CLI 의 라이브 자격증명에 도달할 수 없다. 경로는 해석 후 비교하고, hardlink 는 별도 dev/ino 축으로 잡으며, 해석에 실패한 경로는 통과가 아니라 거부다 — 의도된 예외가 하나 있다: goose 예약구역 **루트 자체**를 해석할 수 없으면 구역 판정은 어휘 결과로 되돌아간다. 그 자리에서 거부했더니 예약구역과 무관한 파일까지 막혔기 때문이다. 판정은 plugin 로드 시점과 매 read/write/exists/remove 시점에 각각 이뤄지므로 로드 이후 별칭이 **된** source 는 다음 접근에서 거부된다. 다만 경합이 없다는 보장은 아니다 — goose 가 아닌 파일 source 는 그 판정과 실제 open 사이에 경로를 고정하지 않으므로, 그 창 안에서 조상이 교체되면 탐지하지 못한다. goose provider 캐시는 추가로 부모 dev/ino 를 pinning 하고 `O_NOFOLLOW` 로 연다.
 - 의존성: `npm audit` clean
+
+stow/chezmoi 로 `~/.config` 를 관리한다면 반대급부가 있다: Goose provider 캐시가 이제 해석된 실물 위치에 쓰이며, 그 위치가 dotfiles 저장소 안일 수 있다. 해당 경로가 `.gitignore` 에 있는지 확인하라.
 
 ### 사용을 권하지 않는 환경
 
