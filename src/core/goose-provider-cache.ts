@@ -46,7 +46,7 @@
  */
 
 import { normalize, sep } from 'node:path';
-import { expandTilde } from './paths.js';
+import { comparablePath, expandTilde } from './paths.js';
 import type { DirectorySource, FileSource, Source } from './types.js';
 
 /** Goose config 디렉토리. 위 JSDoc 의 업스트림 근거 참고. */
@@ -108,23 +108,16 @@ export function normalizeGoosePath(p: string): string {
 }
 
 /**
- * 파일시스템의 대소문자 구분 여부를 반영한 **비교 전용** 정규화.
+ * 비교 전용 정규화 — 공유 헬퍼 `comparablePath` 에 위임한다.
  *
- * macOS(APFS/HFS+ 기본)와 Windows 는 대소문자를 구분하지 않으므로
- * `~/.config/Goose/gemini_oauth/tokens.json` 은 인정 경로와 **같은 실물**을 가리킨다. 문자열
- * 동등성만 쓰면 그 표기가 `'outside'` 로 분류되어, plugin 이 그 경로를 선언했을 때 예약구역
- * 거부를 우회해 라이브 provider 토큰에 **하드닝 없는 쓰기**를 할 수 있다.
- *
- * 접기(fold)는 양방향 모두 안전한 방향이다: 예약구역 판정에서는 더 많은 경로가 구역 안으로
- * 들어와 **거부가 늘어나고**, 하드닝 판정에서는 더 많은 경로가 인정되어 **보호가 늘어난다**.
- * 저장된 경로 문자열 자체는 절대 바꾸지 않는다 — 비교에만 쓴다.
+ * 0.8.1 은 이 접기를 이 파일 안에 private 으로 두었으나, 같은 판정이 plugin 소유권 가드에도
+ * 필요해지면서 `paths.ts` 로 옮겼다. 여기에 사본을 남기면 두 판정이 갈라질 수 있고, 그것이
+ * 바로 이 모듈이 존재하는 이유(단일 진실 원천)와 정면으로 어긋난다.
  */
 function comparableGoosePath(p: string): string {
-  const normalized = normalizeGoosePath(p);
-  return caseInsensitiveFs ? normalized.toLowerCase() : normalized;
+  return comparablePath(p);
 }
 
-const caseInsensitiveFs = process.platform === 'darwin' || process.platform === 'win32';
 
 /** 인정 **파일** 경로의 비교용 집합. 하드닝 가드 전용이라 YAML/디렉토리는 포함하지 않는다. */
 function admittedProviderCacheFilePaths(): ReadonlySet<string> {

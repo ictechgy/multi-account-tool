@@ -19,6 +19,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
 import { hasUnsafeDisplayChar } from './display-safety.js';
 import { validatePublicEnvSecretSource } from './env-secret-source.js';
+import { buildLiveResourceIndex, findLiveResourceCollision } from './builtin-live-resources.js';
+import type { LiveResourceKey, LiveResourceOwner } from './builtin-live-resources.js';
 import { classifyGoosePath } from './goose-provider-cache.js';
 import { dataDir, isNormalizedPathSpelling, validateCliId, validateProfileFileName } from './paths.js';
 import { redactSecretLikeText } from './redaction.js';
@@ -58,6 +60,13 @@ export interface LoadUserCliDefsResult {
   defs: CliDef[];
   /** 사용자에게 표시할 경고 — 파싱 실패 / 형식 위반 / 충돌 등. */
   warnings: string[];
+  /**
+   * def id → 그 def 가 온 plugin 파일의 표시용 이름.
+   *
+   * 병합 지점(`getAllCliDefs`)에서 def 를 거부할 때 **어느 파일을 고쳐야 하는지** 알려주려면
+   * provenance 가 필요하다. `defs` 배열 형태를 바꾸지 않으려고 별도 맵으로 둔다.
+   */
+  provenance: Map<string, string>;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -285,6 +294,11 @@ export interface PluginValidationFileReport {
   file: string;
   valid: boolean;
   plugin?: PluginSummary;
+  /**
+   * 파싱된 def — 디렉토리 post-pass 의 소유권 충돌 판정에만 쓴다.
+   * `--json` 출력에는 싣지 않는다(그 계약은 `plugin` 요약이 담당).
+   */
+  parsed?: CliDef;
   diagnostics: PluginDiagnostic[];
 }
 
@@ -309,6 +323,13 @@ export interface PluginValidationReport {
 
 export interface PluginValidationBatchOptions {
   builtinIds?: Iterable<string>;
+  /**
+   * builtin def 목록. 주면 소유권 충돌(builtin 라이브 자격증명 스쿼팅)을 로드 전에 진단한다.
+   * 기존 `builtinIds` 와 같은 선례를 따르는 옵셔널 컨텍스트 — 미제공 시 기존 동작 유지.
+   */
+  builtinDefs?: readonly CliDef[];
+  /** 플랫폼/env 분기로 builtinDefs 에 나타나지 않는 예약 리소스 (cli-defs.reservedLiveResources). */
+  reservedLiveResources?: readonly (LiveResourceOwner & LiveResourceKey)[];
 }
 
 function diagnostic(input: {
@@ -517,7 +538,7 @@ function validatePluginFile(path: string, options: PluginValidationBatchOptions)
     valid: !hasError,
     diagnostics: result.diagnostics
   };
-  if (result.def != null) report.plugin = pluginSummary(result.def);
+  if (result.def != null) { report.plugin = pluginSummary(result.def); report.parsed = result.def; }
   return report;
 }
 
@@ -540,7 +561,8 @@ function summarizePluginValidation(
       warnings
     },
     diagnostics: allDiagnostics,
-    files
+    // `parsed` 는 post-pass 전용 내부 필드다 — `--json` 스키마(schemaVersion 1)에 새지 않게 제거한다.
+    files: files.map(({ parsed: _parsed, ...rest }) => rest)
   };
 }
 
@@ -593,6 +615,29 @@ export function validatePluginDirectory(
     }
     seen.add(pluginId);
   }
+  // 소유권 충돌은 **id 중복 post-pass 와 같은 자리**에서 판정한다. load-time 은 dup-id def 를
+  // 먼저 버리므로(loadUserCliDefs), 여기서도 이미 invalid 로 표시된 파일은 건너뛰어야
+  // validate 의 거부 집합과 load 의 skip 집합이 일치한다. 갈라지면 validate 가 실제로는
+  // 존재하지 않는 충돌을 보고하게 된다.
+  if (options?.builtinDefs) {
+    const index = buildLiveResourceIndex(options.builtinDefs, options.reservedLiveResources ?? []);
+    for (const file of files) {
+      if (!file.valid || !file.parsed) continue;
+      const collision = findLiveResourceCollision(file.parsed, index);
+      if (collision) {
+        file.diagnostics.push(diagnostic({
+          severity: 'error',
+          code: 'builtin_live_resource_collision',
+          message: `sources[${collision.sourceIndex}] 가 builtin '${collision.ownerCliId}' 소유의 라이브 자격증명(${collision.kind}: ${collision.declared})을 주장합니다 — 로드 시 이 plugin 전체가 무시됩니다. 저장된 프로필은 삭제되지 않습니다.`,
+          file: file.file,
+          pluginId: file.parsed.id
+        }));
+        file.valid = false;
+        continue;
+      }
+      index.add(file.parsed);
+    }
+  }
   return summarizePluginValidation({ kind: 'directory', path: formatPluginWarning(dir) }, files);
 }
 
@@ -633,10 +678,11 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
   try {
     entries = readdirSync(dir);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { defs: [], warnings: [] };
-    return { defs: [], warnings: [formatPluginWarning(`cli-defs 디렉토리 읽기 실패: ${(err as Error).message}`)] };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { defs: [], warnings: [], provenance: new Map() };
+    return { defs: [], warnings: [formatPluginWarning(`cli-defs 디렉토리 읽기 실패: ${(err as Error).message}`)], provenance: new Map() };
   }
   const defs: CliDef[] = [];
+  const provenance = new Map<string, string>();
   const seenIds = new Set<string>();
   for (const name of entries.sort()) {
     if (!name.endsWith('.json')) continue;
@@ -660,6 +706,7 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
     }
     seenIds.add(def.id);
     defs.push(def);
+    provenance.set(def.id, displayName);
   }
-  return { defs, warnings };
+  return { defs, warnings, provenance };
 }

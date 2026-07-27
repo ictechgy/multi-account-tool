@@ -14,7 +14,8 @@ import React from 'react';
 import { render } from 'ink';
 
 import App from './app.js';
-import { BUILTIN_CLI_DEFS, getAllCliDefs } from './core/cli-defs.js';
+import { BUILTIN_CLI_DEFS, getAllCliDefs, getCliDefsWarnings, reservedLiveResources } from './core/cli-defs.js';
+import { redactMessage } from './core/errors.js';
 import { getActiveProfile } from './core/config.js';
 import { describeError, UnknownCliError } from './core/errors.js';
 import { runExec } from './core/exec.js';
@@ -84,9 +85,29 @@ main().catch((err) => {
   process.exit(typeof exitCode === 'number' ? exitCode : 1);
 });
 
+/**
+ * plugin 로딩 경고를 **stderr 로 1회** 내보낸다.
+ *
+ * `getCliDefsWarnings()` 의 소비자는 0.8.1 까지 `doctor` 하나뿐이었다 — `cli-defs.ts` 주석은
+ * "TUI / CLI 시작 시 표시" 라고 적혀 있었지만 그 배선이 실제로는 없었다. 그래서 plugin 이
+ * 거부되면 사용자는 **아무 경고도 못 보고** CLI 가 조용히 사라진 것만 목격했다.
+ *
+ * 소유권 가드(builtin-live-resources)가 def 전체를 버리는 fail-closed 정책은 경고가 실제로
+ * 도달할 때만 수용 가능하다. stdout 은 `--json` 출력 계약이 있으므로 반드시 stderr 로 낸다.
+ */
+function flushPluginWarnings(): void {
+  for (const warning of getCliDefsWarnings()) {
+    process.stderr.write(`[mat] ${redactMessage(warning)}\n`);
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const [first, ...rest] = args;
+  // plugin 목록을 한 번 해석해 경고를 확정한 뒤 stderr 로 흘린다. 모든 서브커맨드와 TUI 가
+  // 같은 지점을 지나므로 거부된 plugin 이 조용히 사라지는 일이 없다.
+  getAllCliDefs();
+  flushPluginWarnings();
 
   // read-only 안전 진단/설명/dry-run 은 startup mutation 인 legacy data-dir migration 보다 먼저
   // dispatch 한다. 일반 명령은 기존처럼 migration 수행.
@@ -244,8 +265,10 @@ function handlePluginValidate(rest: string[]): void {
   const parsed = parsePluginValidateArgs(rest);
   const builtinIds = BUILTIN_CLI_DEFS.map((def) => def.id);
   const report = parsed.path == null
-    ? validatePluginDirectory(cliDefsDir(), { builtinIds })
-    : validatePluginFilePath(parsed.path, { builtinIds });
+    // builtinDefs + reservedLiveResources 를 함께 넘겨 소유권 충돌을 **로드 전에** 진단한다.
+    // 이게 없으면 validate 는 통과시키고 실제 로드에서만 거부되어 사용자가 이유를 못 찾는다.
+    ? validatePluginDirectory(cliDefsDir(), { builtinIds, builtinDefs: BUILTIN_CLI_DEFS, reservedLiveResources: reservedLiveResources() })
+    : validatePluginFilePath(parsed.path, { builtinIds, builtinDefs: BUILTIN_CLI_DEFS, reservedLiveResources: reservedLiveResources() });
   if (parsed.asJson) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
