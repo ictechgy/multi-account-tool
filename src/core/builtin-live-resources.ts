@@ -42,6 +42,7 @@
  */
 
 import { comparablePath } from './paths.js';
+import { resolvePathIdentitySync } from './path-identity.js';
 import type { CliDef, Source } from './types.js';
 
 /** keychain / os-keyring 은 같은 논리적 자원(OS keyring 의 service+account)의 플랫폼별 표현이다. */
@@ -84,6 +85,23 @@ function keyringKey(service: string, account: string | undefined): string {
  * 추가되면 컴파일이 깨진다. 이게 없으면 6번째 종류가 조용히 통과해 "다음 번 계약 축소"를
  * 스스로 불러온다.
  */
+/**
+ * 경로를 **해석해서** 얻은 소유권 키. 어휘 키만 쓰면 별칭 표기로 우회된다(실측: `~/aliasdir/auth.json`
+ * 이 `~/.codex/auth.json` 을 그대로 읽고 덮어썼다).
+ *
+ * `unresolvable`(EACCES/ELOOP 등)은 **키를 만들지 않고 null 을 반환하지 않는다** — 호출자가
+ * 거부로 다룰 수 있도록 별도 신호를 준다. 공격자가 해석을 실패시키기만 하면 통과하는
+ * fail-open 을 막기 위함이다.
+ */
+export function resolvedLiveResourceKeyOf(src: Source): { key: LiveResourceKey; nlink?: number } | 'unresolvable' | null {
+  const lexical = liveResourceKeyOf(src);
+  if (!lexical) return null;
+  if (lexical.kind !== 'file') return { key: lexical };   // keyring 류는 경로가 아니다
+  const id = resolvePathIdentitySync('path' in src ? src.path : '');
+  if (id.kind === 'unresolvable') return 'unresolvable';
+  return { key: { kind: 'file', key: id.comparable }, nlink: id.kind === 'resolved' ? id.nlink : undefined };
+}
+
 export function liveResourceKeyOf(src: Source): LiveResourceKey | null {
   switch (src.type) {
     case 'file':
@@ -111,15 +129,39 @@ export function liveResourceKeyOf(src: Source): LiveResourceKey | null {
 
 export class LiveResourceIndex {
   private readonly owners = new Map<string, LiveResourceOwner>();
+  /** builtin 파일 리소스의 **선언 경로**. hardlink 판정 시 그 자리에서 lstat 한다. */
+  private readonly filePathsByOwner: Array<{ cliId: string; declared: string }> = [];
 
   /** 이 def 의 모든 source 를 소유자로 등록한다. */
   add(def: CliDef): void {
     for (const src of def.sources) {
-      const k = liveResourceKeyOf(src);
-      if (!k) continue;
+      const r = resolvedLiveResourceKeyOf(src);
+      // builtin 인덱스 구축 중 해석 실패는 그 리소스를 등록하지 않는다(그 자체가 거부 신호는 아님).
+      if (r === null || r === 'unresolvable') continue;
+      const k = r.key;
       const id = `${k.kind} ${k.key}`;
       if (!this.owners.has(id)) this.owners.set(id, { cliId: def.id, kind: k.kind });
+      if (k.kind === 'file' && 'path' in src) this.filePathsByOwner.push({ cliId: def.id, declared: src.path });
     }
+  }
+
+  /**
+   * hardlink 소유자 조회 — dev/ino 를 **그 자리에서** 다시 구한다.
+   *
+   * 로드 시점 dev/ino 를 얼려 두면 구멍이 생긴다: 신규 설치 사용자는 `~/.codex/auth.json` 이
+   * 로드 시점에 **부재**라 inode 가 인덱스에 없고, 이후 로그인으로 파일이 생긴 뒤 plugin 경로가
+   * 그 파일의 hardlink 가 되면 조회가 빈손으로 통과한다. 그래서 매번 lstat 한다.
+   *
+   * 비용은 무시 가능하다 — builtin 파일 리소스 ~20 개 lstat 1-pass 가 0.09ms 이고, 최악의
+   * switcher 루프에서도 1ms 미만이다(keychain `security` 스폰 1회가 ~32ms).
+   */
+  lookupInode(dev: number, ino: number): LiveResourceOwner | undefined {
+    for (const entry of this.filePathsByOwner) {
+      const id = resolvePathIdentitySync(entry.declared);
+      if (id.kind !== 'resolved') continue;
+      if (id.dev === dev && id.ino === ino) return { cliId: entry.cliId, kind: 'file' };
+    }
+    return undefined;
   }
 
   /** 플랫폼/env 분기 때문에 현재 def 배열에 나타나지 않는 리소스를 예약한다. */
@@ -171,9 +213,24 @@ export function buildLiveResourceIndex(defs: readonly CliDef[], reserved: readon
  */
 export function findLiveResourceCollision(def: CliDef, index: LiveResourceIndex): LiveResourceCollision | undefined {
   for (const [sourceIndex, src] of def.sources.entries()) {
-    const k = liveResourceKeyOf(src);
-    if (!k) continue;
-    const owner = index.lookup(k);
+    const r = resolvedLiveResourceKeyOf(src);
+    if (r === null) continue;
+    const declaredOf = () => 'path' in src ? src.path
+      : src.type === 'win-credential' ? src.targetName
+      : 'service' in src ? src.service
+      : src.saveAs;
+    // 해석 실패는 **거부**다. 통과로 접으면 공격자는 해석을 실패시키기만 하면 된다.
+    if (r === 'unresolvable') {
+      return { sourceIndex, kind: 'file', ownerCliId: '(해석 불가)', declared: declaredOf() };
+    }
+    const k = r.key;
+    let owner = index.lookup(k);
+    // 경로 해석으로 접히지 않는 축: hardlink. `nlink === 1` 이면 그 inode 를 가리키는 디렉토리
+    // 엔트리가 자기 자신뿐이라 어떤 builtin 파일과도 hardlink 관계일 수 없으므로 건너뛴다.
+    if (!owner && k.kind === 'file' && r.nlink !== undefined && r.nlink > 1) {
+      const probe = resolvePathIdentitySync('path' in src ? src.path : '');
+      if (probe.kind === 'resolved') owner = index.lookupInode(probe.dev, probe.ino);
+    }
     if (!owner) continue;
     const declared = 'path' in src ? src.path
       : src.type === 'win-credential' ? src.targetName
