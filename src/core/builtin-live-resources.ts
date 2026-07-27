@@ -63,6 +63,10 @@ export interface LiveResourceKey {
  * 판별 유니온으로 두어 **컴파일 타임에** 강제한다 — 호출자의 기억에 맡기지 않는다.
  * `LiveResourceIndex.reserve` 도 이 타입을 통째로 받는다. 개별 인자로 풀어 받으면
  * `declaredPath` 가 다시 optional 이 되어 강제가 서명에서 새어나간다.
+ *
+ * 강제 범위는 **`reserve` 의 호출자**까지다. `add` 는 def 의 source 에서 경로를 직접 뽑으므로
+ * 이 타입을 거치지 않는다 — 다만 `liveResourceKeyOf` 가 `'file'` 을 돌려주는 source 종류는
+ * `file`/`directory` 뿐이고 둘 다 `path` 를 갖는 것이 타입으로 보장되어 실질적 구멍은 없다.
  */
 export type ReservedLiveResource =
   | (LiveResourceOwner & { kind: 'file'; key: string; declaredPath: string })

@@ -47,12 +47,10 @@ async function loadedIds(): Promise<string[]> {
 /** `~/.config` 를 `~/dotfiles/config` 로 관리하는 stow/chezmoi 사용자 환경. */
 async function symlinkDotfilesConfig(home: string): Promise<string> {
   const real = join(home, 'dotfiles', 'config');
-  await fs.mkdir(real, { recursive: true });
-  // **명시 mode 필수.** umask 002(Fedora/RHEL 의 UPG 기본, 다수 CI 이미지)에서는 0775 가 되어
-  // group-writable 조상이 되고, 같은 PR 이 문서화한 "비-private 조상 거부" 에 걸려 완화 테스트가
-  // 거짓 실패한다. `recursive: true` 는 중간 디렉토리에 mode 를 적용하지 않으므로 따로 준다.
-  await fs.chmod(join(home, 'dotfiles'), 0o700);
-  await fs.chmod(real, 0o700);
+  // **명시 mode 필수.** umask 002(Fedora/RHEL 의 UPG 기본, 다수 CI 이미지)에서 mode 를 생략하면
+  // 0775 group-writable 조상이 되고, 같은 PR 이 문서화한 "비-private 조상 거부" 에 걸려 완화
+  // 테스트가 거짓 실패한다. `recursive: true` 는 중간 디렉토리에도 이 mode 를 적용한다(실측).
+  await fs.mkdir(real, { recursive: true, mode: 0o700 });
   await fs.symlink(real, join(home, '.config'));
   return real;
 }
@@ -206,7 +204,6 @@ describe('예약 리소스 — 등록 경로가 갈라지면 안 된다', () => 
   async function symlinkedClaudeDir(home: string): Promise<string> {
     const real = join(home, 'dotfiles', 'claude');
     await fs.mkdir(real, { recursive: true, mode: 0o700 });
-    await fs.chmod(join(home, 'dotfiles'), 0o700);   // 중간 디렉토리는 mode 가 적용되지 않는다
     await fs.writeFile(join(real, '.credentials.json'), 'REAL-CLAUDE-CREDS');
     await fs.symlink(real, join(home, '.claude'));
     return real;
@@ -264,8 +261,9 @@ describe('goose 예약구역 — 별칭으로 뚫리지 않는다', () => {
   it('구역 루트를 해석할 수 없어도 무관한 파일 I/O 를 막지 않는다', async () => {
     // 이 판정은 리뷰 도중 두 번 뒤집혔다. 최종 근거:
     //
-    // 대상이 해석됐는데 구역 루트가 해석되지 않는다면, 구역 **안**의 어떤 경로도 해석될 수 없다
-    // (같은 깨진 구성요소를 지나야 한다). 즉 그 조합 자체가 대상이 구역 밖임을 증명한다.
+    // 대상이 해석됐는데 구역 루트가 해석되지 않는다면, 그 실패가 경로를 따라 내려가다 생긴
+    // 것인 한 구역 **안**의 어떤 경로도 같은 깨진 구성요소를 지나야 하므로 해석될 수 없다.
+    // (증명은 아니다 — bind mount 처럼 구역으로 가는 경로가 둘 이상이면 성립하지 않는다.)
     // 한때 여기서 거부하도록 했더니, 이 판정이 Gate 2 의 모든 일반 파일 경로에 쓰이는 탓에
     // `~/.config` 가 ELOOP 이면 goose 와 무관한 파일 읽기까지 막혔다 — 도달 불가능한 fail-open 을
     // 닫으려다 실재하는 가용성 회귀를 얻은 것이다.

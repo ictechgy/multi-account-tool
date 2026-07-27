@@ -175,7 +175,12 @@ export function classifyGoosePath(path: string): 'admitted' | 'reserved-nonadmit
   return normalized.startsWith(`${root}${sep}`) ? 'reserved-nonadmitted' : 'outside';
 }
 
-/** 해석된 비교 키. 해석 불가면 `null`. */
+/**
+ * 해석된 비교 키. 해석 불가면 `null`.
+ *
+ * `path-identity.ts` 의 `identityComparable` 과 같은 규칙이다. 갈라지면 로드 시점 판정과 구역
+ * 판정이 어긋나므로, 한쪽을 고치면 반드시 다른 쪽도 함께 본다.
+ */
 function resolvedComparable(p: string): string | null {
   const id = resolvePathIdentitySync(p);
   return id.kind === 'unresolvable' ? null : id.comparable;
@@ -210,15 +215,20 @@ export function classifyGoosePathByIdentity(path: string): 'admitted' | 'reserve
   if (target === null) return lexical;
   // **구역 루트**를 해석할 수 없으면 어휘 결과를 그대로 쓴다. 거부하지 않는 이유:
   //
-  // 여기까지 왔다는 것은 `target` 이 성공적으로 해석됐다는 뜻이다. 그런데 구역 루트가 해석되지
-  // 않는다면, 구역 **안**의 어떤 경로도 해석될 수 없다 — 같은 깨진 구성요소를 지나야 하기
-  // 때문이다. 즉 "target 은 해석됐는데 root 는 안 됐다" 는 조합 자체가 target 이 구역 밖임을
-  // 증명한다. 어휘적으로 구역 안인 경로는 이 분기에 도달하기 전에 이미 걸러졌다.
+  // 여기까지 왔다는 것은 `target` 이 성공적으로 해석됐다는 뜻이다. 구역 루트가 해석되지 않는
+  // 흔한 원인(경로를 따라 내려가다 만난 EACCES/ELOOP)이라면 구역 **안**의 어떤 경로도 같은
+  // 깨진 구성요소를 지나야 하므로 해석될 수 없다 — 그 경우 "target 은 해석됐고 root 는 안 됐다"
+  // 는 조합이 target 이 구역 밖임을 말해 준다. 어휘적으로 구역 안인 경로는 이 분기에 도달하기
+  // 전에 이미 걸러진다.
   //
-  // 한때 여기서 `'reserved-nonadmitted'` 를 반환했는데, 그 함수가 Gate 2 의 **모든 일반 파일
-  // I/O** 경로에도 쓰이는 탓에 실측으로 이런 일이 났다: `~/.config` 가 ELOOP 이면 goose 와
-  // 아무 상관 없는 `~/myapp/creds.json` 읽기까지 거부됐다. 닫으려던 fail-open 은 (위 논증대로)
-  // 애초에 도달 불가능했고, 대가로 실재하는 가용성 회귀만 얻었다.
+  // **증명은 아니다.** 루트 해석이 다른 이유로 실패할 수 있고(realpath 성공 후 lstat 실패),
+  // bind mount 처럼 구역으로 가는 경로가 둘 이상이면 루트만 막히고 내부는 다른 경로로 해석될
+  // 수 있다. 그래도 거부하지 않는 쪽을 고른 이유는 아래 실측 때문이다 — 거부는 예약구역과
+  // 무관한 파일까지 막았고, 막으려던 시나리오는 그보다 훨씬 좁고 가설적이다.
+  //
+  // 실측: 한때 여기서 `'reserved-nonadmitted'` 를 반환했는데, 이 함수가 Gate 2 의 **모든 일반
+  // 파일 I/O** 경로에도 쓰이는 탓에 `~/.config` 가 ELOOP 이면 goose 와 아무 상관 없는
+  // `~/myapp/creds.json` 읽기까지 거부됐다.
   if (root === null) return lexical;
   if (target === root) return 'reserved-nonadmitted';
   if (!target.startsWith(`${root}${sep}`)) return 'outside';
