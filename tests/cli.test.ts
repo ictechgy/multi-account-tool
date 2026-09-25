@@ -19,9 +19,13 @@ import { setupTmpHome, type TmpHome } from './helpers/tmp-home.js';
 
 const MAT_BIN = join(process.cwd(), 'dist/cli.js');
 
-function runMat(args: string[], home: string): { code: number; stdout: string; stderr: string } {
+function runMat(
+  args: string[],
+  home: string,
+  env: NodeJS.ProcessEnv = {}
+): { code: number; stdout: string; stderr: string } {
   const res = spawnSync('node', [MAT_BIN, ...args], {
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, ...env },
     encoding: 'utf8',
     timeout: 15_000
   });
@@ -576,5 +580,114 @@ describe('mat status/session list observability JSON', () => {
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('mat status: 알 수 없는 옵션');
+  });
+});
+
+describe('mat --lang — 표시 언어 선택', () => {
+  let tmp: TmpHome;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  it('선두 --lang <v> / --lang=<v> 는 전역 옵션으로 소비되고 명령은 그대로 실행된다', () => {
+    for (const args of [['--lang', 'en', '--version'], ['--lang=ko', '--version']]) {
+      const result = runMat(args, tmp.home);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
+    }
+  });
+
+  it('지원하지 않는 값은 exit 2, 오류 메시지는 나머지 설정(MAT_LANG)의 언어로', () => {
+    const en = runMat(['--lang', 'fr', '--version'], tmp.home, { MAT_LANG: 'en' });
+    expect(en.code).toBe(2);
+    expect(en.stderr).toContain("unsupported language for --lang: 'fr'");
+
+    const ko = runMat(['--lang', 'fr', '--version'], tmp.home, { MAT_LANG: 'ko' });
+    expect(ko.code).toBe(2);
+    expect(ko.stderr).toContain("--lang 에 지원하지 않는 언어입니다: 'fr'");
+  });
+
+  it('값 없는 --lang 은 exit 2', () => {
+    const result = runMat(['--lang'], tmp.home, { MAT_LANG: 'en' });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('--lang requires a value');
+  });
+
+  it('MAT_LANG 이 없으면 config.json 의 language 를 따른다', async () => {
+    const dataDir = join(tmp.home, '.multi-account-tool');
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.writeFile(join(dataDir, 'config.json'), JSON.stringify({ version: 1, active: {}, language: 'en' }));
+
+    const result = runMat(['--lang', 'fr', '--version'], tmp.home, { MAT_LANG: '', LC_ALL: 'ko_KR.UTF-8' });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('unsupported language for --lang');
+  });
+
+  it('설정이 전혀 없으면 시스템 locale 을 따른다', () => {
+    const result = runMat(['--lang', 'fr', '--version'], tmp.home, { MAT_LANG: '', LC_ALL: '', LC_MESSAGES: '', LANG: 'ko_KR.UTF-8' });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('--lang 에 지원하지 않는 언어입니다');
+  });
+});
+
+describe('mat config language', () => {
+  let tmp: TmpHome;
+  const noLangEnv = { MAT_LANG: '', LC_ALL: '', LC_MESSAGES: '', LANG: 'en_US.UTF-8' };
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  async function readConfigJson(): Promise<Record<string, unknown>> {
+    return JSON.parse(await fs.readFile(join(tmp.home, '.multi-account-tool/config.json'), 'utf8')) as Record<string, unknown>;
+  }
+
+  it('값 없이 부르면 현재 언어와 출처를 보여준다', () => {
+    const result = runMat(['config', 'language'], tmp.home, noLangEnv);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('language: en (from system locale)\n');
+  });
+
+  it('저장하면 config.json 에 정규화된 값이 들어가고, 확인 메시지는 새 언어로 나온다', async () => {
+    const set = runMat(['config', 'language', 'ko_KR'], tmp.home, noLangEnv);
+    expect(set.code).toBe(0);
+    expect(set.stdout).toContain('표시 언어를 한국어(으)로 설정했습니다.');
+    expect(await readConfigJson()).toMatchObject({ language: 'ko' });
+
+    const show = runMat(['config', 'language'], tmp.home, noLangEnv);
+    expect(show.stdout).toBe('언어: ko (출처: config.json)\n');
+  });
+
+  it('MAT_LANG 이 설정돼 있으면 우선한다는 안내를 덧붙인다', () => {
+    const result = runMat(['config', 'language', 'en'], tmp.home, { ...noLangEnv, MAT_LANG: 'ko' });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Display language set to English.');
+    expect(result.stdout).toContain('MAT_LANG=ko');
+  });
+
+  it('--unset 은 설정을 지운다', async () => {
+    runMat(['config', 'language', 'ko'], tmp.home, noLangEnv);
+    const result = runMat(['config', 'language', '--unset'], tmp.home, noLangEnv);
+    expect(result.code).toBe(0);
+    expect(await readConfigJson()).not.toHaveProperty('language');
+  });
+
+  it('잘못된 언어·설정 키·인자는 exit 2', () => {
+    const badLang = runMat(['config', 'language', 'fr'], tmp.home, noLangEnv);
+    expect(badLang.code).toBe(2);
+    expect(badLang.stderr).toContain("unsupported language: 'fr'");
+
+    expect(runMat(['config', 'theme'], tmp.home, noLangEnv).code).toBe(2);
+    expect(runMat(['config'], tmp.home, noLangEnv).code).toBe(2);
+    expect(runMat(['config', 'language', 'en', 'ko'], tmp.home, noLangEnv).code).toBe(2);
   });
 });

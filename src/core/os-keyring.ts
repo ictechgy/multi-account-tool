@@ -30,7 +30,13 @@
  */
 
 import { runCommand, type CmdResult } from './run-command.js';
-import { OsKeyringAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
+import {
+  OsKeyringAccountMissingError,
+  OsKeyringCommandError,
+  formatServiceForDisplay,
+  redactMessage,
+  type OsKeyringFailureKind
+} from './errors.js';
 import type { KeychainStored, OsKeyringSource } from './types.js';
 
 /** Linux `secret-tool` 절대경로. PATH shim 공격을 방지 (SECURITY_BIN 미러). */
@@ -113,7 +119,12 @@ function osKeyringErr(stage: string, r: CmdResult): Error {
   // 사용자가 불필요한 패키지 설치 대신 file backend 전환을 택할 수 있도록 (#59 quad-review LOW).
   // CLI-중립 문구로 둔다 (primitive 라 특정 env 명을 결합하지 않음 — CLI 별 env 는 README).
   const msg = osKeyringErrMessage(stage, r);
-  return new Error(redactMessage(msg));
+  return new OsKeyringCommandError(osKeyringFailureKind(r), redactMessage(msg));
+}
+
+function osKeyringFailureKind(r: CmdResult): OsKeyringFailureKind {
+  if (r.code !== -1) return 'daemon-unavailable';
+  return r.spawnErrno === 'ENOENT' ? 'not-installed' : 'spawn-failed';
 }
 
 /**
@@ -271,13 +282,15 @@ async function osKeyringStoreOrRollback(
   if (res.code === 0) return;
 
   let rollbackNote = '';
+  let kind: OsKeyringFailureKind = 'write-failed';
   if (backup && backup.account != null) {
     const rb = await osKeyringStore(service, backup.account, backup.value);
     if (rb.code !== 0) {
       rollbackNote = ` / 백업 복구도 실패 (code=${rb.code})`;
+      kind = 'write-and-rollback-failed';
     }
   }
-  throw new Error(redactMessage(`os-keyring 쓰기 실패 (code=${res.code})${rollbackNote}`));
+  throw new OsKeyringCommandError(kind, redactMessage(`os-keyring 쓰기 실패 (code=${res.code})${rollbackNote}`));
 }
 
 /** os-keyring source 를 직렬화된 JSON 문자열로 캡처 (readKeychainSerialized 미러). */

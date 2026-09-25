@@ -136,6 +136,22 @@ node scripts/smoke-test.mjs    # source-checkout only — read-only smoke test (
 
 The smoke test is read-only and safe to run on a machine with active mat profiles.
 
+### Display language
+
+The first time you start the TUI (`mat`), it asks you to choose English or Korean and saves the choice to `~/.multi-account-tool/config.json`. Package managers can't prompt during `brew install` / `npm install -g`, so the choice happens on first run instead. The option matching your system locale is preselected.
+
+```bash
+mat config language            # show the current language and where it came from
+mat config language en         # save a language (en | ko)
+mat config language --unset    # clear it; the TUI will ask again
+MAT_LANG=ko mat status         # per-shell override
+mat --lang en status           # per-command override
+```
+
+Precedence: `--lang` → `MAT_LANG` → `config.json` → system locale (`LC_ALL` → `LC_MESSAGES` → `LANG`) → English.
+
+> The English translation of the CLI help and TUI is in progress ([#159](https://github.com/ictechgy/multi-account-tool/issues/159)); until it lands, most output is still in Korean.
+
 ---
 
 ## Usage

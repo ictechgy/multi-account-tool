@@ -156,6 +156,35 @@ export class OsKeyringAccountMissingError extends Error {
 }
 
 /**
+ * os-keyring(secret-tool) 명령 실패의 원인 분류.
+ *
+ * - `not-installed`: spawn ENOENT (secret-tool 미설치)
+ * - `spawn-failed`: ENOENT 아닌 spawn 실패 (EACCES·ENOTDIR 등)
+ * - `daemon-unavailable`: code≠0 종료 (keyring daemon 미응답 / 접근 거부)
+ * - `write-failed`: store 실패 (backup 복구 불필요 또는 성공)
+ * - `write-and-rollback-failed`: store 실패 + backup 복구도 실패
+ */
+export type OsKeyringFailureKind =
+  | 'not-installed'
+  | 'spawn-failed'
+  | 'daemon-unavailable'
+  | 'write-failed'
+  | 'write-and-rollback-failed';
+
+/**
+ * secret-tool 명령 실패. 호출자는 message 가 아니라 `kind` 로 분기한다 —
+ * 메시지는 사용자 표시용이라 번역(i18n)되면 문구 매칭 분기가 조용히 깨진다.
+ */
+export class OsKeyringCommandError extends Error {
+  readonly kind: OsKeyringFailureKind;
+  constructor(kind: OsKeyringFailureKind, message: string) {
+    super(message);
+    this.name = 'OsKeyringCommandError';
+    this.kind = kind;
+  }
+}
+
+/**
  * 자격증명/토큰 후보 시퀀스를 redact.
  * field-aware token 값, 주요 provider prefix, JWT, 50자+ base64-like 를 가리고 500자로 절단.
  *
