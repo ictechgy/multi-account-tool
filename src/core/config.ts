@@ -32,7 +32,8 @@ export async function loadConfig(): Promise<Config> {
       version: 1,
       active: { ...(parsed.active ?? {}) },
       firstImportPromptShown: parsed.firstImportPromptShown,
-      firstFreshnessPromptShown: parsed.firstFreshnessPromptShown
+      firstFreshnessPromptShown: parsed.firstFreshnessPromptShown,
+      language: typeof parsed.language === 'string' ? parsed.language : undefined
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {

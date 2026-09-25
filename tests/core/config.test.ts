@@ -51,6 +51,15 @@ describe('config', () => {
       expect(cfg.active).toEqual({});
     });
 
+    it('language 는 문자열이면 보존, 아니면 버린다 (mutateConfig 왕복에서 유실되지 않도록)', async () => {
+      await saveConfig({ version: 1, active: {}, language: 'en' });
+      await setActiveProfile('codex', 'work');
+      expect((await loadConfig()).language).toBe('en');
+
+      await fs.writeFile(configPath(), JSON.stringify({ version: 1, active: {}, language: 42 }));
+      expect((await loadConfig()).language).toBeUndefined();
+    });
+
     it('loadConfig 결과의 active 를 mutate 해도 원본 디스크 상태 무영향 (spread 복사)', async () => {
       await saveConfig({ version: 1, active: { codex: 'work' } });
       const cfg1 = await loadConfig();

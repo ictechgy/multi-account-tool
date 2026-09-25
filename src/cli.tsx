@@ -16,8 +16,8 @@ import { render } from 'ink';
 import App from './app.js';
 import { BUILTIN_CLI_DEFS, getAllCliDefs, getCliDefsWarnings, reservedLiveResources } from './core/cli-defs.js';
 import { redactMessage } from './core/errors.js';
-import { getActiveProfile } from './core/config.js';
-import { describeError, UnknownCliError } from './core/errors.js';
+import { getActiveProfile, loadConfig } from './core/config.js';
+import { describeError, UnknownCliError, UsageError } from './core/errors.js';
 import { runExec } from './core/exec.js';
 import {
   cliDefsDir,
@@ -37,6 +37,7 @@ import {
   type FreshnessReport
 } from './core/freshness.js';
 import { migrateLegacyDataDir } from './core/migrate.js';
+import { extractLangFlag, msg, normalizeLocale, resolveLocale, setLocale } from './i18n/index.js';
 
 const USAGE =
   `사용법:\n` +
@@ -60,7 +61,9 @@ const USAGE =
   `  mat support <cli> [--json]                    CLI 지원 범위/한계/계약 설명\n` +
   `  mat explain <cli> [--json]                    support 의 alias\n` +
   `  mat --help                                     이 도움말 출력\n` +
-  `  mat --version                                  버전 출력\n`;
+  `  mat --version                                  버전 출력\n` +
+  `  mat --lang <en|ko> [command...]               표시 언어 지정. MAT_LANG 환경변수 또는\n` +
+  `                                                 config.json 의 "language" 로도 설정 가능\n`;
 
 /**
  * Exit code 규약:
@@ -102,7 +105,7 @@ function flushPluginWarnings(): void {
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  const args = await applyLocale(process.argv.slice(2));
   const [first, ...rest] = args;
   // plugin 목록을 한 번 해석해 경고를 확정한 뒤 stderr 로 흘린다. 모든 서브커맨드와 TUI 가
   // 같은 지점을 지나므로 거부된 plugin 이 조용히 사라지는 일이 없다.
@@ -164,6 +167,34 @@ async function main(): Promise<void> {
 
   process.stderr.write(`mat: 알 수 없는 명령: ${first}\n${USAGE}`);
   process.exit(2);
+}
+
+/**
+ * 표시 언어를 확정하고 선행 `--lang` 을 떼어낸 argv 를 돌려준다.
+ *
+ * plugin 경고 등 첫 출력보다 먼저 불려야 모든 메시지가 같은 locale 로 나간다.
+ * `--lang` 오류 메시지도 번역되도록, 거부 전에 나머지 입력(env/config/system)으로
+ * locale 을 먼저 정한다.
+ */
+async function applyLocale(argv: string[]): Promise<string[]> {
+  const parsed = extractLangFlag(argv);
+  const flag = parsed.ok ? normalizeLocale(parsed.lang) : undefined;
+  const needsConfig = flag == null && normalizeLocale(process.env.MAT_LANG) == null;
+  const configLanguage = needsConfig ? await readConfigLanguage() : undefined;
+  setLocale(resolveLocale({ flag, env: process.env, configLanguage }));
+
+  if (!parsed.ok) throw new UsageError(msg().lang.missingValue);
+  if (parsed.lang != null && flag == null) throw new UsageError(msg().lang.invalidValue(parsed.lang));
+  return parsed.rest;
+}
+
+/** config.json 의 `language`. 읽기 실패(손상 등)는 무시 — 이후 명령이 기존 경로로 보고한다. */
+async function readConfigLanguage(): Promise<string | undefined> {
+  try {
+    return (await loadConfig()).language;
+  } catch {
+    return undefined;
+  }
 }
 
 function isSessionRunPreflightRequest(rest: string[]): boolean {

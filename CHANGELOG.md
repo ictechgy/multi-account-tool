@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **표시 언어 선택 기반 (i18n 1단계, #159).** `--lang <en|ko>` 전역 옵션, `MAT_LANG` 환경변수,
+  `config.json` 의 `"language"` 순으로 언어를 정하고, 셋 다 없으면 시스템 locale
+  (`LC_ALL` → `LC_MESSAGES` → `LANG`), 그것도 아니면 영어를 쓴다. 메시지는
+  `src/i18n/messages/{en,ko}.ts` 카탈로그에 두며 `ko` 는 `en` 의 타입을 따르므로 번역 누락은
+  typecheck 에서 잡힌다. 이번 단계에서 옮긴 문자열은 `--lang` 오류뿐이고, CLI 도움말·TUI 는
+  2단계에서 옮긴다.
+
+### Changed
+
+- **os-keyring 실패 분류를 메시지 문구 매칭에서 에러 종류(`OsKeyringCommandError.kind`) 로
+  바꿨다.** `classifyLssError` 가 `/미설치|접근 거부|백업 복구도 실패/` 같은 한국어 정규식으로
+  원인을 판정하고 있어서, 메시지를 번역하면 분류가 조용히 틀어질 수 있었다. 분류 결과는
+  기존과 동일하다.
+
 ## [0.8.3] - 2026-07-27
 
 ### Security
