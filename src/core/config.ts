@@ -43,6 +43,17 @@ export async function loadConfig(): Promise<Config> {
   }
 }
 
+/**
+ * 표시 언어를 저장한다. undefined 면 설정을 지워 `MAT_LANG`·시스템 locale 을 따르게
+ * 한다 (다음 TUI 시작 시 언어 선택을 다시 묻는다). 값 검증은 호출자(i18n)가 한다.
+ */
+export async function setConfiguredLanguage(language: string | undefined): Promise<void> {
+  await mutateConfig((cfg) => {
+    if (language === undefined) delete cfg.language;
+    else cfg.language = language;
+  });
+}
+
 /** config 를 원자적으로 저장 (writeFileAtomic 사용). */
 export async function saveConfig(cfg: Config): Promise<void> {
   await ensureDataDir();

@@ -17,6 +17,9 @@ export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: Locale = 'en';
 
+/** 언어 선택 UI 에 쓰는 자국어 표기 (번역하지 않는다 — 어떤 locale 에서도 자기 언어를 찾을 수 있게). */
+export const LOCALE_NATIVE_NAMES: Record<Locale, string> = { en: 'English', ko: '한국어' };
+
 /**
  * `ko`, `ko-KR`, `ko_KR.UTF-8`, `en_US@euro` 등을 지원 locale 로 정규화.
  * 지원하지 않는 언어·`C`·`POSIX`·빈 값은 undefined.
@@ -49,13 +52,20 @@ export interface LocaleInputs {
   configLanguage?: string;
 }
 
+/** locale 이 어느 단계에서 정해졌는지. `system` 이면 사용자가 명시적으로 고른 적이 없다. */
+export type LocaleSource = 'flag' | 'env' | 'config' | 'system';
+
+export function resolveLocaleWithSource(inputs: LocaleInputs): { locale: Locale; source: LocaleSource } {
+  if (inputs.flag) return { locale: inputs.flag, source: 'flag' };
+  const fromEnv = normalizeLocale(inputs.env.MAT_LANG);
+  if (fromEnv) return { locale: fromEnv, source: 'env' };
+  const fromConfig = normalizeLocale(inputs.configLanguage);
+  if (fromConfig) return { locale: fromConfig, source: 'config' };
+  return { locale: systemLocale(inputs.env), source: 'system' };
+}
+
 export function resolveLocale(inputs: LocaleInputs): Locale {
-  return (
-    inputs.flag ??
-    normalizeLocale(inputs.env.MAT_LANG) ??
-    normalizeLocale(inputs.configLanguage) ??
-    systemLocale(inputs.env)
-  );
+  return resolveLocaleWithSource(inputs).locale;
 }
 
 export type LangFlagResult =

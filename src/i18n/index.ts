@@ -10,7 +10,16 @@ import { en, type Messages } from './messages/en.js';
 import { ko } from './messages/ko.js';
 import { resolveLocale, type Locale } from './locale.js';
 
-export { normalizeLocale, resolveLocale, extractLangFlag, SUPPORTED_LOCALES, type Locale } from './locale.js';
+export {
+  normalizeLocale,
+  resolveLocale,
+  resolveLocaleWithSource,
+  extractLangFlag,
+  LOCALE_NATIVE_NAMES,
+  SUPPORTED_LOCALES,
+  type Locale,
+  type LocaleSource
+} from './locale.js';
 export type { Messages } from './messages/en.js';
 
 const CATALOGS: Record<Locale, Messages> = { en, ko };

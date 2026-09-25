@@ -16,7 +16,7 @@ import { render } from 'ink';
 import App from './app.js';
 import { BUILTIN_CLI_DEFS, getAllCliDefs, getCliDefsWarnings, reservedLiveResources } from './core/cli-defs.js';
 import { redactMessage } from './core/errors.js';
-import { getActiveProfile, loadConfig } from './core/config.js';
+import { getActiveProfile, loadConfig, setConfiguredLanguage } from './core/config.js';
 import { describeError, UnknownCliError, UsageError } from './core/errors.js';
 import { runExec } from './core/exec.js';
 import {
@@ -37,7 +37,18 @@ import {
   type FreshnessReport
 } from './core/freshness.js';
 import { migrateLegacyDataDir } from './core/migrate.js';
-import { extractLangFlag, msg, normalizeLocale, resolveLocale, setLocale } from './i18n/index.js';
+import {
+  extractLangFlag,
+  getLocale,
+  LOCALE_NATIVE_NAMES,
+  msg,
+  normalizeLocale,
+  resolveLocaleWithSource,
+  setLocale,
+  type Locale,
+  type LocaleSource
+} from './i18n/index.js';
+import { LanguagePrompt } from './ui/language-prompt.js';
 
 const USAGE =
   `사용법:\n` +
@@ -60,6 +71,7 @@ const USAGE =
   `  mat doctor [--json]                           read-only 안전 진단 (자격증명 값 미열람)\n` +
   `  mat support <cli> [--json]                    CLI 지원 범위/한계/계약 설명\n` +
   `  mat explain <cli> [--json]                    support 의 alias\n` +
+  `  mat config language [en|ko|--unset]           표시 언어 확인/저장 (첫 TUI 실행 때도 선택)\n` +
   `  mat --help                                     이 도움말 출력\n` +
   `  mat --version                                  버전 출력\n` +
   `  mat --lang <en|ko> [command...]               표시 언어 지정. MAT_LANG 환경변수 또는\n` +
@@ -81,6 +93,12 @@ const USAGE =
 const EXIT_RESTORE_FAILED = 74;
 const EXIT_FRESHNESS_INSPECT_FAILED = 74;
 const EXIT_STALE_DETECTED = 1;
+
+/**
+ * applyLocale 이 확정한 locale 의 출처. `system` 이면 사용자가 언어를 고른 적이 없다.
+ * `main()` 호출보다 위에 선언해야 한다 — config 를 읽지 않는 동기 경로에서 TDZ 로 터진다.
+ */
+let localeSource: LocaleSource = 'system';
 
 main().catch((err) => {
   process.stderr.write(`mat: ${describeError(err)}\n`);
@@ -141,7 +159,7 @@ async function main(): Promise<void> {
   registerAllBuiltinAdapters();
 
   if (first == null) {
-    runTui();
+    await runTui();
     return;
   }
   if (first === '--help' || first === '-h' || first === 'help') {
@@ -158,6 +176,10 @@ async function main(): Promise<void> {
   }
   if (first === 'freshness') {
     await handleFreshness(rest);
+    return;
+  }
+  if (first === 'config') {
+    await handleConfig(rest);
     return;
   }
   if (first === 'session') {
@@ -181,7 +203,9 @@ async function applyLocale(argv: string[]): Promise<string[]> {
   const flag = parsed.ok ? normalizeLocale(parsed.lang) : undefined;
   const needsConfig = flag == null && normalizeLocale(process.env.MAT_LANG) == null;
   const configLanguage = needsConfig ? await readConfigLanguage() : undefined;
-  setLocale(resolveLocale({ flag, env: process.env, configLanguage }));
+  const resolved = resolveLocaleWithSource({ flag, env: process.env, configLanguage });
+  setLocale(resolved.locale);
+  localeSource = resolved.source;
 
   if (!parsed.ok) throw new UsageError(msg().lang.missingValue);
   if (parsed.lang != null && flag == null) throw new UsageError(msg().lang.invalidValue(parsed.lang));
@@ -524,11 +548,70 @@ function parseSupportArgs(command: 'support' | 'explain', rest: string[]): Suppo
   return { cliId, asJson, help };
 }
 
-function runTui(): void {
+/**
+ * 언어를 고른 적이 없으면(`--lang`·`MAT_LANG`·config 모두 없음) TUI 전에 한 번 묻고
+ * config.json 에 저장한다. 설치(brew/npm) 단계는 사용자 입력을 받을 수 없어서 첫 실행에서 묻는다.
+ */
+async function runTui(): Promise<void> {
+  if (localeSource === 'system') {
+    const chosen = await promptLanguage(getLocale());
+    if (chosen == null) return; // Ctrl+C — 저장 없이 종료
+    await setConfiguredLanguage(chosen);
+    setLocale(chosen);
+    localeSource = 'config';
+  }
   const { waitUntilExit } = render(<App />);
   waitUntilExit().catch(() => {
     process.exit(1);
   });
+}
+
+/** 언어 선택 화면을 띄우고 고른 locale 을 돌려준다. 선택 없이 종료(Ctrl+C)하면 undefined. */
+async function promptLanguage(initial: Locale): Promise<Locale | undefined> {
+  let chosen: Locale | undefined;
+  const instance = render(
+    <LanguagePrompt
+      initial={initial}
+      onSelect={(locale) => {
+        chosen = locale;
+        instance.unmount();
+      }}
+    />
+  );
+  await instance.waitUntilExit();
+  return chosen;
+}
+
+/** `mat config language [en|ko|--unset]` — 표시 언어 확인/저장. */
+async function handleConfig(rest: string[]): Promise<void> {
+  const m = msg().config;
+  const [key, ...values] = rest;
+  if (key === '--help' || key === '-h') {
+    process.stdout.write(`${m.usage}\n`);
+    return;
+  }
+  if (key == null) throw new UsageError(m.usage);
+  if (key !== 'language') throw new UsageError(`${m.unknownKey(key)}\n${m.usage}`);
+  if (values.length > 1) throw new UsageError(`${m.tooManyArgs}\n${m.usage}`);
+
+  const [value] = values;
+  if (value == null) {
+    process.stdout.write(`${m.languageCurrent(getLocale(), m.sourceLabels[localeSource])}\n`);
+    return;
+  }
+  if (value === '--unset') {
+    await setConfiguredLanguage(undefined);
+    process.stdout.write(`${m.languageUnset}\n`);
+    return;
+  }
+  const locale = normalizeLocale(value);
+  if (locale == null) throw new UsageError(m.invalidLanguage(value));
+  await setConfiguredLanguage(locale);
+  // 확인 메시지는 새 언어로 낸다.
+  setLocale(locale);
+  process.stdout.write(`${msg().config.languageSet(LOCALE_NATIVE_NAMES[locale])}\n`);
+  const envLang = process.env.MAT_LANG;
+  if (normalizeLocale(envLang) != null) process.stdout.write(`${msg().config.envOverrides(envLang!)}\n`);
 }
 
 async function handleExec(rest: string[]): Promise<void> {

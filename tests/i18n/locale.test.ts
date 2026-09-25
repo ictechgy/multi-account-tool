@@ -4,7 +4,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { extractLangFlag, normalizeLocale, resolveLocale, systemLocale } from '../../src/i18n/locale.js';
+import {
+  extractLangFlag,
+  normalizeLocale,
+  resolveLocale,
+  resolveLocaleWithSource,
+  systemLocale
+} from '../../src/i18n/locale.js';
 
 describe('normalizeLocale', () => {
   it.each([
@@ -71,6 +77,19 @@ describe('resolveLocale 우선순위', () => {
 
   it('모두 없으면 en', () => {
     expect(resolveLocale({ env: {} })).toBe('en');
+  });
+});
+
+describe('resolveLocaleWithSource', () => {
+  it('결정한 단계를 함께 돌려준다 (system 이면 사용자가 고른 적 없음 → TUI 가 묻는다)', () => {
+    expect(resolveLocaleWithSource({ flag: 'ko', env: {} })).toEqual({ locale: 'ko', source: 'flag' });
+    expect(resolveLocaleWithSource({ env: { MAT_LANG: 'en' } })).toEqual({ locale: 'en', source: 'env' });
+    expect(resolveLocaleWithSource({ env: {}, configLanguage: 'ko' })).toEqual({ locale: 'ko', source: 'config' });
+    expect(resolveLocaleWithSource({ env: { LANG: 'ko_KR.UTF-8' } })).toEqual({ locale: 'ko', source: 'system' });
+  });
+
+  it('인식 불가 config 값은 고른 것으로 치지 않는다', () => {
+    expect(resolveLocaleWithSource({ env: {}, configLanguage: 'xx' }).source).toBe('system');
   });
 });
 

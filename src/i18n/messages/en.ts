@@ -9,6 +9,24 @@ export const en = {
   lang: {
     missingValue: '--lang requires a value (en or ko)',
     invalidValue: (value: string) => `unsupported language for --lang: '${value}' (supported: en, ko)`
+  },
+  config: {
+    usage: 'usage: mat config language [en|ko|--unset]',
+    unknownKey: (key: string) => `mat config: unknown setting: ${key}`,
+    invalidLanguage: (value: string) => `mat config: unsupported language: '${value}' (supported: en, ko)`,
+    tooManyArgs: 'mat config: too many arguments',
+    languageCurrent: (locale: string, source: string) => `language: ${locale} (from ${source})`,
+    sourceLabels: {
+      flag: '--lang',
+      env: 'MAT_LANG',
+      config: 'config.json',
+      system: 'system locale'
+    },
+    languageSet: (name: string) => `Display language set to ${name}.`,
+    languageUnset:
+      'Display language setting removed. mat will follow MAT_LANG or the system locale, ' +
+      'and will ask again the next time the TUI starts.',
+    envOverrides: (value: string) => `Note: MAT_LANG=${value} is set and takes precedence over this setting.`
   }
 };
 

@@ -634,3 +634,60 @@ describe('mat --lang — 표시 언어 선택', () => {
     expect(result.stderr).toContain('--lang 에 지원하지 않는 언어입니다');
   });
 });
+
+describe('mat config language', () => {
+  let tmp: TmpHome;
+  const noLangEnv = { MAT_LANG: '', LC_ALL: '', LC_MESSAGES: '', LANG: 'en_US.UTF-8' };
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  async function readConfigJson(): Promise<Record<string, unknown>> {
+    return JSON.parse(await fs.readFile(join(tmp.home, '.multi-account-tool/config.json'), 'utf8')) as Record<string, unknown>;
+  }
+
+  it('값 없이 부르면 현재 언어와 출처를 보여준다', () => {
+    const result = runMat(['config', 'language'], tmp.home, noLangEnv);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('language: en (from system locale)\n');
+  });
+
+  it('저장하면 config.json 에 정규화된 값이 들어가고, 확인 메시지는 새 언어로 나온다', async () => {
+    const set = runMat(['config', 'language', 'ko_KR'], tmp.home, noLangEnv);
+    expect(set.code).toBe(0);
+    expect(set.stdout).toContain('표시 언어를 한국어(으)로 설정했습니다.');
+    expect(await readConfigJson()).toMatchObject({ language: 'ko' });
+
+    const show = runMat(['config', 'language'], tmp.home, noLangEnv);
+    expect(show.stdout).toBe('언어: ko (출처: config.json)\n');
+  });
+
+  it('MAT_LANG 이 설정돼 있으면 우선한다는 안내를 덧붙인다', () => {
+    const result = runMat(['config', 'language', 'en'], tmp.home, { ...noLangEnv, MAT_LANG: 'ko' });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Display language set to English.');
+    expect(result.stdout).toContain('MAT_LANG=ko');
+  });
+
+  it('--unset 은 설정을 지운다', async () => {
+    runMat(['config', 'language', 'ko'], tmp.home, noLangEnv);
+    const result = runMat(['config', 'language', '--unset'], tmp.home, noLangEnv);
+    expect(result.code).toBe(0);
+    expect(await readConfigJson()).not.toHaveProperty('language');
+  });
+
+  it('잘못된 언어·설정 키·인자는 exit 2', () => {
+    const badLang = runMat(['config', 'language', 'fr'], tmp.home, noLangEnv);
+    expect(badLang.code).toBe(2);
+    expect(badLang.stderr).toContain("unsupported language: 'fr'");
+
+    expect(runMat(['config', 'theme'], tmp.home, noLangEnv).code).toBe(2);
+    expect(runMat(['config'], tmp.home, noLangEnv).code).toBe(2);
+    expect(runMat(['config', 'language', 'en', 'ko'], tmp.home, noLangEnv).code).toBe(2);
+  });
+});
