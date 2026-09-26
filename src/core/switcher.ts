@@ -121,6 +121,8 @@ async function snapshotLiveToProfileUnlocked(
     const meta = await readMeta(cliId, profileName);
     if (!meta) throw new Error('profile metadata missing during capture');
     meta.updatedAt = new Date().toISOString();
+    // 로그인이 한 번이라도 캡처되면 일반 프로필이 된다 — 이후 전환은 저장본 복원 + 이월 규칙.
+    if (captured.length > 0) delete meta.startsLoggedOut;
     meta.identity = buildProfileIdentity({ cliId, capturedAt: new Date(meta.updatedAt), sources: identitySources });
     const metaStage = await stageProfileFile(cliId, profileName, 'meta.json', JSON.stringify(meta, null, 2));
     await commitProfileCaptureTransaction(cliId, profileName, [
@@ -189,6 +191,11 @@ export interface RestoreResult {
    * 띄울 수 있다) 하드닝 실패 시 throw 할 수 있어, 항상 성공하던 멱등 no-op 이 실패로 뒤집힌다.
    */
   carryOverEvaluated: boolean;
+  /**
+   * 로그아웃 상태로 시작하는 프로필(`startsLoggedOut`)로 전환하면서 **지운** 라이브 source 의
+   * saveAs 명. 이 값이 채워지면 `carriedOver` 는 비어 있다 — 직전 계정 자격증명을 남기지 않았다.
+   */
+  cleared: string[];
 }
 
 /** 복원 plan: source 별 stored (프로필) + liveBackup (롤백용 라이브 백업) */
@@ -196,6 +203,8 @@ interface RestorePlan {
   src: Source;
   stored: string | null;
   liveBackup: string | null;
+  /** stored 가 없을 때 라이브를 지운다 (로그아웃 상태로 시작하는 프로필). */
+  clearLive?: boolean;
 }
 
 /**
@@ -226,11 +235,27 @@ async function restoreProfileToLiveUnlocked(
   const restored: string[] = [];
   const missing: string[] = [];
   const carriedOver: string[] = [];
+  const cleared: string[] = [];
 
   const plan = await collectRestorePlan(def, cliId, profileName, missing, carriedOver);
-  await applyRestorePlan(plan, restored);
+  if (await startsLoggedOutWithNothingStored(cliId, profileName, plan)) {
+    // 로그아웃 상태로 시작: 저장본이 없는 source 의 라이브 값을 지운다. 호출자(switchProfile)가
+    // 라이브를 이미 다른 프로필에 저장했거나 폐기를 명시했음을 보장한다.
+    for (const item of plan) if (item.liveBackup != null) item.clearLive = true;
+    carriedOver.length = 0;
+  }
+  await applyRestorePlan(plan, restored, cleared);
 
-  return { cliId, profileName, restored, missing, carriedOver, carryOverEvaluated: true };
+  return { cliId, profileName, restored, missing, carriedOver, carryOverEvaluated: true, cleared };
+}
+
+async function startsLoggedOutWithNothingStored(
+  cliId: string,
+  profileName: string,
+  plan: RestorePlan[]
+): Promise<boolean> {
+  if (!plan.every((item) => item.stored == null)) return false;
+  return (await readMeta(cliId, profileName))?.startsLoggedOut === true;
 }
 
 /** 복원 전 preflight: 모든 source 의 stored + 현재 라이브 값을 메모리에 수집. */
@@ -261,16 +286,21 @@ async function collectRestorePlan(
 }
 
 /** plan 을 순차 적용. 한 source 실패 시 이미 적용된 source 롤백 후 원본 에러 throw. */
-async function applyRestorePlan(plan: RestorePlan[], restored: string[]): Promise<void> {
+async function applyRestorePlan(plan: RestorePlan[], restored: string[], cleared: string[]): Promise<void> {
   const appliedIdx: number[] = [];
   let currentIdx: number | undefined;
   try {
     for (let i = 0; i < plan.length; i++) {
-      const { src, stored } = plan[i];
-      if (stored == null) continue;
+      const { src, stored, clearLive } = plan[i];
+      if (stored == null && !clearLive) continue;
       currentIdx = i;
-      await writeSource(src, stored);
-      restored.push(src.saveAs);
+      if (stored == null) {
+        await removeSource(src);
+        cleared.push(src.saveAs);
+      } else {
+        await writeSource(src, stored);
+        restored.push(src.saveAs);
+      }
       appliedIdx.push(i);
       currentIdx = undefined;
     }
@@ -399,7 +429,7 @@ async function switchProfileUnlocked(
     // `mat freshness` 가 권위 있는 채널이다.
     return {
       fromSnapshot: undefined,
-      restore: { cliId, profileName: toProfile, restored: [], missing: [], carriedOver: [], carryOverEvaluated: false },
+      restore: { cliId, profileName: toProfile, restored: [], missing: [], carriedOver: [], carryOverEvaluated: false, cleared: [] },
       preSwapLiveFreshness: undefined
     };
   }
@@ -420,10 +450,75 @@ async function switchProfileUnlocked(
     preSwapLiveFreshness = await safeInspectFreshness(cliId, current);
     fromSnapshot = await snapshotLiveToProfileUnlocked(cliId, current);
   }
+  // 로그아웃 상태로 시작하는 프로필은 라이브를 지운다. 방금 snapshot 하지 않았고 폐기도 명시되지
+  // 않았다면(활성 프로필 없음) 그 라이브는 어디에도 저장돼 있지 않으므로 지우기 전에 거부한다.
+  if (!shouldSnapshot && !skipSnapshot && (await readMeta(cliId, toProfile))?.startsLoggedOut === true) {
+    await assertNoUnsavedLiveCredentials(cliId);
+  }
   const restore = await restoreProfileToLiveUnlocked(cliId, toProfile);
   await setActiveProfile(cliId, toProfile);
   await touchProfile(cliId, toProfile);
   return { fromSnapshot, restore, preSwapLiveFreshness };
+}
+
+/**
+ * 라이브 자격증명이 어떤 프로필에도 저장돼 있지 않아, 로그아웃 상태로 전환하면 사라지는 경우.
+ */
+export class UnsavedLiveCredentialsError extends Error {
+  readonly cliId: string;
+  readonly liveSources: string[];
+  constructor(cliId: string, liveSources: string[]) {
+    super(
+      `현재 ${cliId} 로그인이 어떤 프로필에도 저장돼 있지 않아 로그아웃 상태로 전환할 수 없습니다 ` +
+        `(라이브: ${liveSources.join(', ')}). 먼저 '현재 로그인 복사' 로 프로필을 만들어 저장하세요.`
+    );
+    this.name = 'UnsavedLiveCredentialsError';
+    this.cliId = cliId;
+    this.liveSources = liveSources;
+  }
+}
+
+async function assertNoUnsavedLiveCredentials(cliId: string): Promise<void> {
+  const def = mustFindCli(cliId);
+  const live: string[] = [];
+  for (const src of def.sources) if ((await readSource(src)) != null) live.push(src.saveAs);
+  if (live.length > 0) throw new UnsavedLiveCredentialsError(cliId, live);
+}
+
+/**
+ * "새 계정으로 시작": 로그아웃 상태로 시작하는 빈 프로필을 만들고 곧바로 그 프로필로 전환한다.
+ *
+ * 전환 시퀀스는 {@link switchProfile} 과 같다 — 현재 활성 프로필로 라이브를 먼저 snapshot 한
+ * 뒤(`skipPreSwapSnapshot` 이면 생략) 라이브 자격증명을 지운다. 사용자가 CLI 에서 새 계정으로
+ * 로그인하면 다음 전환(또는 캡처) 때 이 프로필에 저장된다.
+ *
+ * 활성 프로필이 없고 라이브 자격증명이 남아 있으면 지우는 순간 사라지므로 프로필을 만들기 전에
+ * {@link UnsavedLiveCredentialsError} 로 거부한다. 전환이 실패하면 방금 만든 빈 프로필을 지운다.
+ */
+export async function switchToNewLoggedOutProfile(
+  cliId: string,
+  profileName: string,
+  options?: SwitchOptions
+): Promise<SwitchResult> {
+  const def = mustFindCli(cliId);
+  assertNoEnvSecretSources(def.sources, 'switch');
+  return withCliMutationLock(
+    { cliId, profileName, execMode: 'foreground', affectsCliIds: [cliId] },
+    async () => {
+      const current = await getActiveProfile(cliId);
+      const liveWillBeSaved =
+        options?.skipPreSwapSnapshot === true || (current != null && (await profileExists(cliId, current)));
+      if (!liveWillBeSaved) await assertNoUnsavedLiveCredentials(cliId);
+      await createProfile(cliId, profileName, undefined, { startsLoggedOut: true });
+      try {
+        return await switchProfileUnlocked(cliId, profileName, options);
+      } catch (err) {
+        // 빈 프로필이라 지워도 잃을 데이터가 없다. 실패한 전환의 흔적을 남기지 않는다.
+        await deleteProfile(cliId, profileName).catch(() => undefined);
+        throw err;
+      }
+    }
+  );
 }
 
 /**

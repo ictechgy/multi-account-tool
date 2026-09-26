@@ -165,12 +165,45 @@ function ProfileRow({ item, focused }: { item: ProfileItem; focused: boolean }) 
   const cursor = focused ? '›' : ' ';
   const color = focused ? 'cyan' : undefined;
   const activeMark = item.isActive ? ' (활성)' : '';
+  const pendingMark = item.meta?.startsLoggedOut ? ' · 로그인 대기' : '';
   const updated = item.meta?.updatedAt ? ` · ${formatRelative(item.meta.updatedAt)}` : '';
   return (
     <Box>
       <Text color={color}>  {cursor} </Text>
       <Text color={color} bold={focused}>{item.name}</Text>
-      <Text color="gray">{activeMark}{updated}</Text>
+      <Text color="gray">{activeMark}{pendingMark}{updated}</Text>
+    </Box>
+  );
+}
+
+interface AddModeScreenProps {
+  cliName: string;
+  name: string;
+  onFresh: () => void;
+  onCopy: () => void;
+  onCancel: () => void;
+}
+
+/** 새 프로필의 시작 방식 선택. 기본값은 새 계정(로그아웃 상태로 전환). */
+export function AddModeScreen({ cliName, name, onFresh, onCopy, onCancel }: AddModeScreenProps) {
+  useInput((_input, key) => {
+    if (key.escape) onCancel();
+  });
+  const items = [
+    { label: '새 계정으로 시작 — 로그아웃 상태로 만들고 바로 전환', value: 'fresh', key: 'fresh' },
+    { label: '현재 로그인 복사 — 지금 로그인된 계정을 이 프로필로 저장', value: 'copy', key: 'copy' }
+  ];
+  return (
+    <Box flexDirection="column">
+      <Text bold>  {cliName} — '{name}' 프로필을 어떻게 시작할까요?</Text>
+      <Box marginTop={1}>
+        <SelectInput items={items} onSelect={(item) => (item.value === 'fresh' ? onFresh() : onCopy())} />
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text color="gray">  새 계정: 지금 계정은 활성 프로필에 저장되고 CLI 가 로그아웃됩니다.</Text>
+        <Text color="gray">          새 계정으로 로그인하면 다음 전환 때 이 프로필에 저장됩니다.</Text>
+        <Text color="gray">  ↑↓ 이동  ↵ 선택  esc 취소</Text>
+      </Box>
     </Box>
   );
 }

@@ -328,11 +328,13 @@ mat --help       # 짧은 사용법 (subcommand: exec / session / plugin / fresh
 <h3 id="새-계정-추가하기">새 계정 추가하기</h3>
 <ol>
 <li><code>mat</code> → CLI 선택 → <code>a</code> (새 프로필) → 이름 입력 (예: <code>work</code>)</li>
-<li>새 프로필에서 <code>Enter</code>를 눌러 활성화한다. 라이브 자격증명이 <strong>활성 프로필</strong>의 저장본과 drift(OAuth refresh 토큰 회전 등)된 상태라면 swap 직전에 <strong>재캡처 / 폐기 / 취소</strong> dialog가 표시된다 — 위의 전환 흐름 + OAuth Rotation 안전성 매트릭스 참고.</li>
-<li>별도 터미널에서 해당 CLI의 로그인 명령 실행 (<code>claude</code>, <code>codex</code>, <code>gemini</code> 등). 라이브 자격증명이 새 계정 것으로 덮어쓰인다.</li>
-<li><code>mat</code>으로 돌아와 같은 프로필에서 <code>c</code>(캡처)를 누른다. 새 라이브 자격증명이 프로필에 저장된다.</li>
+<li><strong>새 계정으로 시작</strong>(기본값)을 고른다. <code>mat</code>이 현재 로그인을 활성 프로필에 저장한 뒤 라이브 자격증명을 지우고 새 프로필로 전환한다. 즉 CLI가 로그아웃 상태가 된다. 라이브 자격증명이 활성 프로필의 저장본과 drift(OAuth refresh 토큰 회전 등)된 상태라면 먼저 <strong>재캡처 / 폐기 / 취소</strong> dialog가 표시된다 — 위의 전환 흐름 + OAuth Rotation 안전성 매트릭스 참고.</li>
+<li>별도 터미널에서 해당 CLI(<code>claude</code>, <code>codex</code>, <code>gemini</code> 등)에 새 계정으로 로그인한다. 로그아웃할 필요가 없다.</li>
+<li>새 로그인은 이 프로필에서 다른 프로필로 전환할 때 자동으로 저장된다. 바로 저장하려면 프로필에서 <code>c</code>(캡처)를 누른다.</li>
 <li>이후로는 <code>Enter</code>만으로 프로필 사이를 자유롭게 전환한다.</li>
 </ol>
+<p>지금 로그인된 계정을 새 프로필로 저장하려면(기존 계정 백업 등) <strong>현재 로그인 복사</strong>를 고른다. 새 계정 프로필은 로그인이 저장될 때까지 목록에 <code>· 로그인 대기</code>로 표시된다.</p>
+<p>활성 프로필이 없는데 CLI가 로그인된 상태라면, 라이브 자격증명을 지우면 그 로그인이 사라지므로 <code>mat</code>이 새 계정 시작을 거부한다. 먼저 <strong>현재 로그인 복사</strong>로 저장한다.</p>
 <h3 id="키바인딩">키바인딩</h3>
 <div class="table-wrap"><table>
 <thead>

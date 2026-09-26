@@ -328,11 +328,13 @@ mat --help       # short usage summary (subcommands: exec, session, plugin, fres
 <h3 id="adding-a-new-account">Adding a new account</h3>
 <ol>
 <li><code>mat</code> → pick a CLI → press <code>a</code> → enter a profile name (e.g., <code>work</code>)</li>
-<li>Press <code>Enter</code> on the new profile to make it active. If the live credentials drifted from the <strong>active profile</strong>&#39;s stored snapshot (OAuth refresh-token rotation), <code>mat</code> shows a <strong>Recapture / Discard / Cancel</strong> dialog before swapping — see Switch flow + OAuth Rotation Safety Matrix above.</li>
-<li>In a separate terminal, log in to the CLI itself (<code>claude</code>, <code>codex</code>, <code>gemini</code>, …). This overwrites the live credentials with the new account.</li>
-<li>Back in <code>mat</code>, press <code>c</code> on the same profile to <strong>capture</strong> the new live credentials into it</li>
+<li>Choose <strong>Start with a new account</strong> (the default). <code>mat</code> saves the current login to the active profile, then clears the live credentials and switches to the new profile, so the CLI is logged out. If the live credentials drifted from the active profile&#39;s stored snapshot (OAuth refresh-token rotation), a <strong>Recapture / Discard / Cancel</strong> dialog appears first — see Switch flow + OAuth Rotation Safety Matrix above.</li>
+<li>In a separate terminal, log in to the CLI (<code>claude</code>, <code>codex</code>, <code>gemini</code>, …) with the new account. No logout step is needed.</li>
+<li>The new login is saved to the profile the next time you switch away from it. To save it right away, press <code>c</code> on the profile.</li>
 <li>From now on, switch freely between profiles with <code>Enter</code></li>
 </ol>
+<p>Choose <strong>Copy current login</strong> instead to save the account that is logged in right now as the new profile (for example, to back up an existing account). The profile list shows <code>· 로그인 대기</code> (awaiting login) on new-account profiles until a login is captured.</p>
+<p>If no profile is active yet and the CLI is logged in, <code>mat</code> refuses to start a new account, because clearing the live credentials would lose that login. Save it first with <strong>Copy current login</strong>.</p>
 <h3 id="key-bindings">Key bindings</h3>
 <div class="table-wrap"><table>
 <thead>

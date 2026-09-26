@@ -155,10 +155,14 @@ If the CLI's live credentials are already present, `mat` offers to import them a
 ### Adding a new account
 
 1. `mat` → pick a CLI → press `a` → enter a profile name (e.g., `work`)
-2. Press `Enter` on the new profile to make it active. If the live credentials drifted from the **active profile**'s stored snapshot (OAuth refresh-token rotation), `mat` shows a **Recapture / Discard / Cancel** dialog before swapping — see Switch flow + OAuth Rotation Safety Matrix above.
-3. In a separate terminal, log in to the CLI itself (`claude`, `codex`, `gemini`, …). This overwrites the live credentials with the new account.
-4. Back in `mat`, press `c` on the same profile to **capture** the new live credentials into it
+2. Choose **Start with a new account** (the default). `mat` saves the current login to the active profile, then clears the live credentials and switches to the new profile, so the CLI is logged out. If the live credentials drifted from the active profile's stored snapshot (OAuth refresh-token rotation), a **Recapture / Discard / Cancel** dialog appears first — see Switch flow + OAuth Rotation Safety Matrix above.
+3. In a separate terminal, log in to the CLI (`claude`, `codex`, `gemini`, …) with the new account. No logout step is needed.
+4. The new login is saved to the profile the next time you switch away from it. To save it right away, press `c` on the profile.
 5. From now on, switch freely between profiles with `Enter`
+
+Choose **Copy current login** instead to save the account that is logged in right now as the new profile (for example, to back up an existing account). The profile list shows `· 로그인 대기` (awaiting login) on new-account profiles until a login is captured.
+
+If no profile is active yet and the CLI is logged in, `mat` refuses to start a new account, because clearing the live credentials would lose that login. Save it first with **Copy current login**.
 
 ### Key bindings
 
