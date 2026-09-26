@@ -53,6 +53,13 @@ export function formatSwitchResult(r: SwitchResult, to: string): string {
     lines.push(`  이번 호출은 이월 여부를 판정하지 않았습니다. 'mat doctor' / 'mat freshness' 로 확인하세요.`);
     return lines.join('\n');
   }
+  if (r.restore.cleared.length) {
+    // 로그아웃 상태로 시작하는 프로필. "건너뜀" 안내는 오도적이므로 대체한다.
+    lines.push(`로그아웃 상태로 전환했습니다 → ${to} (지운 라이브 자격증명: ${r.restore.cleared.join(', ')})`);
+    lines.push(`  → 이제 CLI 에서 새 계정으로 로그인하세요.`);
+    lines.push(`  → 로그인한 계정은 다음 전환 때 '${to}' 에 자동 저장됩니다 (바로 저장하려면 'c' 캡처).`);
+    return lines.join('\n');
+  }
   lines.push(`복원 → ${to} : ${r.restore.restored.length}개 파일`);
   if (r.restore.missing.length) {
     lines.push(`  (프로필에 없어 건너뜀: ${r.restore.missing.join(', ')})`);
