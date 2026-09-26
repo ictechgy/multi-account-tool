@@ -25,7 +25,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 import { spawn } from 'node:child_process';
 
 import { __setSourceFsOpsForTests, readSource, removeSource, runCommand, sourceExists, writeSource } from '../../src/core/sources.js';
-import { KeychainAccountMissingError } from '../../src/core/errors.js';
+import { KeychainAccountMissingError, KeychainCommandError } from '../../src/core/errors.js';
 import type { EnvSecretSource, FileSource, KeychainSource, KeychainStored } from '../../src/core/types.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 import { promises as fs } from 'node:fs';
@@ -700,6 +700,33 @@ describe('sources — keychain branch (spawn mock, darwin 가정)', () => {
       const stored: KeychainStored = { value: 'new' };
       await expect(writeSource(KEYCHAIN_SRC, JSON.stringify(stored)))
         .rejects.toThrow(/백업 항목 삭제 실패/);
+    });
+
+    it('security 명령 실패는 typed KeychainCommandError — stage/exitCode 보존, 문구 형식 유지', async () => {
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }))
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }))
+        .mockReturnValueOnce(fakeProc({ code: 51, stderr: 'SecKeychainItemDelete: denied' }));
+
+      const err = await writeSource(KEYCHAIN_SRC, JSON.stringify({ value: 'new' })).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(KeychainCommandError);
+      expect((err as KeychainCommandError).stage).toBe('백업 항목 삭제');
+      expect((err as KeychainCommandError).exitCode).toBe(51);
+      expect((err as Error).message).toBe('keychain 백업 항목 삭제 실패 (code=51): SecKeychainItemDelete: denied');
+    });
+
+    it('add + 롤백 실패도 KeychainCommandError — 롤백 note 는 접미어로 유지', async () => {
+      mockSpawn
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: 'old' }))
+        .mockReturnValueOnce(fakeProc({ code: 0, stdout: findOutputWithAcct('bob') }))
+        .mockReturnValueOnce(fakeProc({ code: 0 }))
+        .mockReturnValueOnce(fakeProc({ code: 5, stderr: 'add failed' }))
+        .mockReturnValueOnce(fakeProc({ code: 6, stderr: 'rollback add failed' }));
+
+      const err = await writeSource(KEYCHAIN_SRC, JSON.stringify({ value: 'new' })).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(KeychainCommandError);
+      expect((err as KeychainCommandError).stage).toBe('쓰기');
+      expect((err as Error).message).toBe('keychain 쓰기 실패 (code=5): add failed / 백업 복구도 실패 (code=6): rollback add failed');
     });
 
     it('non-darwin → throw "macOS 에서만 지원"', async () => {
