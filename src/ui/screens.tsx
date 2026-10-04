@@ -9,6 +9,7 @@ import SelectInput from 'ink-select-input';
 
 import type { CompareResult, FreshnessReport } from '../core/freshness.js';
 import type { CliDef, Profile } from '../core/types.js';
+import { msg } from '../i18n/index.js';
 
 /**
  * HomeScreen 의 한 줄 항목. 한 CLI 의 상태 요약.
@@ -41,23 +42,25 @@ export function HomeScreen({ items, onSelect, onQuit }: HomeScreenProps) {
     key: it.cli.id
   }));
 
+  const m = msg().screens.home;
   return (
     <Box flexDirection="column">
-      <Text bold>  CLI 를 선택하세요:</Text>
+      <Text bold>{m.title}</Text>
       <Box marginTop={1}>
         <SelectInput items={selectItems} onSelect={(item) => onSelect(item.value)} />
       </Box>
       <Box marginTop={2}>
-        <Text color="gray">  ↑↓ 이동  ↵ 선택  q 종료</Text>
+        <Text color="gray">{m.hints}</Text>
       </Box>
     </Box>
   );
 }
 
 function formatCliLabel(it: CliRow): string {
-  const active = it.active ? `활성: ${it.active}` : '활성: -';
-  const liveMark = it.hasLive ? '✓ live' : '⚠ live 없음';
-  const profMark = it.profileCount > 0 ? `${it.profileCount}개 프로필` : '프로필 없음';
+  const m = msg().screens.home;
+  const active = it.active ? m.active(it.active) : m.noActive;
+  const liveMark = it.hasLive ? m.live : m.noLive;
+  const profMark = it.profileCount > 0 ? m.profileCount(it.profileCount) : m.noProfiles;
   return `${it.cli.name.padEnd(22)}  ${active.padEnd(20)}  ${liveMark.padEnd(12)}  ${profMark}`;
 }
 
@@ -135,13 +138,14 @@ export function ProfilesScreen({
     if (input === 'c') { onCapture(current.name); return; }
   });
 
+  const m = msg().screens.profiles;
   return (
     <Box flexDirection="column">
       <Text bold>{cli.name}</Text>
-      <Text color="gray">  활성 프로필: {active ?? '(없음)'}</Text>
+      <Text color="gray">{m.activeProfile(active ?? m.none)}</Text>
       <Box marginTop={1} flexDirection="column">
         {profiles.length === 0 ? (
-          <Text color="gray">  프로필이 없습니다. 'a' 키로 새 프로필을 추가하세요.</Text>
+          <Text color="gray">{m.empty}</Text>
         ) : (
           profiles.map((p, idx) => (
             <ProfileRow
@@ -154,8 +158,8 @@ export function ProfilesScreen({
       </Box>
       <Box marginTop={2} flexDirection="column">
         <Text color="gray">  ────────────────────────────────────────</Text>
-        <Text color="gray">  ↵ 이 프로필로 전환    c 캡처(라이브→프로필)    a 새 프로필</Text>
-        <Text color="gray">  r 이름 변경    d 삭제    esc 뒤로</Text>
+        <Text color="gray">{m.hintsLine1}</Text>
+        <Text color="gray">{m.hintsLine2}</Text>
       </Box>
     </Box>
   );
@@ -164,8 +168,9 @@ export function ProfilesScreen({
 function ProfileRow({ item, focused }: { item: ProfileItem; focused: boolean }) {
   const cursor = focused ? '›' : ' ';
   const color = focused ? 'cyan' : undefined;
-  const activeMark = item.isActive ? ' (활성)' : '';
-  const pendingMark = item.meta?.startsLoggedOut ? ' · 로그인 대기' : '';
+  const m = msg().screens.profiles;
+  const activeMark = item.isActive ? m.activeMark : '';
+  const pendingMark = item.meta?.startsLoggedOut ? m.pendingMark : '';
   const updated = item.meta?.updatedAt ? ` · ${formatRelative(item.meta.updatedAt)}` : '';
   return (
     <Box>
@@ -189,37 +194,39 @@ export function AddModeScreen({ cliName, name, onFresh, onCopy, onCancel }: AddM
   useInput((_input, key) => {
     if (key.escape) onCancel();
   });
+  const m = msg().screens.addMode;
   const items = [
-    { label: '새 계정으로 시작 — 로그아웃 상태로 만들고 바로 전환', value: 'fresh', key: 'fresh' },
-    { label: '현재 로그인 복사 — 지금 로그인된 계정을 이 프로필로 저장', value: 'copy', key: 'copy' }
+    { label: m.fresh, value: 'fresh', key: 'fresh' },
+    { label: m.copy, value: 'copy', key: 'copy' }
   ];
   return (
     <Box flexDirection="column">
-      <Text bold>  {cliName} — '{name}' 프로필을 어떻게 시작할까요?</Text>
+      <Text bold>{m.title(cliName, name)}</Text>
       <Box marginTop={1}>
         <SelectInput items={items} onSelect={(item) => (item.value === 'fresh' ? onFresh() : onCopy())} />
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text color="gray">  새 계정: 지금 계정은 활성 프로필에 저장되고 CLI 가 로그아웃됩니다.</Text>
-        <Text color="gray">          새 계정으로 로그인하면 다음 전환 때 이 프로필에 저장됩니다.</Text>
-        <Text color="gray">  ↑↓ 이동  ↵ 선택  esc 취소</Text>
+        <Text color="gray">{m.noteLine1}</Text>
+        <Text color="gray">{m.noteLine2}</Text>
+        <Text color="gray">{m.hints}</Text>
       </Box>
     </Box>
   );
 }
 
 function formatRelative(iso: string): string {
+  const m = msg().screens.relative;
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 0) return '방금';
+  if (diff < 0) return m.justNow;
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return '방금';
-  if (mins < 60) return `${mins}분 전`;
+  if (mins < 1) return m.justNow;
+  if (mins < 60) return m.minutesAgo(mins);
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}시간 전`;
+  if (hours < 24) return m.hoursAgo(hours);
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}일 전`;
+  if (days < 30) return m.daysAgo(days);
   const months = Math.floor(days / 30);
-  return `${months}달 전`;
+  return m.monthsAgo(months);
 }
 
 interface FreshnessDialogProps {
@@ -313,9 +320,8 @@ function useFreshnessDialogKeys(opts: {
 /** 헤더: stale 여부에 따라 색상 + 제목 분기. */
 function FreshnessDialogHeader({ hasStale }: { hasStale: boolean }) {
   const color = hasStale ? 'red' : 'yellow';
-  const title = hasStale
-    ? '라이브 자격증명이 저장본과 크게 다릅니다 (다른 계정 추정)'
-    : '라이브 자격증명이 갱신되었습니다 (refresh rotation)';
+  const m = msg().screens.freshness;
+  const title = hasStale ? m.titleStale : m.titleRotated;
   return <Text bold color={color}>{title}</Text>;
 }
 
@@ -325,14 +331,15 @@ function FreshnessDialogTarget({
   fromProfile,
   toProfile
 }: { mode: 'switch' | 'create'; fromProfile: string; toProfile: string }) {
+  const m = msg().screens.freshness;
   return (
     <Box marginTop={1} flexDirection="column">
-      <Text>  활성 프로필: <Text bold>{fromProfile}</Text></Text>
+      <Text>{m.activeProfileLabel}<Text bold>{fromProfile}</Text></Text>
       <Text>
-        {'  대상: '}
+        {m.targetLabel}
         <Text bold>{toProfile}</Text>
         <Text color="gray">
-          {mode === 'switch' ? ' (전환 중)' : ' (새 프로필 생성 중)'}
+          {mode === 'switch' ? m.modeSwitch : m.modeCreate}
         </Text>
       </Text>
     </Box>
@@ -359,20 +366,21 @@ function FreshnessDialogOptions({
   toProfile,
   hasStale
 }: { mode: 'switch' | 'create'; fromProfile: string; toProfile: string; hasStale: boolean }) {
+  const m = msg().screens.freshness;
   const discardColor = hasStale ? 'red' : 'yellow';
-  const recaptureBody = `        라이브를 '${fromProfile}' 에 저장한 뒤 ${
-    mode === 'switch' ? '전환' : '새 프로필 생성'
-  } (권장)`;
+  const recaptureBody = mode === 'switch'
+    ? m.recaptureBodySwitch(fromProfile)
+    : m.recaptureBodyCreate(fromProfile);
   const discardBody = mode === 'switch'
-    ? `        라이브를 백업 없이 폐기하고 '${toProfile}' 로 전환 (데이터 손실)`
-    : `        라이브를 '${fromProfile}' 에 저장하지 않고 '${toProfile}' 만 생성 (현재 저장본 stale 유지)`;
+    ? m.discardBodySwitch(toProfile)
+    : m.discardBodyCreate(fromProfile, toProfile);
   return (
     <Box marginTop={1} flexDirection="column">
-      <Text color="green">  [R/↵] 재캡처</Text>
+      <Text color="green">{m.recaptureOption}</Text>
       <Text color="gray">{recaptureBody}</Text>
-      <Text color={discardColor}>  [D] 폐기</Text>
+      <Text color={discardColor}>{m.discardOption}</Text>
       <Text color="gray">{discardBody}</Text>
-      <Text color="gray">  [C/esc] 취소</Text>
+      <Text color="gray">{m.cancelOption}</Text>
     </Box>
   );
 }
@@ -382,20 +390,15 @@ function FreshnessDialogOptions({
  * 두 번째 표시부터는 본 패널 생략 (markFirstFreshnessPromptShown 플래그 기반).
  */
 function OnboardingPanel() {
+  const m = msg().screens.onboarding;
   return (
     <Box marginTop={1} flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
-      <Text bold color="cyan">처음 보시는 안내</Text>
+      <Text bold color="cyan">{m.title}</Text>
+      <Text color="gray">{m.line1}</Text>
+      <Text color="gray">{m.line2}</Text>
+      <Text color="gray">{m.line3}</Text>
       <Text color="gray">
-        OAuth 기반 CLI 는 사용 중 refresh token rotation 으로 라이브 자격증명을 자동 갱신합니다.
-      </Text>
-      <Text color="gray">
-        mat 의 저장본은 그 갱신을 모르므로 그대로 전환하면 옛 토큰이 라이브로 복원되어
-      </Text>
-      <Text color="gray">
-        provider 가 강제 재로그인을 요구할 수 있습니다.
-      </Text>
-      <Text color="gray">
-        보통은 <Text bold color="green">재캡처</Text>가 안전합니다. 본 안내는 다음 표시부터 생략됩니다.
+        {m.line4Before}<Text bold color="green">{m.line4Emphasis}</Text>{m.line4After}
       </Text>
     </Box>
   );

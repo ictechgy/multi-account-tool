@@ -150,7 +150,7 @@ mat --lang en status           # per-command override
 
 Precedence: `--lang` → `MAT_LANG` → `config.json` → system locale (`LC_ALL` → `LC_MESSAGES` → `LANG`) → English.
 
-> The English translation of the CLI help and TUI is in progress ([#159](https://github.com/ictechgy/multi-account-tool/issues/159)); until it lands, most output is still in Korean.
+> The CLI help, usage errors and the TUI are available in English and Korean. Some messages from deeper modules (for example detailed error messages during a switch or a session) are still Korean-only; translating them is tracked in [#159](https://github.com/ictechgy/multi-account-tool/issues/159).
 
 ---
 
@@ -176,7 +176,7 @@ If the CLI's live credentials are already present, `mat` offers to import them a
 4. The new login is saved to the profile the next time you switch away from it. To save it right away, press `c` on the profile.
 5. From now on, switch freely between profiles with `Enter`
 
-Choose **Copy current login** instead to save the account that is logged in right now as the new profile (for example, to back up an existing account). The profile list shows `· 로그인 대기` (awaiting login) on new-account profiles until a login is captured.
+Choose **Copy current login** instead to save the account that is logged in right now as the new profile (for example, to back up an existing account). The profile list shows `· awaiting login` on new-account profiles until a login is captured.
 
 If no profile is active yet and the CLI is logged in, `mat` refuses to start a new account, because clearing the live credentials would lose that login. Save it first with **Copy current login**.
 

@@ -691,3 +691,59 @@ describe('mat config language', () => {
     expect(runMat(['config', 'language', 'en', 'ko'], tmp.home, noLangEnv).code).toBe(2);
   });
 });
+
+describe('영어 출력 (MAT_LANG=en)', () => {
+  let tmp: TmpHome;
+  const en = { MAT_LANG: 'en' };
+  const HANGUL = /[\uAC00-\uD7A3]/;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  it('도움말은 영어로만 나온다', () => {
+    const result = runMat(['--help'], tmp.home, en);
+    expect(result.code).toBe(0);
+    expect(result.stdout.startsWith('Usage:\n')).toBe(true);
+    expect(result.stdout).toContain('Launch the TUI');
+    expect(result.stdout).not.toMatch(HANGUL);
+  });
+
+  it('서브커맨드 도움말과 사용법 오류도 영어로 나온다', () => {
+    for (const args of [['status', '--help'], ['doctor', '--help'], ['plugin', '--help'], ['support', '--help']]) {
+      const result = runMat(args, tmp.home, en);
+      expect(result.code).toBe(0);
+      expect(result.stdout).not.toMatch(HANGUL);
+    }
+
+    const unknownCommand = runMat(['nope'], tmp.home, en);
+    expect(unknownCommand.code).toBe(2);
+    expect(unknownCommand.stderr).toContain('mat: unknown command: nope');
+    expect(unknownCommand.stderr).not.toMatch(HANGUL);
+
+    const unknownOption = runMat(['status', '--bad'], tmp.home, en);
+    expect(unknownOption.code).toBe(2);
+    expect(unknownOption.stderr).toContain('mat status: unknown option: --bad');
+
+    const session = runMat(['session'], tmp.home, en);
+    expect(session.code).toBe(2);
+    expect(session.stderr).toContain('mat session: unknown subcommand: (none)');
+    expect(session.stderr).not.toMatch(HANGUL);
+
+    const exec = runMat(['exec', 'codex'], tmp.home, en);
+    expect(exec.code).toBe(2);
+    expect(exec.stderr).toContain('the command separator `--` is required');
+  });
+
+  it('--lang 은 MAT_LANG 보다 우선한다', () => {
+    const result = runMat(['--lang', 'en', '--help'], tmp.home, { MAT_LANG: 'ko' });
+    expect(result.stdout.startsWith('Usage:\n')).toBe(true);
+    const ko = runMat(['--lang', 'ko', '--help'], tmp.home, en);
+    expect(ko.stdout.startsWith('사용법:\n')).toBe(true);
+  });
+});
+

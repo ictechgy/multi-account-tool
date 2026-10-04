@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { formatSwitchResult } from '../../src/app/formatters.js';
+import { setLocale } from '../../src/i18n/index.js';
 import type { SwitchResult } from '../../src/core/switcher.js';
 
 const result = (restore: Partial<SwitchResult['restore']>): SwitchResult => ({
@@ -94,3 +95,26 @@ describe('formatSwitchResult — 로그아웃 상태로 전환 (startsLoggedOut)
     expect(text).not.toMatch(/이전 계정 자격증명/);
   });
 });
+
+describe('formatSwitchResult — 영어', () => {
+  it('영어 문구와 단수/복수를 쓰고 이월 경고의 안전 안내를 유지한다', () => {
+    setLocale('en');
+    try {
+      const one = formatSwitchResult(result({ restored: ['a.json'] }), 'acct-a');
+      expect(one).toBe('Restore → acct-a : 1 file');
+
+      const carried = formatSwitchResult(
+        result({ restored: ['a.json', 'b.json'], missing: ['c.json'], carriedOver: ['c.json'] }),
+        'acct-a'
+      );
+      expect(carried).toMatch(/Restore → acct-a : 2 files/);
+      expect(carried).toMatch(/still live: c\.json/);
+      expect(carried).toMatch(/Do not recapture it/);
+      expect(carried).toMatch(/mat freshness/);
+      expect(carried).not.toMatch(/[\uAC00-\uD7A3]/);
+    } finally {
+      setLocale('ko');
+    }
+  });
+});
+

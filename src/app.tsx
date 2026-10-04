@@ -78,6 +78,7 @@ import {
   type SwitchResult
 } from './core/switcher.js';
 import type { CliDef, Profile } from './core/types.js';
+import { msg } from './i18n/index.js';
 import { Busy, Confirm, Header, Message, TextPrompt } from './ui/widgets.js';
 import {
   AddModeScreen,
@@ -120,7 +121,7 @@ export default function App() {
     <Box flexDirection="column" padding={1}>
       <Header
         title="Multi-Account Tool (mat)"
-        subtitle="여러 AI CLI 계정을 하나의 TUI 에서 전환"
+        subtitle={msg().app.header.subtitle}
       />
       {renderScreen(screen, state.data, dispatch, refresh, exit)}
     </Box>
@@ -219,7 +220,7 @@ function renderScreen(
 ): React.ReactElement {
   switch (screen.kind) {
     case 'loading':
-      return <Busy message="자격증명 상태 확인 중..." />;
+      return <Busy message={msg().app.busy.checkingCredentials} />;
     case 'firstImport':
       return renderFirstImport(screen, dispatch, refresh);
     case 'home':
@@ -305,7 +306,7 @@ function renderProfiles(
   refresh: () => Promise<void>
 ): React.ReactElement {
   const cli = findCliDef(screen.cliId);
-  if (!cli) return <Busy message="알 수 없는 CLI..." />;
+  if (!cli) return <Busy message={msg().app.unknownCli} />;
   const active = data.activeByCli[cli.id];
   const profiles: ProfileItem[] = (data.profilesByCli[cli.id] ?? []).map((p) => ({
     name: p.name,
@@ -336,11 +337,11 @@ function renderAdd(
   refresh: () => Promise<void>
 ): React.ReactElement {
   const cli = findCliDef(screen.cliId);
-  if (!cli) return <Busy message="알 수 없는 CLI..." />;
+  if (!cli) return <Busy message={msg().app.unknownCli} />;
   const existing = new Set((data.profilesByCli[cli.id] ?? []).map((p) => p.name));
   return (
     <TextPrompt
-      label={`${cli.name} — 새 프로필 이름`}
+      label={msg().app.prompts.newProfileName(cli.name)}
       placeholder="personal / work / ..."
       validate={(v) => validateNewName(v, existing)}
       onSubmit={(name) => dispatch({ type: 'replace', screen: { kind: 'addMode', cliId: cli.id, name } })}
@@ -356,7 +357,7 @@ function renderAddMode(
   refresh: () => Promise<void>
 ): React.ReactElement {
   const cli = findCliDef(screen.cliId);
-  if (!cli) return <Busy message="알 수 없는 CLI..." />;
+  if (!cli) return <Busy message={msg().app.unknownCli} />;
   return (
     <AddModeScreen
       cliName={cli.name}
@@ -375,11 +376,11 @@ function renderRename(
   refresh: () => Promise<void>
 ): React.ReactElement {
   const cli = findCliDef(screen.cliId);
-  if (!cli) return <Busy message="알 수 없는 CLI..." />;
+  if (!cli) return <Busy message={msg().app.unknownCli} />;
   const existing = new Set((data.profilesByCli[cli.id] ?? []).map((p) => p.name));
   return (
     <TextPrompt
-      label={`${cli.name} / ${screen.oldName} → 새 이름`}
+      label={msg().app.prompts.renameTo(cli.name, screen.oldName)}
       initial={screen.oldName}
       validate={(v) => validateRenameTo(v, screen.oldName, existing)}
       onSubmit={(newName) => onRenameSubmit(cli.id, screen.oldName, newName, dispatch, refresh)}
@@ -398,10 +399,10 @@ function renderFirstImport(
     .filter((c): c is CliDef => !!c);
   return (
     <Confirm
-      title="초기 자격증명 가져오기"
+      title={msg().app.firstImport.title}
       body={formatFirstImportBody(targets)}
-      yesLabel="모두 가져오기"
-      noLabel="건너뛰기"
+      yesLabel={msg().app.firstImport.importAll}
+      noLabel={msg().app.firstImport.skip}
       onYes={() => void onFirstImport(screen.targets, screen.expectedByCli, dispatch, refresh)}
       onNo={() => void declineFirstImport(dispatch)}
     />
@@ -471,7 +472,7 @@ async function onFirstImport(
   dispatch: React.Dispatch<Action>,
   refresh: () => Promise<void>
 ): Promise<void> {
-  dispatch({ type: 'replace', screen: { kind: 'busy', message: '자격증명 가져오는 중...' } });
+  dispatch({ type: 'replace', screen: { kind: 'busy', message: msg().app.busy.importingCredentials } });
   const summary: FirstImportSummary = { successes: [], failures: [] };
   for (const cliId of targets) {
     try {
@@ -567,7 +568,7 @@ async function pushSwitchConfirmWithAmbient(
     type: 'push',
     screen: {
       kind: 'confirm',
-      title: `${cli.name} 프로필 전환`,
+      title: msg().app.switchConfirmTitle(cli.name),
       body: await switchConfirmBodyWithAmbient(cli.id, currentActive, to),
       onYes
     }
@@ -598,7 +599,7 @@ function checkFreshnessThenSwitch(
       type: 'replace',
       screen: {
         kind: 'confirm',
-        title: `${cli.name} 프로필 전환`,
+        title: msg().app.switchConfirmTitle(cli.name),
         body: await switchConfirmBodyWithAmbient(cli.id, currentActive, to),
         onYes: () => void doSwitch(cli, to, dispatch, refresh, currentActive)
       }
@@ -653,7 +654,7 @@ interface FreshnessRoutingOptions {
 async function inspectAndRouteFreshness(opts: FreshnessRoutingOptions): Promise<void> {
   opts.dispatch({
     type: opts.initialBusyAction,
-    screen: { kind: 'busy', message: '자격증명 상태 확인 중...' }
+    screen: { kind: 'busy', message: msg().app.busy.checkingCredentials }
   });
   let report: FreshnessReport;
   try {
@@ -664,7 +665,7 @@ async function inspectAndRouteFreshness(opts: FreshnessRoutingOptions): Promise<
       screen: {
         kind: 'message',
         tone: 'error',
-        title: '자격증명 확인 실패',
+        title: msg().app.freshness.checkFailedTitle,
         body: describeError(err)
       }
     });
@@ -680,10 +681,8 @@ async function inspectAndRouteFreshness(opts: FreshnessRoutingOptions): Promise<
       screen: {
         kind: 'message',
         tone: 'warning',
-        title: '자격증명 갱신 중 (재시도 권장)',
-        body:
-          `라이브 자격증명이 갱신 중간 상태로 보입니다 (multi-source 부분 갱신).\n` +
-          `잠시 후 다시 시도하세요.`
+        title: msg().app.freshness.inflightTitle,
+        body: msg().app.freshness.inflightBody
       }
     });
     return;
@@ -727,15 +726,12 @@ async function persistFirstFreshnessPromptIfNeeded(data: AppData): Promise<void>
  * 별도 처리해 성공 UI 로 덮지 않고 기존 취소 안내를 표시한다.
  */
 class ActiveProfileChangedError extends Error {
-  readonly title = '활성 프로필 변경 감지 — 작업 취소';
+  readonly title = msg().app.activeChanged.title;
   readonly body: string;
 
   constructor(expected: string | undefined, current: string | undefined) {
-    const body =
-      `dialog 표시 중 다른 도구가 활성 프로필을 변경했습니다.\n` +
-      `예상: '${expected ?? '(없음)'}' / 현재: '${current ?? '(없음)'}'\n\n` +
-      `라이브 자격증명이 의도와 다른 프로필에 쓰일 수 있어 작업을 취소했습니다.\n` +
-      `프로필 목록을 다시 확인 후 재시도하세요.`;
+    const none = msg().app.none;
+    const body = msg().app.activeChanged.body(expected ?? none, current ?? none);
     super(body);
     this.name = 'ActiveProfileChangedError';
     this.body = body;
@@ -749,10 +745,11 @@ class FirstImportStateChangedError extends Error {
     currentProfiles: string[]
   ) {
     super(
-      `초기 가져오기 dialog 표시 중 ${cliId} 프로필 목록이 변경되었습니다.\n` +
-      `예상: ${formatProfileList(expectedProfiles)} / 현재: ${formatProfileList(currentProfiles)}\n\n` +
-      `다른 작업이 먼저 프로필 상태를 변경해 stale 가져오기를 취소했습니다.\n` +
-      `프로필 목록을 다시 확인 후 재시도하세요.`
+      msg().app.firstImportChanged(
+        cliId,
+        formatProfileList(expectedProfiles),
+        formatProfileList(currentProfiles)
+      )
     );
     this.name = 'FirstImportStateChangedError';
   }
@@ -787,7 +784,7 @@ function sameProfileNames(a: string[], b: string[]): boolean {
 }
 
 function formatProfileList(names: string[]): string {
-  return names.length === 0 ? '(없음)' : names.join(', ');
+  return names.length === 0 ? msg().app.none : names.join(', ');
 }
 
 async function doSwitch(
@@ -800,7 +797,7 @@ async function doSwitch(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '전환 중...',
+    busyMessage: msg().app.busy.switching,
     work: () =>
       withCliMutationLock(
         { cliId: cli.id, profileName: to, execMode: 'foreground', affectsCliIds: [cli.id] },
@@ -810,10 +807,10 @@ async function doSwitch(
         }
       ),
     buildSuccess: (result) => ({
-      title: '전환 완료',
+      title: msg().app.switchDone.title,
       body: formatSwitchResult(result, to)
     }),
-    errorTitle: '전환 실패'
+    errorTitle: msg().app.switchDone.errorTitle
   });
 }
 
@@ -835,7 +832,7 @@ async function doSwitchWithRecapture(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '라이브 재캡처 후 전환 중...',
+    busyMessage: msg().app.busy.recaptureAndSwitch,
     work: () =>
       withCliMutationLock(
         {
@@ -852,12 +849,12 @@ async function doSwitchWithRecapture(
         }
       ),
     buildSuccess: (result) => ({
-      title: '재캡처 + 전환 완료',
+      title: msg().app.recaptureSwitch.title,
       body:
-        `라이브 자격증명을 '${currentActive}' 에 저장한 뒤 '${to}' 로 전환했습니다.\n\n` +
+        `${msg().app.recaptureSwitch.body(currentActive, to)}\n\n` +
         formatSwitchResult(result, to)
     }),
-    errorTitle: '재캡처/전환 실패'
+    errorTitle: msg().app.recaptureSwitch.errorTitle
   });
 }
 
@@ -876,7 +873,7 @@ async function doSwitchDiscardingLive(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '라이브 폐기 후 전환 중...',
+    busyMessage: msg().app.busy.discardAndSwitch,
     work: () =>
       withCliMutationLock(
         {
@@ -892,13 +889,13 @@ async function doSwitchDiscardingLive(
         }
       ),
     buildSuccess: (result) => ({
-      title: '폐기 + 전환 완료',
+      title: msg().app.discardSwitch.title,
       tone: 'warning' as MessageTone,
       body:
-        `라이브 자격증명을 백업 없이 폐기하고 '${to}' 로 전환했습니다.\n\n` +
+        `${msg().app.discardSwitch.body(to)}\n\n` +
         formatSwitchResult(result, to)
     }),
-    errorTitle: '폐기/전환 실패'
+    errorTitle: msg().app.discardSwitch.errorTitle
   });
 }
 
@@ -1001,7 +998,7 @@ async function doCreateFreshAndSwitch(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '새 계정 프로필로 전환 중...',
+    busyMessage: msg().app.busy.switchingToNewAccount,
     work: () =>
       withCliMutationLock(
         {
@@ -1022,13 +1019,13 @@ async function doCreateFreshAndSwitch(
         }
       ),
     buildSuccess: (result) => ({
-      title: '새 계정 프로필로 전환 완료',
+      title: msg().app.freshSwitch.title,
       tone: liveHandling === 'discard' ? ('warning' as MessageTone) : undefined,
       body:
-        (liveHandling === 'discard' ? `라이브 자격증명을 백업 없이 폐기했습니다.\n\n` : '') +
+        (liveHandling === 'discard' ? `${msg().app.freshSwitch.discarded}\n\n` : '') +
         formatSwitchResult(result, name)
     }),
-    errorTitle: '새 계정 프로필 전환 실패'
+    errorTitle: msg().app.freshSwitch.errorTitle
   });
 }
 
@@ -1050,7 +1047,7 @@ async function doCreateProfile(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '프로필 생성 중...',
+    busyMessage: msg().app.busy.creatingProfile,
     work: () =>
       withCliMutationLock(
         {
@@ -1066,14 +1063,14 @@ async function doCreateProfile(
         }
       ),
     buildSuccess: (snap) => ({
-      title: '프로필 생성 완료',
+      title: msg().app.create.title,
       body:
-        `'${name}' 프로필이 생성되었습니다. (활성 프로필은 변경되지 않았습니다)\n` +
+        `${msg().app.create.body(name)}\n` +
         (snap.captured.length > 0
-          ? `라이브 자격증명을 캡처했습니다: ${snap.captured.join(', ')}`
-          : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)
+          ? msg().app.create.captured(snap.captured.join(', '))
+          : msg().app.create.empty)
     }),
-    errorTitle: '프로필 생성 실패'
+    errorTitle: msg().app.create.errorTitle
   });
 }
 
@@ -1099,7 +1096,7 @@ async function doCreateWithRecapture(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '라이브 재캡처 후 프로필 생성 중...',
+    busyMessage: msg().app.busy.recaptureAndCreate,
     work: () =>
       withCliMutationLock(
         {
@@ -1116,15 +1113,15 @@ async function doCreateWithRecapture(
         }
       ),
     buildSuccess: (snap) => ({
-      title: '재캡처 + 프로필 생성 완료',
+      title: msg().app.recaptureCreate.title,
       body:
-        `라이브 자격증명을 '${currentActive}' 에 저장한 뒤 '${newName}' 프로필을 생성했습니다.\n` +
-        `(활성 프로필은 '${currentActive}' 로 유지됩니다)\n` +
+        `${msg().app.recaptureCreate.body(currentActive, newName)}\n` +
+        `${msg().app.recaptureCreate.keptActive(currentActive)}\n` +
         (snap.captured.length > 0
-          ? `캡처된 파일: ${snap.captured.join(', ')}`
-          : `라이브 자격증명이 없어 빈 프로필로 생성되었습니다.`)
+          ? msg().app.recaptureCreate.capturedFiles(snap.captured.join(', '))
+          : msg().app.create.empty)
     }),
-    errorTitle: '재캡처/생성 실패'
+    errorTitle: msg().app.recaptureCreate.errorTitle
   });
 }
 
@@ -1138,7 +1135,7 @@ async function onRenameSubmit(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '이름 변경 중...',
+    busyMessage: msg().app.busy.renaming,
     work: () =>
       withCliMutationLock(
         {
@@ -1155,10 +1152,10 @@ async function onRenameSubmit(
         }
       ),
     buildSuccess: () => ({
-      title: '이름 변경 완료',
+      title: msg().app.rename.title,
       body: `${oldName} → ${newName}`
     }),
-    errorTitle: '이름 변경 실패'
+    errorTitle: msg().app.rename.errorTitle
   });
 }
 
@@ -1175,8 +1172,8 @@ function onDeleteAction(
       screen: {
         kind: 'message',
         tone: 'warning',
-        title: '활성 프로필은 삭제할 수 없습니다',
-        body: `먼저 다른 프로필로 전환한 후 '${name}' 을 삭제하세요.`
+        title: msg().app.delete.activeTitle,
+        body: msg().app.delete.activeBody(name)
       }
     });
     return;
@@ -1185,8 +1182,8 @@ function onDeleteAction(
     type: 'push',
     screen: {
       kind: 'confirm',
-      title: '프로필 삭제',
-      body: `'${name}' 프로필을 영구 삭제합니다. 되돌릴 수 없습니다.`,
+      title: msg().app.delete.confirmTitle,
+      body: msg().app.delete.confirmBody(name),
       dangerous: true,
       onYes: () => void doDelete(cli.id, name, active, dispatch, refresh)
     }
@@ -1203,7 +1200,7 @@ async function doDelete(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '삭제 중...',
+    busyMessage: msg().app.busy.deleting,
     work: () =>
       withCliMutationLock(
         { cliId, profileName: name, execMode: 'foreground', affectsCliIds: [cliId] },
@@ -1214,10 +1211,10 @@ async function doDelete(
         }
       ),
     buildSuccess: () => ({
-      title: '삭제 완료',
-      body: `'${name}' 프로필이 삭제되었습니다.`
+      title: msg().app.delete.title,
+      body: msg().app.delete.body(name)
     }),
-    errorTitle: '삭제 실패'
+    errorTitle: msg().app.delete.errorTitle
   });
 }
 
@@ -1232,7 +1229,7 @@ function onCaptureAction(
     type: 'push',
     screen: {
       kind: 'confirm',
-      title: '현재 라이브 자격증명을 캡처',
+      title: msg().app.capture.confirmTitle,
       body: formatCaptureWarning(name, active),
       dangerous: name !== active,
       onYes: () => void doCapture(cli.id, name, active, dispatch, refresh)
@@ -1250,7 +1247,7 @@ async function doCapture(
   await runBusyAction({
     dispatch,
     refresh,
-    busyMessage: '캡처 중...',
+    busyMessage: msg().app.busy.capturing,
     work: () =>
       withCliMutationLock(
         { cliId, profileName: name, execMode: 'foreground', affectsCliIds: [cliId] },
@@ -1260,13 +1257,13 @@ async function doCapture(
         }
       ),
     buildSuccess: (snap) => ({
-      title: '캡처 완료',
+      title: msg().app.capture.title,
       body:
         snap.captured.length > 0
-          ? `저장됨: ${snap.captured.join(', ')}`
-          : '캡처할 라이브 자격증명이 없습니다.'
+          ? msg().app.capture.saved(snap.captured.join(', '))
+          : msg().app.capture.nothing
     }),
-    errorTitle: '캡처 실패'
+    errorTitle: msg().app.capture.errorTitle
   });
 }
 

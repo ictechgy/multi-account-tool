@@ -11,6 +11,7 @@ import React, { useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
+import { msg } from '../i18n/index.js';
 
 interface HeaderProps {
   title: string;
@@ -91,7 +92,7 @@ export function TextPrompt({
       </Box>
       {error ? <Text color="red">  ✗ {error}</Text> : null}
       <Box marginTop={1}>
-        <Text color="gray">  ↵ 확인  esc 취소</Text>
+        <Text color="gray">  {msg().widgets.promptHint}</Text>
       </Box>
     </Box>
   );
@@ -116,8 +117,8 @@ export function Confirm({
   body,
   onYes,
   onNo,
-  yesLabel = '예',
-  noLabel = '아니오',
+  yesLabel = msg().widgets.confirmYes,
+  noLabel = msg().widgets.confirmNo,
   dangerous = false
 }: ConfirmProps) {
   const submittedRef = useRef(false);
@@ -213,7 +214,7 @@ export function Message({ tone, title, body, onDismiss }: MessageProps) {
         </Box>
       ) : null}
       <Box marginTop={1}>
-        <Text color="gray">  ↵/esc 확인</Text>
+        <Text color="gray">  {msg().widgets.dismissHint}</Text>
       </Box>
     </Box>
   );

@@ -1,4 +1,11 @@
 import type { Messages } from './en.js';
+import { cli } from './ko/cli.js';
+import { sessionCli } from './ko/sessionCli.js';
+import { app } from './ko/app.js';
+import { screens } from './ko/screens.js';
+import { formatters } from './ko/formatters.js';
+import { validators } from './ko/validators.js';
+import { widgets } from './ko/widgets.js';
 
 /** 한국어 메시지 카탈로그. 키 구조는 en.ts 의 `Messages` 를 따른다. */
 export const ko: Messages = {
@@ -23,5 +30,12 @@ export const ko: Messages = {
       '표시 언어 설정을 지웠습니다. 이제 MAT_LANG 또는 시스템 locale 을 따르며, ' +
       '다음 TUI 시작 때 언어를 다시 묻습니다.',
     envOverrides: (value: string) => `참고: MAT_LANG=${value} 이(가) 설정돼 있어 이 설정보다 우선합니다.`
-  }
+  },
+  cli,
+  sessionCli,
+  app,
+  screens,
+  formatters,
+  validators,
+  widgets
 };
