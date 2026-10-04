@@ -7,7 +7,7 @@ import {
   type EnvSecretBinding,
   type EnvSecretMetadata
 } from './env-secret.js';
-import { OsKeyringAccountMissingError } from './errors.js';
+import { OsKeyringAccountMissingError, OsKeyringCommandError } from './errors.js';
 import {
   deleteOsKeyringSerializedStrict,
   osKeyringExistsStrict,
@@ -174,10 +174,26 @@ export function classifyLssError(err: unknown): LssProofReason {
     if (err.code === 'invalid-binding' || err.code === 'unsupported-backend') return 'blocked';
     return 'backend-failed';
   }
+  // mat 자신이 만든 secret-tool 실패는 kind 로 분류한다. 메시지는 번역 대상이라
+  // 문구 매칭으로 분기하면 locale 에 따라 분류가 조용히 바뀐다.
+  if (err instanceof OsKeyringCommandError) {
+    switch (err.kind) {
+      case 'not-installed':
+        return 'unavailable';
+      case 'spawn-failed':
+      case 'daemon-unavailable':
+        return 'denied-or-locked';
+      case 'write-and-rollback-failed':
+        return 'cleanup-failed';
+      case 'write-failed':
+        return 'backend-failed';
+    }
+  }
+  // 그 외(raw spawn/fs 에러 등)는 locale 과 무관한 errno·영문 토큰으로만 판정한다.
   const message = err instanceof Error ? err.message : '';
-  if (/ENOENT|미설치|부재/.test(message)) return 'unavailable';
-  if (/daemon|접근 거부|denied|locked|실행할 수 없습니다|EACCES/i.test(message)) return 'denied-or-locked';
-  if (/백업 복구도 실패|cleanup|delete|삭제/i.test(message)) return 'cleanup-failed';
+  if (/ENOENT/.test(message)) return 'unavailable';
+  if (/daemon|denied|locked|EACCES/i.test(message)) return 'denied-or-locked';
+  if (/cleanup|delete/i.test(message)) return 'cleanup-failed';
   return 'backend-failed';
 }
 

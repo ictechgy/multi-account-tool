@@ -360,6 +360,11 @@ export interface Config {
    * 매번 표시됨 — 본 플래그는 onboarding 패널 1회 표시만 제어한다.
    */
   firstFreshnessPromptShown?: boolean;
+  /**
+   * 표시 언어 (`en` / `ko`). `--lang`·`MAT_LANG` 이 없을 때 적용되며, 없거나 인식 불가
+   * 값이면 시스템 locale 을 따른다. 원본 문자열을 보존하고 해석은 i18n/locale.ts 가 한다.
+   */
+  language?: string;
 }
 
 /**

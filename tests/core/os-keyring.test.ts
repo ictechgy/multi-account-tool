@@ -178,7 +178,9 @@ describe('os-keyring — readSource (search --all)', () => {
 
   it('exit≠0 (daemon-down) → throw (keyring daemon 안내)', async () => {
     mockSpawn.mockReturnValueOnce(fakeProc({ code: 1, stderr: 'Cannot connect to D-Bus' }));
-    await expect(readSource(src)).rejects.toThrow(/keyring daemon/);
+    const read = readSource(src);
+    await expect(read).rejects.toThrow(/keyring daemon/);
+    await expect(read).rejects.toMatchObject({ name: 'OsKeyringCommandError', kind: 'daemon-unavailable' });
   });
 
   it('spawn ENOENT (미설치, code=-1 && spawnErrno=ENOENT) → throw (fail-closed, yaml fallback 금지)', async () => {
@@ -186,7 +188,9 @@ describe('os-keyring — readSource (search --all)', () => {
     // fallback 되어 wrong-account swap 될 수 있다. README 보안 계약과 같이 즉시 실패해야 한다.
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('ENOENT') }));
-    await expect(readSource(src)).rejects.toThrow(/미설치|ENOENT|libsecret-tools/);
+    const read = readSource(src);
+    await expect(read).rejects.toThrow(/미설치|ENOENT|libsecret-tools/);
+    await expect(read).rejects.toMatchObject({ kind: 'not-installed' });
     expect(stderrSpy).not.toHaveBeenCalled();
     stderrSpy.mockRestore();
   });
@@ -197,7 +201,9 @@ describe('os-keyring — readSource (search --all)', () => {
     // 확대되므로 fail-closed throw 한다. null 반환이면 회귀다.
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     mockSpawn.mockReturnValueOnce(fakeProc({ error: spawnError('EACCES') }));
-    await expect(readSource(src)).rejects.toThrow(/실행할 수 없습니다/);
+    const read = readSource(src);
+    await expect(read).rejects.toThrow(/실행할 수 없습니다/);
+    await expect(read).rejects.toMatchObject({ kind: 'spawn-failed' });
     // 구조적 throw 경로이므로 stderr 경고는 출력되지 않아야 한다.
     const warned = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
     expect(warned).not.toMatch(/libsecret-tools/);
@@ -265,7 +271,9 @@ describe('os-keyring — writeSource (backup→clear→store→rollback)', () =>
       .mockReturnValueOnce(fakeProc({ code: 0 })) // clear
       .mockReturnValueOnce(fakeProc({ code: 1, stderr: 'store failed' })) // store 실패
       .mockReturnValueOnce(fakeProc({ code: 0 })); // rollback store
-    await expect(writeSource(src, serialized)).rejects.toThrow(/쓰기 실패/);
+    const write = writeSource(src, serialized);
+    await expect(write).rejects.toThrow(/쓰기 실패/);
+    await expect(write).rejects.toMatchObject({ kind: 'write-failed' });
     // store 2회 (새 값 + rollback)
     expect(findSpawnCallsByArg('store').length).toBe(2);
   });
@@ -276,7 +284,9 @@ describe('os-keyring — writeSource (backup→clear→store→rollback)', () =>
       .mockReturnValueOnce(fakeProc({ code: 0 }))
       .mockReturnValueOnce(fakeProc({ code: 1 })) // store 실패
       .mockReturnValueOnce(fakeProc({ code: 2 })); // rollback 실패
-    await expect(writeSource(src, serialized)).rejects.toThrow(/백업 복구도 실패/);
+    const write = writeSource(src, serialized);
+    await expect(write).rejects.toThrow(/백업 복구도 실패/);
+    await expect(write).rejects.toMatchObject({ kind: 'write-and-rollback-failed' });
   });
 
   it('backup N>1 → OsKeyringAccountMissingError, store 미실행 (data loss 차단)', async () => {

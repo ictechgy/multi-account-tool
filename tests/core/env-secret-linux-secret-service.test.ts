@@ -23,6 +23,7 @@ import {
   deleteResultToCleanupStatus,
   lssProofReport
 } from '../../src/core/env-secret-linux-secret-service.js';
+import { OsKeyringCommandError } from '../../src/core/errors.js';
 
 const mockSpawn = vi.mocked(spawn);
 const VALUE = 'secret-value-alpha';
@@ -250,6 +251,13 @@ describe('Linux Secret Service env-secret backend spike', () => {
     expect(classifyLssError(new EnvSecretError('invalid-binding', 'blocked'))).toBe('blocked');
     expect(classifyLssError(spawnError('ENOENT'))).toBe('unavailable');
     expect(classifyLssError(spawnError('EACCES'))).toBe('denied-or-locked');
+    expect(classifyLssError(new OsKeyringCommandError('not-installed', 'x'))).toBe('unavailable');
+    expect(classifyLssError(new OsKeyringCommandError('spawn-failed', 'x'))).toBe('denied-or-locked');
+    expect(classifyLssError(new OsKeyringCommandError('daemon-unavailable', 'x'))).toBe('denied-or-locked');
+    expect(classifyLssError(new OsKeyringCommandError('write-failed', 'x'))).toBe('backend-failed');
+    expect(classifyLssError(new OsKeyringCommandError('write-and-rollback-failed', 'x'))).toBe('cleanup-failed');
+    // 분류는 메시지 문구(locale)와 무관해야 한다.
+    expect(classifyLssError(new Error('secret-tool 이 미설치입니다'))).toBe('backend-failed');
     expect(deleteResultToCleanupStatus('deleted')).toBe('complete');
     expect(deleteResultToCleanupStatus('missing')).toBe('missing');
   });
