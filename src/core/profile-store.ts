@@ -80,7 +80,8 @@ async function writeMeta(meta: Profile): Promise<void> {
 export async function createProfile(
   cliId: string,
   rawName: string,
-  label?: string
+  label?: string,
+  options?: { startsLoggedOut?: boolean }
 ): Promise<Profile> {
   validateCliId(cliId);
   const name = validateProfileName(rawName);
@@ -90,6 +91,7 @@ export async function createProfile(
   await fs.mkdir(profileDir(cliId, name), { recursive: true, mode: 0o700 });
   const now = new Date().toISOString();
   const meta: Profile = { name, cli: cliId, createdAt: now, updatedAt: now, label };
+  if (options?.startsLoggedOut) meta.startsLoggedOut = true;
   try {
     await writeMeta(meta);
   } catch (err) {

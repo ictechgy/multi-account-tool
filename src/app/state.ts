@@ -35,6 +35,8 @@ export type Screen =
     }
   | { kind: 'profiles'; cliId: string }
   | { kind: 'add'; cliId: string }
+  /** 이름 입력 뒤 시작 방식 선택: 새 계정(로그아웃 상태) / 현재 로그인 복사. */
+  | { kind: 'addMode'; cliId: string; name: string }
   | { kind: 'rename'; cliId: string; oldName: string }
   | {
       kind: 'confirm';

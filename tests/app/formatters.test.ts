@@ -22,6 +22,7 @@ const result = (restore: Partial<SwitchResult['restore']>): SwitchResult => ({
     missing: [],
     carriedOver: [],
     carryOverEvaluated: true,
+    cleared: [],
     ...restore
   }
 });
@@ -77,5 +78,19 @@ describe('carriedOver 읽기는 carryOverEvaluated 게이트 아래에 있어야
     const readIndex = src.indexOf('restore.carriedOver');
     expect(guardIndex).toBeGreaterThan(-1);
     expect(readIndex).toBeGreaterThan(guardIndex);
+  });
+});
+
+describe('formatSwitchResult — 로그아웃 상태로 전환 (startsLoggedOut)', () => {
+  it('지운 source 와 다음 행동(새 계정 로그인)을 안내하고 "건너뜀" 문구로 오도하지 않는다', () => {
+    const text = formatSwitchResult(
+      result({ missing: ['auth.json'], cleared: ['auth.json'] }),
+      'fresh'
+    );
+    expect(text).toMatch(/로그아웃 상태로 전환했습니다 → fresh/);
+    expect(text).toMatch(/새 계정으로 로그인하세요/);
+    expect(text).toMatch(/'fresh' 에 자동 저장/);
+    expect(text).not.toMatch(/건너뜀/);
+    expect(text).not.toMatch(/이전 계정 자격증명/);
   });
 });

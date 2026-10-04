@@ -73,12 +73,20 @@ import {
 import {
   snapshotLiveToProfile,
   switchProfile,
+  switchToNewLoggedOutProfile,
   type SnapshotResult,
   type SwitchResult
 } from './core/switcher.js';
 import type { CliDef, Profile } from './core/types.js';
 import { Busy, Confirm, Header, Message, TextPrompt } from './ui/widgets.js';
-import { FreshnessDialog, HomeScreen, ProfilesScreen, type CliRow, type ProfileItem } from './ui/screens.js';
+import {
+  AddModeScreen,
+  FreshnessDialog,
+  HomeScreen,
+  ProfilesScreen,
+  type CliRow,
+  type ProfileItem
+} from './ui/screens.js';
 
 // --- 화면 타입 ---
 
@@ -220,6 +228,8 @@ function renderScreen(
       return renderProfiles(screen, data, dispatch, refresh);
     case 'add':
       return renderAdd(screen, data, dispatch, refresh);
+    case 'addMode':
+      return renderAddMode(screen, data, dispatch, refresh);
     case 'rename':
       return renderRename(screen, data, dispatch, refresh);
     case 'confirm':
@@ -330,10 +340,29 @@ function renderAdd(
   const existing = new Set((data.profilesByCli[cli.id] ?? []).map((p) => p.name));
   return (
     <TextPrompt
-      label={`${cli.name} — 새 프로필 이름 (현재 라이브 자격증명이 캡처되어 시작 상태가 됩니다)`}
+      label={`${cli.name} — 새 프로필 이름`}
       placeholder="personal / work / ..."
       validate={(v) => validateNewName(v, existing)}
-      onSubmit={(name) => onAddSubmit(cli, name, data, dispatch, refresh)}
+      onSubmit={(name) => dispatch({ type: 'replace', screen: { kind: 'addMode', cliId: cli.id, name } })}
+      onCancel={() => dispatch({ type: 'pop' })}
+    />
+  );
+}
+
+function renderAddMode(
+  screen: Extract<Screen, { kind: 'addMode' }>,
+  data: AppData,
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): React.ReactElement {
+  const cli = findCliDef(screen.cliId);
+  if (!cli) return <Busy message="알 수 없는 CLI..." />;
+  return (
+    <AddModeScreen
+      cliName={cli.name}
+      name={screen.name}
+      onFresh={() => void onAddFreshSubmit(cli, screen.name, data, dispatch, refresh)}
+      onCopy={() => void onAddSubmit(cli, screen.name, data, dispatch, refresh)}
       onCancel={() => dispatch({ type: 'pop' })}
     />
   );
@@ -910,6 +939,96 @@ async function onAddSubmit(
       onDiscard: () => void doCreateProfile(cli, name, currentActive, dispatch, refresh),
       onCancel: () => dispatch({ type: 'pop' })
     })
+  });
+}
+
+/**
+ * "새 계정으로 시작": 로그아웃 상태 프로필을 만들고 바로 전환한다.
+ *
+ * 활성 프로필이 있으면 일반 전환과 같은 freshness 분기(재캡처/폐기/취소)를 거친다 —
+ * 라이브를 활성 프로필에 저장한 뒤 지우므로 rotation 감지 시 사용자 결정이 필요하다.
+ * 프로필은 사용자가 진행을 결정한 뒤에야 만든다 (취소하면 아무것도 남지 않는다).
+ */
+async function onAddFreshSubmit(
+  cli: CliDef,
+  name: string,
+  data: AppData,
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): Promise<void> {
+  const currentActive = data.activeByCli[cli.id];
+  if (currentActive == null) {
+    await doCreateFreshAndSwitch(cli, name, undefined, 'auto', dispatch, refresh);
+    return;
+  }
+  await inspectAndRouteFreshness({
+    cli,
+    currentActive,
+    data,
+    dispatch,
+    initialBusyAction: 'replace',
+    onFresh: () => void doCreateFreshAndSwitch(cli, name, currentActive, 'auto', dispatch, refresh),
+    buildDialog: async (report) => ({
+      kind: 'freshness',
+      mode: 'switch',
+      cliId: cli.id,
+      fromProfile: currentActive,
+      toProfile: name,
+      report,
+      ambientWarningBlock: await ambientWarningBlock(cli.id),
+      showOnboarding: !data.firstFreshnessPromptShown,
+      onRecapture: () => void doCreateFreshAndSwitch(cli, name, currentActive, 'recapture', dispatch, refresh),
+      onDiscard: () => void doCreateFreshAndSwitch(cli, name, currentActive, 'discard', dispatch, refresh),
+      onCancel: () => dispatch({ type: 'pop' })
+    })
+  });
+}
+
+/**
+ * liveHandling:
+ *  - `auto`: 일반 전환 — 활성 프로필로 자동 snapshot 후 라이브 삭제
+ *  - `recapture`: freshness dialog 의 재캡처 — 명시 snapshot 후 전환 (자동 snapshot 생략)
+ *  - `discard`: freshness dialog 의 폐기 — snapshot 없이 라이브 삭제
+ */
+async function doCreateFreshAndSwitch(
+  cli: CliDef,
+  name: string,
+  expectedActive: string | undefined,
+  liveHandling: 'auto' | 'recapture' | 'discard',
+  dispatch: React.Dispatch<Action>,
+  refresh: () => Promise<void>
+): Promise<void> {
+  await runBusyAction({
+    dispatch,
+    refresh,
+    busyMessage: '새 계정 프로필로 전환 중...',
+    work: () =>
+      withCliMutationLock(
+        {
+          cliId: cli.id,
+          profileName: name,
+          execMode: 'foreground',
+          previousActive: expectedActive,
+          affectsCliIds: [cli.id]
+        },
+        async () => {
+          await assertActiveProfileUnchanged(cli.id, expectedActive);
+          if (liveHandling === 'recapture' && expectedActive != null) {
+            await snapshotLiveToProfile(cli.id, expectedActive);
+          }
+          return switchToNewLoggedOutProfile(cli.id, name, {
+            skipPreSwapSnapshot: liveHandling !== 'auto'
+          });
+        }
+      ),
+    buildSuccess: (result) => ({
+      title: '새 계정 프로필로 전환 완료',
+      tone: liveHandling === 'discard' ? ('warning' as MessageTone) : undefined,
+      body:
+        (liveHandling === 'discard' ? `라이브 자격증명을 백업 없이 폐기했습니다.\n\n` : '') +
+        formatSwitchResult(result, name)
+    }),
+    errorTitle: '새 계정 프로필 전환 실패'
   });
 }
 

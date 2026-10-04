@@ -294,6 +294,12 @@ export interface Profile {
   label?: string;
   /** 선택. capture/recapture 시점에 저장한 non-secret identity 힌트. */
   identity?: ProfileIdentitySummary;
+  /**
+   * "새 계정으로 시작" 으로 만든 프로필. 저장된 자격증명이 하나도 없는 동안 이 프로필로
+   * 전환하면 라이브 자격증명을 **지워** CLI 를 로그아웃 상태로 만든다 (직전 계정이 이월되지
+   * 않도록). 캡처로 자격증명이 하나라도 저장되면 제거된다.
+   */
+  startsLoggedOut?: boolean;
 }
 
 export type ProfileIdentityStatus = 'available' | 'unavailable' | 'unsupported';
