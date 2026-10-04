@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Keychain 쓰기가 실패한 전환이 원인을 전혀 알 수 없는 문구만 남기던 문제.** 실측 보고: macOS 에서
+  Claude 프로필 전환이 `restore failed; rollback also failed: operation failed` 로만 끝났다.
+  두 가지가 겹쳐 있었다 —
+  - 롤백 실패 집계(`errorText`)가 허용 목록 밖의 에러를 전부 `operation failed` 로 접는데,
+    `/usr/bin/security` 실패는 그 목록에 없었다. 이제 security 실패는 typed
+    `KeychainCommandError`(`stage`, `exitCode`)이고, `KeychainAccountMissingError` 와 함께
+    원문(`keychain 백업 항목 삭제 실패 (code=…): …`)으로 보고된다. 두 에러 모두 mat 이 조립하고
+    stderr 를 redact 한 뒤에만 만들어지므로 경로·토큰 비노출 원칙은 그대로다. typed 가 아닌
+    에러는 이전처럼 `operation failed` 로 접힌다.
+  - 롤백까지 실패하면 **처음 실패한 원인**을 버리고 있었다. 이제 `; original error: …` 접미어로
+    함께 보고한다(`restore failed; rollback also failed` 접두는 유지).
+  - 배경: Claude Code 2.1.211+ 가 자격증명을 다시 쓸 때 Keychain 항목의 partition list 에서
+    `apple-tool:` 을 빼는 것으로 보고돼 있어([anthropics/claude-code#81707](https://github.com/anthropics/claude-code/issues/81707)),
+    `/usr/bin/security` 로 항목을 다루는 mat 의 삭제·쓰기가 간헐적으로 거부될 수 있다. 이번 수정은
+    그 원인을 **확인할 수 있게** 하는 것이고, 거부 자체에 대한 대응(사전 권한 확인, `mat doctor`
+    검사)은 실측 확인 후 별도로 다룬다.
+
 ## [0.8.3] - 2026-07-27
 
 ### Security
