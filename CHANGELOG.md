@@ -22,6 +22,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     거부한다 (`UnsavedLiveCredentialsError`). `mat exec`/일반 전환 경로도 같은 가드를 거친다.
   - 설정과 자격증명이 한 파일에 있는 CLI(aider, kimi, qwen, crush, goose `config.yaml`)는 새
     계정 프로필에서 설정도 비어 있는 상태로 시작한다. 기존 프로필의 설정은 그 프로필에 저장돼 있다.
+- **표시 언어 선택 기반 (i18n 1단계, #159).** `--lang <en|ko>` 전역 옵션, `MAT_LANG` 환경변수,
+  `config.json` 의 `"language"` 순으로 언어를 정하고, 셋 다 없으면 시스템 locale
+  (`LC_ALL` → `LC_MESSAGES` → `LANG`), 그것도 아니면 영어를 쓴다. 메시지는
+  `src/i18n/messages/{en,ko}.ts` 카탈로그에 두며 `ko` 는 `en` 의 타입을 따르므로 번역 누락은
+  typecheck 에서 잡힌다. 이번 단계에서 옮긴 문자열은 `--lang` 오류뿐이고, CLI 도움말·TUI 는
+  2단계에서 옮긴다.
+- **첫 실행 언어 선택.** 언어를 고른 적이 없으면(`--lang`·`MAT_LANG`·config 모두 없음) TUI 가
+  시작 전에 English / 한국어 중 하나를 묻고 `config.json` 에 저장한다. `brew install`·`npm install -g`
+  는 설치 중 입력을 받을 수 없어서 첫 실행에서 묻는다. 시스템 locale 에 맞는 항목이 기본 선택이며,
+  Ctrl+C 로 나가면 저장하지 않는다. 기존 사용자도 업그레이드 후 첫 TUI 실행에서 한 번 묻는다 —
+  셸이 `LANG=en_US.UTF-8` 인 한국어 사용자가 조용히 영어로 바뀌지 않도록.
+- **`mat config language [en|ko|--unset]`.** 현재 언어와 출처 확인, 저장, 삭제.
+
+### Changed
+
+- **os-keyring 실패 분류를 메시지 문구 매칭에서 에러 종류(`OsKeyringCommandError.kind`) 로
+  바꿨다.** `classifyLssError` 가 `/미설치|접근 거부|백업 복구도 실패/` 같은 한국어 정규식으로
+  원인을 판정하고 있어서, 메시지를 번역하면 분류가 조용히 틀어질 수 있었다. 분류 결과는
+  기존과 동일하다.
+
+### Fixed
+
+- **Keychain 쓰기가 실패한 전환이 원인을 전혀 알 수 없는 문구만 남기던 문제.** 실측 보고: macOS 에서
+  Claude 프로필 전환이 `restore failed; rollback also failed: operation failed` 로만 끝났다.
+  두 가지가 겹쳐 있었다 —
+  - 롤백 실패 집계(`errorText`)가 허용 목록 밖의 에러를 전부 `operation failed` 로 접는데,
+    `/usr/bin/security` 실패는 그 목록에 없었다. 이제 security 실패는 typed
+    `KeychainCommandError`(`stage`, `exitCode`)이고, `KeychainAccountMissingError` 와 함께
+    원문(`keychain 백업 항목 삭제 실패 (code=…): …`)으로 보고된다. 두 에러 모두 mat 이 조립하고
+    stderr 를 redact 한 뒤에만 만들어지므로 경로·토큰 비노출 원칙은 그대로다. typed 가 아닌
+    에러는 이전처럼 `operation failed` 로 접힌다.
+  - 롤백까지 실패하면 **처음 실패한 원인**을 버리고 있었다. 이제 `; original error: …` 접미어로
+    함께 보고한다(`restore failed; rollback also failed` 접두는 유지).
+  - 배경: Claude Code 2.1.211+ 가 자격증명을 다시 쓸 때 Keychain 항목의 partition list 에서
+    `apple-tool:` 을 빼는 것으로 보고돼 있어([anthropics/claude-code#81707](https://github.com/anthropics/claude-code/issues/81707)),
+    `/usr/bin/security` 로 항목을 다루는 mat 의 삭제·쓰기가 간헐적으로 거부될 수 있다. 이번 수정은
+    그 원인을 **확인할 수 있게** 하는 것이고, 거부 자체에 대한 대응(사전 권한 확인, `mat doctor`
+    검사)은 실측 확인 후 별도로 다룬다.
 
 ## [0.8.3] - 2026-07-27
 

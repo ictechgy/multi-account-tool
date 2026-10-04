@@ -18,7 +18,7 @@ import { expandTilde } from './paths.js';
 import { resolveParentKeepLeaf, resolvedHome } from './path-identity.js';
 import { assertSourceMayBeAccessed } from './live-resource-guard.js';
 import { isAdmittedGooseProviderCacheFile } from './goose-provider-cache.js';
-import { KeychainAccountMissingError, formatServiceForDisplay, redactMessage } from './errors.js';
+import { KeychainAccountMissingError, KeychainCommandError, formatServiceForDisplay, redactMessage } from './errors.js';
 import { unsupportedEnvSecretSource } from './env-secret-source.js';
 import { writeFileAtomic } from './io-atomic.js';
 import { directorySourceExists, readDirectorySource, removeDirectorySource, writeDirectorySource } from './directory-source.js';
@@ -96,8 +96,8 @@ function assertNever(x: never): never {
   throw new Error('처리되지 않은 source type: ' + String(type));
 }
 
-function keychainErr(stage: string, r: CmdResult): Error {
-  return new Error(`keychain ${stage} 실패 (code=${r.code}): ${redactMessage(r.stderr || r.stdout)}`);
+function keychainErr(stage: string, r: CmdResult): KeychainCommandError {
+  return new KeychainCommandError(stage, r.code, r.stderr || r.stdout);
 }
 
 /**
@@ -273,9 +273,7 @@ async function addKeychainEntryOrRollback(
       rollbackNote = ` / 백업 복구도 실패 (code=${rb.code}): ${redactMessage(rb.stderr)}`;
     }
   }
-  throw new Error(
-    `keychain 쓰기 실패 (code=${addRes.code}): ${redactMessage(addRes.stderr || addRes.stdout)}${rollbackNote}`
-  );
+  throw new KeychainCommandError('쓰기', addRes.code, addRes.stderr || addRes.stdout, rollbackNote);
 }
 
 /** Keychain 항목 존재 여부. account 지정 시 해당 acct 항목만 검사. */

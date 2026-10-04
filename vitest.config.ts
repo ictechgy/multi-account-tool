@@ -10,11 +10,13 @@ import { defineConfig } from 'vitest/config';
 //   실측 최악 약 1.5s. CI 의 부하 변동(특히 ubuntu-latest runner 의 디스크 I/O 변동) 을
 //   고려한 보수치. 200ms 단일 wait 의 50배 마진이라 일견 과하지만, race+timer+fs 결합
 //   시나리오 누적 + GHA runner 의 cold-start 캐싱 미스를 감안한 의도된 안전 마진.
+// - setupFiles locale: MAT_LANG=ko 고정 (tests/setup/locale.ts 참고).
 // - coverage v8: src/core 만 측정 (cli.tsx 의 ink UI 렌더 경로는 별도 e2e/smoke 영역).
 export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    setupFiles: ['tests/setup/locale.ts'],
     testTimeout: 10_000,
     pool: 'forks',
     // vitest 4: pool 옵션은 top-level 로 이동. singleFork=false 가 default 이므로 명시 생략.

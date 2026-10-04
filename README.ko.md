@@ -136,6 +136,22 @@ node scripts/smoke-test.mjs    # 소스 체크아웃 전용 — read-only smoke 
 
 smoke test는 read-only라 활성 `mat` 프로필이 있는 환경에서도 안전하다.
 
+### 표시 언어
+
+TUI(`mat`)를 처음 실행하면 영어와 한국어 중 사용할 언어를 묻고, 고른 값을 `~/.multi-account-tool/config.json`에 저장한다. `brew install`·`npm install -g`는 설치 중에 입력을 받을 수 없어서 첫 실행 때 묻는다. 시스템 locale에 맞는 언어가 미리 선택돼 있다.
+
+```bash
+mat config language            # 현재 언어와 출처 확인
+mat config language ko         # 언어 저장 (en | ko)
+mat config language --unset    # 설정 삭제 — 다음 TUI 실행 때 다시 묻는다
+MAT_LANG=en mat status         # 셸 단위로 덮어쓰기
+mat --lang en status           # 명령 단위로 덮어쓰기
+```
+
+우선순위: `--lang` → `MAT_LANG` → `config.json` → 시스템 locale(`LC_ALL` → `LC_MESSAGES` → `LANG`) → 영어.
+
+> CLI 도움말과 TUI의 영어 번역은 진행 중이다([#159](https://github.com/ictechgy/multi-account-tool/issues/159)). 번역이 들어가기 전까지는 대부분의 출력이 한국어로 나온다.
+
 ---
 
 ## 사용

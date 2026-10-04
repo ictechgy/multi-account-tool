@@ -116,6 +116,28 @@ export class KeychainAccountMissingError extends Error {
 }
 
 /**
+ * `/usr/bin/security` 명령 자체가 실패한 경우 (읽기 / 백업 항목 삭제 / 쓰기).
+ *
+ * message 는 mat 이 조립하고 stderr 는 redactMessage 를 통과한 뒤에만 들어간다 —
+ * 그래서 switcher 의 롤백 집계(`errorText`)가 `operation failed` 로 뭉개지 않고 원문을
+ * 그대로 보여줄 수 있다. 뭉개면 partition list / ACL 거부처럼 macOS 쪽 원인을 가리키는
+ * 유일한 단서(종료 코드와 `security` 의 stderr)가 사라진다.
+ *
+ * Typed caller 는 `stage` 와 `exitCode` 로 분기할 수 있다.
+ */
+export class KeychainCommandError extends Error {
+  readonly stage: string;
+  readonly exitCode: number;
+  /** `suffix` 는 이미 redact 된 부가 문구(예: 롤백 실패 note)로, 그대로 뒤에 붙는다. */
+  constructor(stage: string, exitCode: number, detail: string, suffix = '') {
+    super(`keychain ${stage} 실패 (code=${exitCode}): ${redactMessage(detail)}${suffix}`);
+    this.name = 'KeychainCommandError';
+    this.stage = stage;
+    this.exitCode = exitCode;
+  }
+}
+
+/**
  * os-keyring (Linux Secret Service) 에서 `secret-tool search --all` 결과가 N>1
  * (collision) 이라 안전 swap 을 거부한 경우.
  *
@@ -152,6 +174,35 @@ export class OsKeyringAccountMissingError extends Error {
     ));
     this.name = 'OsKeyringAccountMissingError';
     this.service = service;
+  }
+}
+
+/**
+ * os-keyring(secret-tool) 명령 실패의 원인 분류.
+ *
+ * - `not-installed`: spawn ENOENT (secret-tool 미설치)
+ * - `spawn-failed`: ENOENT 아닌 spawn 실패 (EACCES·ENOTDIR 등)
+ * - `daemon-unavailable`: code≠0 종료 (keyring daemon 미응답 / 접근 거부)
+ * - `write-failed`: store 실패 (backup 복구 불필요 또는 성공)
+ * - `write-and-rollback-failed`: store 실패 + backup 복구도 실패
+ */
+export type OsKeyringFailureKind =
+  | 'not-installed'
+  | 'spawn-failed'
+  | 'daemon-unavailable'
+  | 'write-failed'
+  | 'write-and-rollback-failed';
+
+/**
+ * secret-tool 명령 실패. 호출자는 message 가 아니라 `kind` 로 분기한다 —
+ * 메시지는 사용자 표시용이라 번역(i18n)되면 문구 매칭 분기가 조용히 깨진다.
+ */
+export class OsKeyringCommandError extends Error {
+  readonly kind: OsKeyringFailureKind;
+  constructor(kind: OsKeyringFailureKind, message: string) {
+    super(message);
+    this.name = 'OsKeyringCommandError';
+    this.kind = kind;
   }
 }
 
