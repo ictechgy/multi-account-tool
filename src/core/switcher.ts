@@ -16,7 +16,7 @@ import { findCliDef } from './cli-defs.js';
 import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile, setActiveProfile } from './config.js';
 import { assertNoEnvSecretSources } from './env-secret-source.js';
-import { UnknownCliError } from './errors.js';
+import { KeychainAccountMissingError, KeychainCommandError, UnknownCliError } from './errors.js';
 import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
 import { buildProfileIdentity, type IdentitySourceInput } from './profile-identity.js';
 import {
@@ -286,7 +286,9 @@ async function applyRestorePlan(plan: RestorePlan[], restored: string[]): Promis
         rollbackErrors.push(errorText(rollbackErr));
       }
     }
-    if (rollbackErrors.length) throw new Error(`restore failed; rollback also failed: ${rollbackErrors.join('; ')}`);
+    // 원본 에러를 버리지 않는다 — 롤백 실패만 보고하면 "무엇이 먼저 실패했는가" 가 사라져
+    // 진단이 불가능하다. 접미어로만 붙여 `restore failed; rollback also failed` 접두 매칭은 유지.
+    if (rollbackErrors.length) throw new Error(`restore failed; rollback also failed: ${rollbackErrors.join('; ')}; original error: ${errorText(err)}`);
     throw err;
   }
 }
@@ -301,6 +303,11 @@ function errorText(err: unknown): string {
   // `unsafe credential resource:` 는 Gate 2 sentinel 이다. 롤백 중 이게 뜨면 그 source 가
   // 로드 이후 builtin 자격증명의 별칭이 됐다는 뜻이므로, 롤백 실패로 **크게** 보고하는 것이
   // 맞다 — 조용히 성공 처리하면 쓰지 못한 롤백을 썼다고 보고하게 된다.
+  // Keychain 에러는 mat 이 조립하고 stderr 를 redact 한 뒤에만 만들어지는 typed 에러라 원문을
+  // 통과시킨다. 뭉개면 partition list / ACL 거부 같은 macOS 쪽 원인(종료 코드 + `security`
+  // stderr)을 가리키는 유일한 단서가 사라져 `restore failed; rollback also failed: operation
+  // failed` 처럼 진단 불가능한 문구만 남는다.
+  if (err instanceof KeychainCommandError || err instanceof KeychainAccountMissingError) return err.message;
   if (err instanceof Error && /^(?:unsafe directory source:|unsafe credential resource:|unsafe source path|unsafe Goose provider cache |Goose provider cache |profile capture )/.test(err.message)) return err.message;
   const code = errorCode(err);
   return `operation failed${code ? ` (${code})` : ''}`;

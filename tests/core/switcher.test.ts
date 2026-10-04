@@ -83,6 +83,7 @@ vi.mock('../../src/core/cli-defs.js', async (importOriginal) => {
 });
 
 import { getActiveProfile, setActiveProfile } from '../../src/core/config.js';
+import { KeychainCommandError } from '../../src/core/errors.js';
 import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import {
   __setProfileStoreFsOpsForTests,
@@ -358,6 +359,35 @@ describe('switcher', () => {
       expect(oauthCalls).toHaveLength(1);
       expect(oauthCalls[0][1]).toBe('new-oauth');
       expect(mockRemoveSource).toHaveBeenCalledWith(expect.objectContaining({ saveAs: 'oauth_creds.json' }));
+    });
+
+    it('쓰기와 롤백이 모두 keychain 에서 실패하면 두 원인을 원문으로 보고한다 (operation failed 로 뭉개지 않음)', async () => {
+      // 실측 보고: Claude 전환이 `restore failed; rollback also failed: operation failed` 만 남겨
+      // 원인(partition list / ACL 거부 등 security 의 종료 코드) 을 알 수 없었다.
+      await setupProfile('codex', 'kc');
+      await writeProfileFile('codex', 'kc', 'auth.json', 'new-auth');
+      mockReadSource.mockResolvedValue('old-auth-live');
+      mockWriteSource
+        .mockRejectedValueOnce(new KeychainCommandError('백업 항목 삭제', 51, 'SecKeychainItemDelete: denied'))
+        .mockRejectedValueOnce(new KeychainCommandError('백업 항목 삭제', 51, 'SecKeychainItemDelete: denied again'));
+
+      await expect(restoreProfileToLive('codex', 'kc')).rejects.toThrow(
+        'restore failed; rollback also failed: keychain 백업 항목 삭제 실패 (code=51): SecKeychainItemDelete: denied again; ' +
+        'original error: keychain 백업 항목 삭제 실패 (code=51): SecKeychainItemDelete: denied'
+      );
+    });
+
+    it('롤백 실패 보고에서 typed 가 아닌 에러는 여전히 operation failed 로 접힌다 (경로 등 원문 비노출)', async () => {
+      await setupProfile('codex', 'generic');
+      await writeProfileFile('codex', 'generic', 'auth.json', 'new-auth');
+      mockReadSource.mockResolvedValue('old-auth-live');
+      mockWriteSource
+        .mockRejectedValueOnce(Object.assign(new Error('EACCES: /Users/someone/.codex/auth.json'), { code: 'EACCES' }))
+        .mockRejectedValueOnce(new Error('keychain-looking but untyped /Users/someone/secret'));
+
+      const err = await restoreProfileToLive('codex', 'generic').catch((e: unknown) => e as Error);
+      expect(err.message).toBe('restore failed; rollback also failed: operation failed; original error: operation failed (EACCES)');
+      expect(err.message).not.toContain('/Users/');
     });
 
     it('rollback reverse-order (3-source tri-cli): 3rd source throw → b → a 역순으로 liveBackup 복원', async () => {
