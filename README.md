@@ -1,6 +1,6 @@
 # multi-account-tool (`mat`)
 
-[한국어](README.ko.md) | English
+[한국어](https://github.com/ictechgy/multi-account-tool/blob/main/README.ko.md) | English
 
 📖 **Documentation:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
@@ -69,7 +69,7 @@ Use `mat freshness [<cli>] [--profile <name>] [--json]` to inspect the live cred
 | Claude Code | ✅ | ✅ | ❌ | macOS Keychain on macOS; `~/.claude/.credentials.json` on Linux. `mat session` supports Linux via `CLAUDE_CONFIG_DIR`; macOS Keychain cannot be session-isolated |
 | Codex CLI | ✅ | ✅ | ⚠️ untested | `~/.codex/auth.json` (cross-platform file path) |
 | Gemini CLI | ✅ | ✅ | ⚠️ untested | `~/.gemini/oauth_creds.json` + `google_accounts.json`; `mat session` uses `GEMINI_CLI_HOME` with `.gemini` envSubdir. Google moved personal/free-tier CLI access toward Antigravity on 2026-06-18; enterprise/Cloud/API-key paths remain separate, and this availability change does not alter `mat`'s credential boundary. |
-| Google Antigravity (`agy`) | ❌ blocked | ❌ blocked | ❌ blocked | Rechecked at 1.1.2. It is not a Gemini CLI credential source. Public docs describe system-keyring auth with Google Sign-In fallback, but no stable keyring service/account, token profile, credential redirect, or recapture contract. Settings/cache under `~/.gemini/antigravity-cli/` and any observed `antigravity-oauth-token` file are not enough for safe support. See the [auth-store research note](./docs/superpowers/specs/2026-06-14-antigravity-auth-store-research.md). |
+| Google Antigravity (`agy`) | ❌ blocked | ❌ blocked | ❌ blocked | Rechecked at 1.1.2. It is not a Gemini CLI credential source. Public docs describe system-keyring auth with Google Sign-In fallback, but no stable keyring service/account, token profile, credential redirect, or recapture contract. Settings/cache under `~/.gemini/antigravity-cli/` and any observed `antigravity-oauth-token` file are not enough for safe support. See the [auth-store research note](https://github.com/ictechgy/multi-account-tool/blob/main/docs/superpowers/specs/2026-06-14-antigravity-auth-store-research.md). |
 | Aider | ✅ | ✅ | ⚠️ untested | `mat session start` remains unsupported (no credential-dir env). `mat session run aider` is partial support: mat forces `--config <session>/command/aider.yml` + `--env-file <session>/command/.env` and hard-stops known argv/env/dotenv/OAuth-key/model-sidecar/provider-chain bypasses |
 | Kimi CLI | ✅ | ✅ | ⚠️ untested | **env override**: `MOONSHOT_API_KEY` and friends bypass `~/.kimi/config.toml` |
 | Qwen Code CLI | ✅ | ✅ | ⚠️ untested | Rechecked at v0.19.10. Profile swap and `mat session start qwen` redirect `QWEN_HOME`, but are advisory only: Qwen can still use shell/project/ancestor/home configuration and custom `modelProviders[].envKey` sources. `mat session run qwen` remains intentionally unsupported until the complete auth/source contract can be fail-closed. |
@@ -572,17 +572,17 @@ Use this for community-shared CLIs that should ship with mat. PRs welcome.
 
 ## Changelog
 
-See [CHANGELOG.md](./CHANGELOG.md) for release history and notable changes (Keep a Changelog format, Semantic Versioning).
+See [CHANGELOG.md](https://github.com/ictechgy/multi-account-tool/blob/main/CHANGELOG.md) for release history and notable changes (Keep a Changelog format, Semantic Versioning).
 
 ## Roadmap
 
-See [ROADMAP.md](./ROADMAP.md) for v0.4+ plans:
+See [ROADMAP.md](https://github.com/ictechgy/multi-account-tool/blob/main/ROADMAP.md) for v0.4+ plans:
 
 - ~~Plugin mechanism for community-contributed CLI definitions~~ ✅ (v0.3)
 - ~~Aider built-in support~~ ✅ (v0.3) + ~~Kimi / Qwen / Crush / OpenCode~~ ✅ (v0.3.x)
 - ~~Session-scoped credential isolation~~ ✅ (v0.4.x — `mat session start/list/stop`: env-injection + copy-isolate, concurrent multi-account; `lterm` profile shim integration is complete in `@ictechgy/lterm` v1.0.25+)
-- ~~`mat session run <cli> <profile> -- [cli-args...]` framework~~ ✅ — command-scoped safer-run foundation. ~~OpenCode hard-stop probes~~ ✅; ~~Aider forced config/env-file partial-run~~ ✅. ~~Antigravity auth-store research artifact~~ ✅, but product support remains blocked until upstream documents a stable auth-store, redirect, and recapture contract. See the [Antigravity research note](./docs/superpowers/specs/2026-06-14-antigravity-auth-store-research.md) and the [session-run R&D note](./docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md).
-- More built-in CLIs — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service added via the `os-keyring` source type). Copilot / Amp remain deferred — see the [Copilot/Amp research note](./docs/superpowers/specs/2026-06-14-copilot-amp-auth-research.md). Copilot needs explicit account binding, application-state swap, ambient token fallback policy, and Windows Credential Manager support. Amp needs env-secret / command-scoped execution design rather than normal file/keychain profile swap. Cursor Agent: plugin recommended (keychain service name not publicly documented).
+- ~~`mat session run <cli> <profile> -- [cli-args...]` framework~~ ✅ — command-scoped safer-run foundation. ~~OpenCode hard-stop probes~~ ✅; ~~Aider forced config/env-file partial-run~~ ✅. ~~Antigravity auth-store research artifact~~ ✅, but product support remains blocked until upstream documents a stable auth-store, redirect, and recapture contract. See the [Antigravity research note](https://github.com/ictechgy/multi-account-tool/blob/main/docs/superpowers/specs/2026-06-14-antigravity-auth-store-research.md) and the [session-run R&D note](https://github.com/ictechgy/multi-account-tool/blob/main/docs/superpowers/specs/2026-06-12-command-scoped-session-run-rd.md).
+- More built-in CLIs — ~~Goose~~ ✅ (v0.4.0 account-scoped Keychain; Linux Secret Service added via the `os-keyring` source type). Copilot / Amp remain deferred — see the [Copilot/Amp research note](https://github.com/ictechgy/multi-account-tool/blob/main/docs/superpowers/specs/2026-06-14-copilot-amp-auth-research.md). Copilot needs explicit account binding, application-state swap, ambient token fallback policy, and Windows Credential Manager support. Amp needs env-secret / command-scoped execution design rather than normal file/keychain profile swap. Cursor Agent: plugin recommended (keychain service name not publicly documented).
 - **Goose Linux**: on Linux, mat swaps Goose's default `secret-service` backend (libsecret, GNOME Keyring/KWallet) through the `os-keyring` source (`secret-tool` CLI, `goose`/`secrets`), the `~/.config/goose/*.yaml` files, and the fixed reviewed v1.43 provider-cache files/directories described above. Behavior by keyring configuration:
   - **Default (keyring)**: the os-keyring source is included and requires `secret-tool` (libsecret-tools) + a running keyring daemon. A missing tool or a down/denied daemon produces an **explicit error** — mat does *not* silently fall back to YAML, because Goose accesses the keyring through the libsecret *library* (a separate package from the `secret-tool` CLI), so a missing CLI does not prove the keyring is unused. Silently swapping `secrets.yaml` for an active keyring user would be a wrong-account write. An absent keyring entry (vs. a missing tool) is a normal "not found" and skips to the YAML files.
   - **File backend**: set `GOOSE_DISABLE_KEYRING=1` when Goose is intentionally configured not to use the keyring. mat treats the env var as present-means-disabled (**any value**, including `0`/`false`/empty) — matching Goose's own `env::var(...).is_ok()` check — and then **omits** the keyring source (os-keyring on Linux, Keychain on macOS), while continuing to swap `secrets.yaml`, `config.yaml`, and the fixed provider-cache sources. A `config.yaml`-only `keyring: false` setting is not auto-detected, so set the env var too.
@@ -592,4 +592,4 @@ See [ROADMAP.md](./ROADMAP.md) for v0.4+ plans:
 
 ## License
 
-MIT — [LICENSE](./LICENSE)
+MIT — [LICENSE](https://github.com/ictechgy/multi-account-tool/blob/main/LICENSE)

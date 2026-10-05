@@ -2,6 +2,8 @@
 
 [English](README.md) | 한국어
 
+> 이 문서는 [영문 README](README.md)의 번역본이다. 두 문서의 내용이 다르면 영문이 기준이다.
+
 📖 **문서 사이트:** [ictechgy.github.io/multi-account-tool](https://ictechgy.github.io/multi-account-tool/)
 
 하나의 TUI에서 여러 AI CLI 계정(Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build)을 전환한다. 계정마다 프로필을 하나씩 저장해 두고, 매번 `logout` → `login`을 반복하는 대신 키 한 번으로 바꾼다.
