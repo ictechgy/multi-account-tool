@@ -107,14 +107,16 @@ jobs:
           TARBALL_URL="https://registry.npmjs.org/multi-account-tool/-/multi-account-tool-${VERSION}.tgz"
 
           # npm publish 직후 registry 가 tarball 을 노출하는 데 propagation 시간이 필요.
-          # 최대 60초 (10초 × 6회 retry) — 그 이상 걸리면 npm 측 이슈로 간주하고 실패.
+          # 최대 10분 (10초 × 60회 retry) — 그 이상 걸리면 npm 측 이슈로 간주하고 실패.
+          # v0.9.0 에선 publish job 종료 후 약 3분 뒤에야 200 이 나와 옛 한도(60초)로 실패했다.
+          MAX_TRIES=60
           HTTP=""
-          for i in 1 2 3 4 5 6; do
+          for i in $(seq 1 "$MAX_TRIES"); do
             HTTP=$(curl -sL -o /tmp/mat.tgz -w '%{http_code}' "$TARBALL_URL")
             if [ "$HTTP" = "200" ]; then
               break
             fi
-            echo "tarball not yet available (HTTP $HTTP), retry $i/6 in 10s..."
+            echo "tarball not yet available (HTTP $HTTP), retry $i/$MAX_TRIES in 10s..."
             sleep 10
           done
 
