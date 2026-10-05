@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-05
+
 ### Added
 
 - **CLI 도움말·사용법 오류·TUI 영어 지원 (i18n 2단계, #159).** `cli.tsx`(전체 도움말, 서브커맨드
