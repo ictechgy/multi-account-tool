@@ -150,7 +150,7 @@ mat --lang en status           # 명령 단위로 덮어쓰기
 
 우선순위: `--lang` → `MAT_LANG` → `config.json` → 시스템 locale(`LC_ALL` → `LC_MESSAGES` → `LANG`) → 영어.
 
-> CLI 도움말과 TUI의 영어 번역은 진행 중이다([#159](https://github.com/ictechgy/multi-account-tool/issues/159)). 번역이 들어가기 전까지는 대부분의 출력이 한국어로 나온다.
+> CLI 도움말, 사용법 오류, TUI는 영어와 한국어를 모두 지원한다. 전환·세션 중 나오는 상세 오류 메시지 등 내부 모듈의 일부 메시지는 아직 한국어로만 나오며, 번역은 [#159](https://github.com/ictechgy/multi-account-tool/issues/159)에서 진행한다.
 
 ---
 

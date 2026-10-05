@@ -9,16 +9,17 @@
  */
 
 import { validateProfileName } from '../core/profile-store.js';
+import { msg } from '../i18n/index.js';
 
 /** 새 프로필 추가 시 입력 검증. existing 은 같은 CLI 의 현재 프로필 set. */
 export function validateNewName(v: string, existing: Set<string>): string | null {
-  if (!v) return '이름을 입력하세요.';
+  if (!v) return msg().validators.nameRequired;
   try {
     const normalized = validateProfileName(v);
-    if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
+    if (existing.has(normalized)) return msg().validators.profileExists;
     return null;
   } catch (err) {
-    return err instanceof Error ? err.message : '잘못된 이름입니다.';
+    return err instanceof Error ? err.message : msg().validators.invalidName;
   }
 }
 
@@ -27,13 +28,13 @@ export function validateNewName(v: string, existing: Set<string>): string | null
  * (자기 자신 포함). oldName 은 변경 전 이름.
  */
 export function validateRenameTo(v: string, oldName: string, existing: Set<string>): string | null {
-  if (!v) return '이름을 입력하세요.';
+  if (!v) return msg().validators.nameRequired;
   try {
     const normalized = validateProfileName(v);
-    if (normalized === oldName) return '같은 이름입니다.';
-    if (existing.has(normalized)) return '같은 이름의 프로필이 이미 존재합니다.';
+    if (normalized === oldName) return msg().validators.sameName;
+    if (existing.has(normalized)) return msg().validators.profileExists;
     return null;
   } catch (err) {
-    return err instanceof Error ? err.message : '잘못된 이름입니다.';
+    return err instanceof Error ? err.message : msg().validators.invalidName;
   }
 }

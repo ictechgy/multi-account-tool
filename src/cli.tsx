@@ -50,32 +50,10 @@ import {
 } from './i18n/index.js';
 import { LanguagePrompt } from './ui/language-prompt.js';
 
-const USAGE =
-  `사용법:\n` +
-  `  mat                                            TUI 실행\n` +
-  `  mat exec <cli> <profile> -- <cmd...>          <profile> 로 swap 후 <cmd> 실행, 종료 후 원복\n` +
-  `  mat session start <cli> <profile>             <profile> 로 격리된 subshell 실행 (동시 다계정)\n` +
-  `  mat session run <cli> <profile> -- [args...]  builtin CLI 를 격리 env 로 직접 실행\n` +
-  `  mat session run <cli> <profile> --check|--explain [--json] -- [args...]\n` +
-  `                                                 spawn 없는 session run 사전 점검\n` +
-  `  mat session list [--json]                     실행 중/orphan 세션 목록\n` +
-  `  mat session stop <id>                         세션 종료 또는 orphan 정리\n` +
-  `  mat status [--json]                           active profile/session 상태 요약\n` +
-  `  mat plugin validate [path] [--json]           plugin JSON 정적 검증/린트\n` +
-  `  mat plugin scaffold <id> [--json]             starter plugin JSON 출력 (파일 미작성)\n` +
-  `  mat freshness [<cli>] [--profile <name>] [--json] [--check-only]\n` +
-  `                                                 라이브 vs 활성 프로필 자격증명 비교 (OAuth\n` +
-  `                                                 refresh rotation 안전성 점검). cli 미지정 시\n` +
-  `                                                 모든 builtin/plugin CLI 보고. --check-only 면\n` +
-  `                                                 stale 감지해도 exit 0 (read-only 모니터링).\n` +
-  `  mat doctor [--json]                           read-only 안전 진단 (자격증명 값 미열람)\n` +
-  `  mat support <cli> [--json]                    CLI 지원 범위/한계/계약 설명\n` +
-  `  mat explain <cli> [--json]                    support 의 alias\n` +
-  `  mat config language [en|ko|--unset]           표시 언어 확인/저장 (첫 TUI 실행 때도 선택)\n` +
-  `  mat --help                                     이 도움말 출력\n` +
-  `  mat --version                                  버전 출력\n` +
-  `  mat --lang <en|ko> [command...]               표시 언어 지정. MAT_LANG 환경변수 또는\n` +
-  `                                                 config.json 의 "language" 로도 설정 가능\n`;
+/** 전체 도움말. locale 이 정해진 뒤에 읽어야 하므로 상수가 아닌 함수다. */
+function usage(): string {
+  return msg().cli.usage;
+}
 
 /**
  * Exit code 규약:
@@ -163,7 +141,7 @@ async function main(): Promise<void> {
     return;
   }
   if (first === '--help' || first === '-h' || first === 'help') {
-    process.stdout.write(USAGE);
+    process.stdout.write(usage());
     return;
   }
   if (first === '--version' || first === '-v') {
@@ -187,7 +165,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  process.stderr.write(`mat: 알 수 없는 명령: ${first}\n${USAGE}`);
+  process.stderr.write(`${msg().cli.unknownCommand(first)}\n${usage()}`);
   process.exit(2);
 }
 
@@ -246,12 +224,7 @@ async function dispatchSession(rest: string[]): Promise<void> {
 async function handleStatus(rest: string[]): Promise<void> {
   const parsed = parseStatusArgs(rest);
   if (parsed.help) {
-    process.stdout.write(
-      `사용법:\n` +
-      `  mat status [--json]\n` +
-      `\n` +
-      `active profile 포인터와 session lifecycle 요약을 read-only 로 출력합니다.\n`
-    );
+    process.stdout.write(msg().cli.status.help);
     return;
   }
   const report = await buildStatusReport();
@@ -278,7 +251,7 @@ function parseStatusArgs(rest: string[]): StatusArgs {
       out.help = true;
       continue;
     }
-    process.stderr.write(`mat status: 알 수 없는 옵션: ${arg}\n`);
+    process.stderr.write(`${msg().cli.unknownOption('status', arg)}\n`);
     process.exit(2);
   }
   return out;
@@ -287,16 +260,7 @@ function parseStatusArgs(rest: string[]): StatusArgs {
 async function handlePlugin(rest: string[]): Promise<void> {
   const [subcommand, ...args] = rest;
   if (subcommand == null || subcommand === '--help' || subcommand === '-h' || subcommand === 'help') {
-    process.stdout.write(
-      `사용법:\n` +
-      `  mat plugin validate [path] [--json]\n` +
-      `  mat plugin scaffold <id> [--json]\n` +
-      `\n` +
-      `사용자 plugin JSON 을 정적으로 검증합니다. validate 는 credential 파일이나\n` +
-      `keyring secret 값을 읽지 않습니다. path 를 생략하면 설치된\n` +
-      `~/.multi-account-tool/cli-defs/*.json 을 검사합니다.\n` +
-      `scaffold 는 starter JSON 을 stdout 으로만 출력하며 파일을 쓰지 않습니다.\n`
-    );
+    process.stdout.write(msg().cli.plugin.help);
     return;
   }
   if (subcommand === 'validate') {
@@ -307,7 +271,7 @@ async function handlePlugin(rest: string[]): Promise<void> {
     handlePluginScaffold(args);
     return;
   }
-  process.stderr.write(`mat plugin: 알 수 없는 하위 명령: ${subcommand}\n`);
+  process.stderr.write(`${msg().cli.plugin.unknownSubcommand(subcommand)}\n`);
   process.exit(2);
 }
 
@@ -340,22 +304,15 @@ function parsePluginValidateArgs(rest: string[]): PluginValidateArgs {
       continue;
     }
     if (arg === '--help' || arg === '-h') {
-      process.stdout.write(
-        `사용법:\n` +
-        `  mat plugin validate [path] [--json]\n` +
-        `\n` +
-        `path 를 지정하면 해당 JSON 파일만 검사하고, 생략하면 설치된\n` +
-        `~/.multi-account-tool/cli-defs/*.json 전체를 검사합니다.\n` +
-        `exit 0: error 없음, exit 1: validation/read/parse error, exit 2: 사용법 오류.\n`
-      );
+      process.stdout.write(msg().cli.plugin.validateHelp);
       process.exit(0);
     }
     if (arg.startsWith('-')) {
-      process.stderr.write(`mat plugin validate: 알 수 없는 옵션: ${arg}\n`);
+      process.stderr.write(`${msg().cli.unknownOption('plugin validate', arg)}\n`);
       process.exit(2);
     }
     if (out.path != null) {
-      process.stderr.write(`mat plugin validate: path 는 하나만 지정할 수 있습니다.\n`);
+      process.stderr.write(`${msg().cli.plugin.validateSinglePath}\n`);
       process.exit(2);
     }
     out.path = arg;
@@ -366,7 +323,7 @@ function parsePluginValidateArgs(rest: string[]): PluginValidateArgs {
 function handlePluginScaffold(rest: string[]): void {
   const parsed = parsePluginScaffoldArgs(rest);
   if (BUILTIN_CLI_DEFS.some((def) => def.id === parsed.id)) {
-    process.stderr.write(`mat plugin scaffold: '${parsed.id}' 는 builtin CLI id 라서 plugin 으로 사용할 수 없습니다.\n`);
+    process.stderr.write(`${msg().cli.plugin.scaffoldBuiltinId(parsed.id)}\n`);
     process.exit(2);
   }
   let scaffold: ReturnType<typeof createPluginScaffold>;
@@ -394,26 +351,21 @@ function parsePluginScaffoldArgs(rest: string[]): PluginScaffoldArgs {
       continue;
     }
     if (arg === '--help' || arg === '-h') {
-      process.stdout.write(
-        `사용법:\n` +
-        `  mat plugin scaffold <id> [--json]\n` +
-        `\n` +
-        `starter plugin JSON 을 stdout 으로 출력합니다. 파일은 쓰지 않습니다.\n`
-      );
+      process.stdout.write(msg().cli.plugin.scaffoldHelp);
       process.exit(0);
     }
     if (arg.startsWith('-')) {
-      process.stderr.write(`mat plugin scaffold: 알 수 없는 옵션: ${arg}\n`);
+      process.stderr.write(`${msg().cli.unknownOption('plugin scaffold', arg)}\n`);
       process.exit(2);
     }
     if (id != null) {
-      process.stderr.write(`mat plugin scaffold: <id> 는 하나만 지정할 수 있습니다.\n`);
+      process.stderr.write(`${msg().cli.plugin.scaffoldSingleId}\n`);
       process.exit(2);
     }
     id = arg;
   }
   if (id == null) {
-    process.stderr.write(`mat plugin scaffold: <id> 인자가 필요합니다.\n`);
+    process.stderr.write(`${msg().cli.plugin.scaffoldIdRequired}\n`);
     process.exit(2);
   }
   return { id, asJson };
@@ -427,7 +379,7 @@ function formatPluginValidationReport(report: PluginValidationReport): string {
     `files: ${report.summary.files}, plugins: ${report.summary.plugins}, errors: ${report.summary.errors}, warnings: ${report.summary.warnings}`
   ];
   if (report.summary.files === 0) {
-    lines.push('(검사할 plugin JSON 없음)');
+    lines.push(msg().cli.plugin.reportNoFiles);
   }
   for (const file of report.files) {
     const plugin = file.plugin != null ? ` (${file.plugin.id})` : '';
@@ -443,21 +395,14 @@ function formatPluginValidationReport(report: PluginValidationReport): string {
   for (const diag of topLevel) {
     lines.push(`${diag.severity.toUpperCase()} ${diag.code}: ${diag.message}`);
   }
-  lines.push('참고: 이 검사는 정적 검증이며 credential 파일/keyring secret 값은 읽지 않습니다.');
+  lines.push(msg().cli.plugin.reportNote);
   return `${lines.join('\n')}\n`;
 }
 
 async function handleDoctor(rest: string[]): Promise<void> {
   const parsed = parseDoctorArgs(rest);
   if (parsed.help) {
-    process.stdout.write(
-      `사용법:\n` +
-      `  mat doctor [--json]\n` +
-      `\n` +
-      `read-only 안전 진단을 실행합니다. 자격증명 값/Keychain secret 값은 읽지 않고,\n` +
-      `active profile, source 존재 여부, ambient env/project config 우회 가능성,\n` +
-      `session 지원 상태를 보고합니다. OAuth deep 비교는 명시적으로 mat freshness 를 사용하세요.\n`
-    );
+    process.stdout.write(msg().cli.doctor.help);
     return;
   }
   const report = await runDoctor();
@@ -484,7 +429,7 @@ function parseDoctorArgs(rest: string[]): DoctorArgs {
       out.help = true;
       continue;
     }
-    process.stderr.write(`mat doctor: 알 수 없는 옵션: ${a}\n`);
+    process.stderr.write(`${msg().cli.unknownOption('doctor', a)}\n`);
     process.exit(2);
   }
   return out;
@@ -493,14 +438,7 @@ function parseDoctorArgs(rest: string[]): DoctorArgs {
 async function handleSupport(command: 'support' | 'explain', rest: string[]): Promise<void> {
   const parsed = parseSupportArgs(command, rest);
   if (parsed.help) {
-    process.stdout.write(
-      `사용법:\n` +
-      `  mat support <cli> [--json]\n` +
-      `  mat explain <cli> [--json]\n` +
-      `\n` +
-      `CLI 별 mat 지원 범위와 한계를 설명합니다. swap, freshness, session start/run,\n` +
-      `ambient/project override 위험, 마지막으로 확인한 upstream 계약을 보여줍니다.\n`
-    );
+    process.stdout.write(msg().cli.support.help);
     return;
   }
   const report = buildCliSupportReport(parsed.cliId);
@@ -531,18 +469,18 @@ function parseSupportArgs(command: 'support' | 'explain', rest: string[]): Suppo
       continue;
     }
     if (a.startsWith('-')) {
-      process.stderr.write(`mat ${command}: 알 수 없는 옵션: ${a}\n`);
+      process.stderr.write(`${msg().cli.unknownOption(command, a)}\n`);
       process.exit(2);
     }
     if (cliId != null) {
-      process.stderr.write(`mat ${command}: <cli> 는 하나만 지정할 수 있습니다.\n`);
+      process.stderr.write(`${msg().cli.support.singleCli(command)}\n`);
       process.exit(2);
     }
     cliId = a;
   }
   if (help) return { cliId: cliId ?? '', asJson, help };
   if (cliId == null) {
-    process.stderr.write(`mat ${command}: <cli> 인자가 필요합니다.\n`);
+    process.stderr.write(`${msg().cli.support.cliRequired(command)}\n`);
     process.exit(2);
   }
   return { cliId, asJson, help };
@@ -617,26 +555,20 @@ async function handleConfig(rest: string[]): Promise<void> {
 async function handleExec(rest: string[]): Promise<void> {
   const sepIdx = rest.indexOf('--');
   if (sepIdx < 0) {
-    process.stderr.write(
-      `mat exec: 명령 구분자 \`--\` 가 필요합니다.\n` +
-      `  예: mat exec claude work -- claude --help\n`
-    );
+    const m = msg().cli.exec;
+    process.stderr.write(`${m.separatorRequired}\n${m.example}\n`);
     process.exit(2);
   }
   const before = rest.slice(0, sepIdx);
   const after = rest.slice(sepIdx + 1);
   if (before.length !== 2) {
-    process.stderr.write(
-      `mat exec: <cli> 와 <profile> 두 인자가 필요합니다 (받음: ${before.length}개).\n` +
-      `  예: mat exec claude work -- claude --help\n`
-    );
+    const m = msg().cli.exec;
+    process.stderr.write(`${m.twoArgsRequired(before.length)}\n${m.example}\n`);
     process.exit(2);
   }
   const [cliId, profileName] = before;
   if (after.length === 0) {
-    process.stderr.write(
-      `mat exec: 실행할 명령이 비어 있습니다. \`--\` 뒤에 명령을 지정하세요.\n`
-    );
+    process.stderr.write(`${msg().cli.exec.emptyCommand}\n`);
     process.exit(2);
   }
   const [command, ...cmdArgs] = after;
@@ -720,21 +652,21 @@ function parseFreshnessArgs(rest: string[]): FreshnessArgs {
     if (a === '--profile') {
       const value = rest[++i];
       if (value == null) {
-        process.stderr.write(`mat freshness: --profile 에 값이 필요합니다.\n`);
+        process.stderr.write(`${msg().cli.freshness.profileValueRequired}\n`);
         process.exit(2);
       }
       out.profileOverride = value;
       continue;
     }
     if (a.startsWith('--')) {
-      process.stderr.write(`mat freshness: 알 수 없는 옵션: ${a}\n`);
+      process.stderr.write(`${msg().cli.unknownOption('freshness', a)}\n`);
       process.exit(2);
     }
     if (out.cliId == null) {
       out.cliId = a;
       continue;
     }
-    process.stderr.write(`mat freshness: 인자 과다 (예상 1 cli, 실제 2+): ${a}\n`);
+    process.stderr.write(`${msg().cli.freshness.tooManyArgs(a)}\n`);
     process.exit(2);
   }
   return out;
@@ -749,9 +681,7 @@ async function resolveFreshnessTargets(
     const profileName = args.profileOverride ?? (await getActiveProfile(cliId));
     if (profileName == null) {
       if (args.cliId != null) {
-        process.stderr.write(
-          `mat freshness ${cliId}: active profile 미설정. --profile <name> 으로 지정하세요.\n`
-        );
+        process.stderr.write(`${msg().cli.freshness.noActiveProfile(cliId)}\n`);
         process.exit(2);
       }
       continue;
@@ -789,7 +719,7 @@ function hasUnsafe(reports: FreshnessReport[]): boolean {
 /** 4 컬럼 표 (사람-친화). 빈 reports / 빈 sources 모두 안내 한 줄. */
 function formatFreshnessTable(reports: FreshnessReport[]): string {
   if (reports.length === 0) {
-    return '(보고할 CLI 없음 — active profile 미설정. mat TUI 로 capture 후 재실행하세요.)\n';
+    return `${msg().cli.freshness.noReports}\n`;
   }
   const rows: string[][] = [['CLI', 'Profile', 'Source', 'Status', 'Detail']];
   for (const report of reports) {
@@ -806,7 +736,7 @@ function formatFreshnessTable(reports: FreshnessReport[]): string {
   // 모든 report 의 sources 가 비어있어도 (이론상 — 모든 builtin 은 sources 1+) header
   // 만 출력되지 않도록 가드. 한 줄 안내 출력.
   if (rows.length === 1) {
-    return '(모든 CLI 의 source 정의가 비어있음 — cli-defs 점검 필요)\n';
+    return `${msg().cli.freshness.emptySources}\n`;
   }
   const widths = rows[0].map((_, col) => Math.max(...rows.map((row) => row[col].length)));
   return `${rows.map((row) => row.map((cell, idx) => cell.padEnd(widths[idx])).join('  ')).join('\n')}\n`;

@@ -326,7 +326,7 @@ mat --lang en status           # per-command override
 </code></pre>
 <p>Precedence: <code>--lang</code> → <code>MAT_LANG</code> → <code>config.json</code> → system locale (<code>LC_ALL</code> → <code>LC_MESSAGES</code> → <code>LANG</code>) → English.</p>
 <blockquote>
-<p>The English translation of the CLI help and TUI is in progress (<a href="https://github.com/ictechgy/multi-account-tool/issues/159">#159</a>); until it lands, most output is still in Korean.</p>
+<p>The CLI help, usage errors and the TUI are available in English and Korean. Some messages from deeper modules (for example detailed error messages during a switch or a session) are still Korean-only; translating them is tracked in <a href="https://github.com/ictechgy/multi-account-tool/issues/159">#159</a>.</p>
 </blockquote>
 <hr>
 <h2 id="usage">Usage</h2>
@@ -345,7 +345,7 @@ mat --help       # short usage summary (subcommands: exec, session, plugin, fres
 <li>The new login is saved to the profile the next time you switch away from it. To save it right away, press <code>c</code> on the profile.</li>
 <li>From now on, switch freely between profiles with <code>Enter</code></li>
 </ol>
-<p>Choose <strong>Copy current login</strong> instead to save the account that is logged in right now as the new profile (for example, to back up an existing account). The profile list shows <code>· 로그인 대기</code> (awaiting login) on new-account profiles until a login is captured.</p>
+<p>Choose <strong>Copy current login</strong> instead to save the account that is logged in right now as the new profile (for example, to back up an existing account). The profile list shows <code>· awaiting login</code> on new-account profiles until a login is captured.</p>
 <p>If no profile is active yet and the CLI is logged in, <code>mat</code> refuses to start a new account, because clearing the live credentials would lose that login. Save it first with <strong>Copy current login</strong>.</p>
 <h3 id="key-bindings">Key bindings</h3>
 <div class="table-wrap"><table>
