@@ -98,6 +98,9 @@ function addHeadingIds(html) {
 function rewriteHref(url) {
   const normalized = String(url).trim().replace(/[\u0000-\u001F\u007F\s]+/g, '');
   if (/^(?:javascript|data|vbscript):/i.test(normalized)) return '#';
+  // README.md 는 npm 페이지에서도 깨지지 않도록 언어 전환 링크를 GitHub 절대 URL 로 둔다 — 사이트에선 다시 상대 페이지로.
+  if (url.startsWith(BLOB_BASE + 'README.ko.md')) return 'ko.html' + url.slice((BLOB_BASE + 'README.ko.md').length);
+  if (url.startsWith(BLOB_BASE + 'README.md')) return 'index.html' + url.slice((BLOB_BASE + 'README.md').length);
   if (/^(https?:|mailto:|#|\/\/)/.test(url)) return url;
   const hashIdx = url.indexOf('#');
   const queryIdx = url.indexOf('?');

@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **영문 README 가 원본, 한국어는 번역본.** npm 패키지 설명(`package.json` `description`)과 Homebrew
+  formula 템플릿의 `desc` 를 영어로 바꿨다. `README.md` 의 상대 링크(한국어 README, CHANGELOG, LICENSE,
+  docs 등)를 GitHub 절대 URL 로 바꿔 npm 패키지 페이지에서도 깨지지 않게 했다 (문서 사이트에서는
+  언어 전환 링크가 계속 `ko.html` 로 간다). `README.ko.md` 에 영문이 기준이라는 안내를 넣었다.
+
 - **os-keyring 실패 분류를 메시지 문구 매칭에서 에러 종류(`OsKeyringCommandError.kind`) 로
   바꿨다.** `classifyLssError` 가 `/미설치|접근 거부|백업 복구도 실패/` 같은 한국어 정규식으로
   원인을 판정하고 있어서, 메시지를 번역하면 분류가 조용히 틀어질 수 있었다. 분류 결과는
