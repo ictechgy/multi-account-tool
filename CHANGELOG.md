@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **하드닝 sentinel 판정을 메시지 접두어에서 오류 타입으로 바꿨다 (i18n 3단계 준비, #167).** 롤백
+  집계(`switcher.ts` 의 `errorText`), Goose provider 캐시의 `providerPublicError`, directory-source 의
+  `publicError` 가 `unsafe directory source:` / `unsafe Goose provider cache …` / `profile capture …` 같은
+  영어 접두어 정규식으로 원문 통과 여부를 정하고 있었다. 이 메시지들을 번역하면 진단 문구가 조용히
+  `operation failed` 로 접히게 된다. 이제 mat 이 조립한 고정 문구 오류는 `SafetyCheckError`(`scope`)를
+  던지고, 판정은 `SafetyCheckError` / `LiveResourceGuardError` 타입으로 한다. 어떤 메시지가 원문으로
+  보이고 어떤 메시지가 접히는지는 기존과 같다.
+
 ## [0.9.0] - 2026-10-05
 
 ### Added

@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
+import { SafetyCheckError } from './errors.js';
 import type { DirectorySource } from './types.js';
 import { resolveParentKeepLeaf, resolvedHome } from './path-identity.js';
 import { removePinnedChild } from './pinned-remove.js';
@@ -27,11 +28,11 @@ export function __setDirectorySourceFsOpsForTests(overrides: Partial<DirectorySo
   fs = overrides ? Object.assign(Object.create(realFs) as DirectorySourceFsOps, overrides) : realFs;
 }
 
-function fail(message: string): never { throw new Error(`unsafe directory source: ${message}`); }
+function fail(message: string): never { throw new SafetyCheckError('directory-source', `unsafe directory source: ${message}`); }
 function publicError(err: unknown): Error {
-  if (err instanceof Error && err.message.startsWith('unsafe directory source:')) return err;
+  if (err instanceof SafetyCheckError && err.scope === 'directory-source') return err;
   const code = typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? ` (${err.code})` : '';
-  return new Error(`unsafe directory source: filesystem operation failed${code}`);
+  return new SafetyCheckError('directory-source', `unsafe directory source: filesystem operation failed${code}`);
 }
 function own(value: object, key: string): boolean { return Object.prototype.hasOwnProperty.call(value, key); }
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex'); }

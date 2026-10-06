@@ -207,6 +207,38 @@ export class OsKeyringCommandError extends Error {
 }
 
 /**
+ * mat 이 직접 조립한 하드닝·무결성 검사 실패.
+ *
+ * 메시지는 고정 문구라 경로·자격증명 값이 들어 있지 않으므로 사용자에게 원문 그대로 보여도 안전하다.
+ * 롤백 집계(`switcher.ts` 의 `errorText`)와 각 모듈의 공개 오류 정리(`providerPublicError`,
+ * directory-source 의 `publicError`)는 이 타입으로 원문 통과 여부를 판정한다. 예전에는 메시지
+ * 접두어 정규식으로 판정했는데, 메시지는 번역 대상이라 문구 매칭은 locale 에 따라 조용히 깨진다.
+ *
+ * - `directory-source`: `unsafe directory source: …`
+ * - `source-path`: 경로 해석 실패 (`unsafe source path`)
+ * - `goose-provider-cache`: Goose provider 캐시 하드닝 (`unsafe Goose provider cache …`,
+ *   `Goose provider cache … identity changed`)
+ * - `goose-provider-cache-io`: 위 검사 밖의 파일시스템 실패를 접은 문구. 롤백 집계에서는 원문을
+ *   보이지만 `providerPublicError` 는 다시 접는다 (예전 정규식과 같은 동작).
+ * - `profile-capture`: 프로필 캡처 트랜잭션 실패 중 원문을 보이던 것 (`profile capture …`)
+ */
+export type SafetyCheckScope =
+  | 'directory-source'
+  | 'source-path'
+  | 'goose-provider-cache'
+  | 'goose-provider-cache-io'
+  | 'profile-capture';
+
+export class SafetyCheckError extends Error {
+  readonly scope: SafetyCheckScope;
+  constructor(scope: SafetyCheckScope, message: string) {
+    super(message);
+    this.name = 'SafetyCheckError';
+    this.scope = scope;
+  }
+}
+
+/**
  * 자격증명/토큰 후보 시퀀스를 redact.
  * field-aware token 값, 주요 provider prefix, JWT, 50자+ base64-like 를 가리고 500자로 절단.
  *
