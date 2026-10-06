@@ -11,6 +11,7 @@ import {
   writeDirectorySource
 } from '../../src/core/directory-source.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
+import { SafetyCheckError } from '../../src/core/errors.js';
 import { __setBeforePinnedRemoveForTests } from '../../src/core/pinned-remove.js';
 
 const source = (path: string) => ({ type: 'directory' as const, path, saveAs: 'tree.json', maxEntries: 16, maxBytes: 4096, maxDepth: 4 });
@@ -329,6 +330,8 @@ describe('DirectorySource', () => {
     }} as Partial<typeof fs>);
     let error = await readDirectorySource(source(root)).catch(err => err as Error);
     expect(error.message).toBe('unsafe directory source: filesystem operation failed (ENOENT)');
+    expect(error).toMatchObject({ name: 'SafetyCheckError', scope: 'directory-source' });
+    expect(error).toBeInstanceOf(SafetyCheckError);
 
     __setDirectorySourceFsOpsForTests(null);
     const outside = join(tmp.home, 'outside-file'); await fs.writeFile(outside, 'outside-secret', { mode: 0o600 });

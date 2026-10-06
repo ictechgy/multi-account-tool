@@ -25,7 +25,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 import { spawn } from 'node:child_process';
 
 import { __setSourceFsOpsForTests, readSource, removeSource, runCommand, sourceExists, writeSource } from '../../src/core/sources.js';
-import { KeychainAccountMissingError, KeychainCommandError } from '../../src/core/errors.js';
+import { KeychainAccountMissingError, KeychainCommandError, SafetyCheckError } from '../../src/core/errors.js';
 import type { EnvSecretSource, FileSource, KeychainSource, KeychainStored } from '../../src/core/types.js';
 import { setupTmpHome, type TmpHome } from '../helpers/tmp-home.js';
 import { promises as fs } from 'node:fs';
@@ -226,6 +226,7 @@ describe('sources — fixed Goose provider files', () => {
     await fs.mkdir(target, { recursive: true, mode: 0o700 });
     await fs.symlink('/tmp/not-a-token', join(target, 'tokens.json'));
     await expect(readSource(src)).rejects.toThrow(/unsafe Goose provider cache file/);
+    await expect(readSource(src)).rejects.toBeInstanceOf(SafetyCheckError);
   });
 
   it('does not follow a provider ancestor symlink for read, existence, or write', async () => {

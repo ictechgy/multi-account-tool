@@ -31,6 +31,7 @@ import {
 } from './paths.js';
 import type { Profile } from './types.js';
 import type { ProfileIdentitySummary } from './types.js';
+import { SafetyCheckError } from './errors.js';
 
 // app.tsx / exec.ts 등 외부 호출자 backward compat 용 re-export.
 // 검증자는 paths.ts 단일 소스 — profile-store.ts 에 별도 정의 없음.
@@ -306,7 +307,7 @@ async function syncProfileDirectory(cliId: string, name: string): Promise<void> 
   const fd = await fs.open(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
   try { await fd.sync(); } finally { await fd.close(); }
   const after = await fs.lstat(directory);
-  if (after.isSymbolicLink() || !after.isDirectory() || after.dev !== before.dev || after.ino !== before.ino) throw new Error('profile capture directory identity changed');
+  if (after.isSymbolicLink() || !after.isDirectory() || after.dev !== before.dev || after.ino !== before.ino) throw new SafetyCheckError('profile-capture', 'profile capture directory identity changed');
 }
 
 /**
@@ -355,7 +356,7 @@ export async function recoverProfileCaptureTransaction(cliId: string, name: stri
     await syncProfileDirectory(cliId, name);
   } catch (err) {
     const code = typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? ` (${err.code})` : '';
-    throw new Error(`profile capture recovery failed${code}`);
+    throw new SafetyCheckError('profile-capture', `profile capture recovery failed${code}`);
   }
 }
 
@@ -404,10 +405,10 @@ export async function commitProfileCaptureTransaction(
     await syncProfileDirectory(cliId, name);
   } catch (err) {
     try { await recoverProfileCaptureTransaction(cliId, name); }
-    catch { throw new Error(committed ? 'profile capture cleanup failed; recovery also failed' : 'profile capture commit failed; rollback also failed'); }
+    catch { throw new SafetyCheckError('profile-capture', committed ? 'profile capture cleanup failed; recovery also failed' : 'profile capture commit failed; rollback also failed'); }
     if (committed) return;
     const code = typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string' ? err.code : undefined;
-    const safe = new Error(`profile capture commit failed${code ? ` (${code})` : ''}`) as Error & { code?: string };
+    const safe = new SafetyCheckError('profile-capture', `profile capture commit failed${code ? ` (${code})` : ''}`) as SafetyCheckError & { code?: string };
     if (code) safe.code = code;
     throw safe;
   }

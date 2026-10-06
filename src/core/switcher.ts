@@ -16,7 +16,8 @@ import { findCliDef } from './cli-defs.js';
 import { withCliMutationLock } from './cli-mutation-lock.js';
 import { getActiveProfile, setActiveProfile } from './config.js';
 import { assertNoEnvSecretSources } from './env-secret-source.js';
-import { KeychainAccountMissingError, KeychainCommandError, UnknownCliError } from './errors.js';
+import { KeychainAccountMissingError, KeychainCommandError, SafetyCheckError, UnknownCliError } from './errors.js';
+import { LiveResourceGuardError } from './live-resource-guard.js';
 import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
 import { buildProfileIdentity, type IdentitySourceInput } from './profile-identity.js';
 import {
@@ -338,7 +339,8 @@ function errorText(err: unknown): string {
   // stderr)을 가리키는 유일한 단서가 사라져 `restore failed; rollback also failed: operation
   // failed` 처럼 진단 불가능한 문구만 남는다.
   if (err instanceof KeychainCommandError || err instanceof KeychainAccountMissingError) return err.message;
-  if (err instanceof Error && /^(?:unsafe directory source:|unsafe credential resource:|unsafe source path|unsafe Goose provider cache |Goose provider cache |profile capture )/.test(err.message)) return err.message;
+  // 하드닝 sentinel 은 메시지 접두어가 아니라 타입으로 판정한다 (메시지는 번역 대상 — #167).
+  if (err instanceof SafetyCheckError || err instanceof LiveResourceGuardError) return err.message;
   const code = errorCode(err);
   return `operation failed${code ? ` (${code})` : ''}`;
 }

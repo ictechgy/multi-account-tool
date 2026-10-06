@@ -83,7 +83,7 @@ vi.mock('../../src/core/cli-defs.js', async (importOriginal) => {
 });
 
 import { getActiveProfile, setActiveProfile } from '../../src/core/config.js';
-import { KeychainCommandError } from '../../src/core/errors.js';
+import { KeychainCommandError, SafetyCheckError } from '../../src/core/errors.js';
 import { LockHeldError, acquireCliLock } from '../../src/core/lockfile.js';
 import {
   __setProfileStoreFsOpsForTests,
@@ -95,6 +95,7 @@ import {
   writeProfileFile
 } from '../../src/core/profile-store.js';
 import { profileMetaPath } from '../../src/core/paths.js';
+import { LiveResourceGuardError } from '../../src/core/live-resource-guard.js';
 import { readSource, removeSource, writeSource } from '../../src/core/sources.js';
 import {
   restoreProfileToLive,
@@ -388,6 +389,34 @@ describe('switcher', () => {
       const err = await restoreProfileToLive('codex', 'generic').catch((e: unknown) => e as Error);
       expect(err.message).toBe('restore failed; rollback also failed: operation failed; original error: operation failed (EACCES)');
       expect(err.message).not.toContain('/Users/');
+    });
+
+    it('하드닝 sentinel 은 메시지 문구가 아니라 타입으로 판정한다 (번역돼도 원문 보고, #167)', async () => {
+      await setupProfile('codex', 'typed');
+      await writeProfileFile('codex', 'typed', 'auth.json', 'new-auth');
+      mockReadSource.mockResolvedValue('old-auth-live');
+      // 번역된 메시지라도 SafetyCheckError / LiveResourceGuardError 면 원문을 보인다.
+      mockWriteSource
+        .mockRejectedValueOnce(new SafetyCheckError('goose-provider-cache', 'Goose 제공자 캐시 파일이 안전하지 않음'))
+        .mockRejectedValueOnce(new LiveResourceGuardError('claude'));
+
+      const err = await restoreProfileToLive('codex', 'typed').catch((e: unknown) => e as Error);
+      expect(err.message).toBe(
+        'restore failed; rollback also failed: unsafe credential resource: claimed by another CLI; ' +
+        'original error: Goose 제공자 캐시 파일이 안전하지 않음'
+      );
+    });
+
+    it('sentinel 과 같은 문구라도 typed 가 아니면 operation failed 로 접힌다', async () => {
+      await setupProfile('codex', 'lookalike');
+      await writeProfileFile('codex', 'lookalike', 'auth.json', 'new-auth');
+      mockReadSource.mockResolvedValue('old-auth-live');
+      mockWriteSource
+        .mockRejectedValueOnce(new Error('unsafe Goose provider cache file'))
+        .mockRejectedValueOnce(new Error('unsafe directory source: /Users/someone/x'));
+
+      const err = await restoreProfileToLive('codex', 'lookalike').catch((e: unknown) => e as Error);
+      expect(err.message).toBe('restore failed; rollback also failed: operation failed; original error: operation failed');
     });
 
     it('rollback reverse-order (3-source tri-cli): 3rd source throw → b → a 역순으로 liveBackup 복원', async () => {
