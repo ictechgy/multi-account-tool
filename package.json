@@ -1,6 +1,6 @@
 {
   "name": "multi-account-tool",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Switch between multiple AI CLI accounts (Claude Code, Codex, Gemini CLI, Aider, Kimi, Qwen, Crush, OpenCode, Goose, Grok Build) from one TUI. OAuth refresh-token rotation aware, plus the mat exec/session/freshness CLI.",
   "type": "module",
   "bin": {
