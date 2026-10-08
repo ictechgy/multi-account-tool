@@ -611,6 +611,7 @@ mat freshness --check-only
 </code></pre>
 <p>각 source는 4-state로 분류한다 — <code>fresh</code>(byte 동일), <code>rotated</code>(토큰 회전), <code>stale</code>(identity 변경 — 다른 계정, <strong>swap 시 revoke 위험</strong>), <code>inflight</code>(multi-source CLI의 부분 갱신 race — 잠시 후 재시도). <code>rotated</code>는 adapter가 high/medium confidence로 identity 유지를 확인할 때만 swap 안전이다. fallback byte-diff 결과나 parser 실패는 &quot;바이트가 달라졌다&quot;까지만 말할 수 있으므로, low-confidence <code>rotated</code>는 exit-code 기준 unsafe로 취급되어 <code>--check-only</code>가 아니면 <code>1</code>을 반환한다.</p>
 <p><code>--check-only</code>는 read-only 모니터링 모드다. <code>stale</code> / low-confidence <code>rotated</code> / <code>inflight</code> 결과를 그대로 출력하지만 exit code는 <code>0</code>으로 유지해 프롬프트, statusline, dashboard가 경고를 표시하면서도 shell 흐름을 끊지 않게 한다. 사용 오류나 source 읽기 실패는 숨기지 않는다.</p>
+<p><code>--json</code> 출력에서 스크립트가 기준으로 삼을 필드는 <code>kind</code>, <code>subtype</code>, <code>confidence</code>다. 사람이 읽는 <code>detail</code>은 표시 언어와 상관없이 항상 영어라서, <code>--lang</code> / <code>MAT_LANG</code>에 따라 JSON이 바뀌지 않는다. 표 출력과 TUI는 선택한 언어로 detail을 보여 준다.</p>
 <p>종료 코드:</p>
 <div class="table-wrap"><table>
 <thead>

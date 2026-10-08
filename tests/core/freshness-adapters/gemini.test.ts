@@ -45,7 +45,7 @@ describe('geminiAdapter — oauth_creds.json', () => {
     const r = geminiAdapter.compare(SAVE_AS, '[]', '{"refresh_token":"x"}');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/parse 실패/);
+    expect(r.localizedDetail).toMatch(/parse 실패/);
   });
 });
 
@@ -67,7 +67,7 @@ describe('geminiAdapter — google_accounts.json', () => {
     const live = JSON.stringify({ active: 'bob@example.com' });
     const r = geminiAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
-    expect(r.detail).toMatch(/active 계정 변경/);
+    expect(r.localizedDetail).toMatch(/active 계정 변경/);
     expect(r.detail).not.toContain('alice');
     expect(r.detail).not.toContain('bob');
     expect(r.detail).not.toContain('example.com');
@@ -78,7 +78,7 @@ describe('geminiAdapter — google_accounts.json', () => {
     const r = geminiAdapter.compare(SAVE_AS, '{}', '{"old":[]}');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('medium');
-    expect(r.detail).toMatch(/active 필드 부재/);
+    expect(r.localizedDetail).toMatch(/active 필드 부재/);
   });
 
   it('byte-identical → fresh', () => {
@@ -90,7 +90,7 @@ describe('geminiAdapter — google_accounts.json', () => {
     const r = geminiAdapter.compare(SAVE_AS, '[]', '{"active":"a@example.com"}');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/parse 실패/);
+    expect(r.localizedDetail).toMatch(/parse 실패/);
   });
 });
 
@@ -98,6 +98,6 @@ describe('geminiAdapter — 미지원 saveAs', () => {
   it('low confidence fallback', () => {
     const r = geminiAdapter.compare('unknown.json', '{}', '{}');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/미지원 source/);
+    expect(r.localizedDetail).toMatch(/미지원 source/);
   });
 });

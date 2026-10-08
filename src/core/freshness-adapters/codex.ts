@@ -16,6 +16,7 @@
 
 import type { CompareResult, SourceAdapter } from '../freshness.js';
 import { parseJsonObject } from './_shared.js';
+import { freshnessDetail } from '../freshness-detail.js';
 
 interface CodexAuth {
   tokens?: {
@@ -38,33 +39,33 @@ function compareCodex(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'Codex auth.json JSON parse 실패 — 손상 가능성'
+      ...freshnessDetail('codexParseFailed')
     };
   }
   const storedId = s.tokens?.account_id ?? null;
   const liveId = l.tokens?.account_id ?? null;
   if (storedId && liveId) {
     if (storedId !== liveId) {
-      return { kind: 'stale', confidence: 'high', detail: 'tokens.account_id 변경 — 다른 계정' };
+      return { kind: 'stale', confidence: 'high', ...freshnessDetail('codexAccountChanged') };
     }
     const tokenChanged =
       s.tokens?.access_token !== l.tokens?.access_token ||
       s.tokens?.refresh_token !== l.tokens?.refresh_token ||
       s.tokens?.id_token !== l.tokens?.id_token;
     return tokenChanged
-      ? { kind: 'rotated', subtype: 'value-only', confidence: 'high', detail: 'identity 동일, token rotation' }
-      : { kind: 'rotated', subtype: 'meta-only', confidence: 'high', detail: 'token 동일, 캐시 필드만 변경' };
+      ? { kind: 'rotated', subtype: 'value-only', confidence: 'high', ...freshnessDetail('codexTokenRotation') }
+      : { kind: 'rotated', subtype: 'meta-only', confidence: 'high', ...freshnessDetail('codexCacheOnly') };
   }
   if (s.OPENAI_API_KEY && l.OPENAI_API_KEY) {
     return s.OPENAI_API_KEY === l.OPENAI_API_KEY
-      ? { kind: 'fresh', confidence: 'high', detail: 'API key 모드, 동일 키' }
-      : { kind: 'stale', confidence: 'high', detail: 'OPENAI_API_KEY 변경 — 다른 키' };
+      ? { kind: 'fresh', confidence: 'high', ...freshnessDetail('codexApiKeySame') }
+      : { kind: 'stale', confidence: 'high', ...freshnessDetail('codexApiKeyChanged') };
   }
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'low',
-    detail: 'identity 필드 부재 (tokens.account_id / OPENAI_API_KEY)'
+    ...freshnessDetail('codexIdentityMissing')
   };
 }
 
@@ -75,7 +76,7 @@ export const codexAdapter: SourceAdapter = {
         kind: 'rotated',
         subtype: 'both',
         confidence: 'low',
-        detail: `Codex adapter: 미지원 source ${saveAs}`
+        ...freshnessDetail('unsupportedSource', 'Codex', saveAs)
       };
     }
     return compareCodex(stored, live);

@@ -49,6 +49,7 @@ import { parse as parseYaml } from 'yaml';
 import { maskIdentifier } from '../errors.js';
 import type { CompareResult, SourceAdapter } from '../freshness.js';
 import { DANGEROUS_KEYS, parseJsonObject } from './_shared.js';
+import { freshnessDetail } from '../freshness-detail.js';
 
 interface KeychainOuter {
   value?: unknown;
@@ -233,7 +234,7 @@ function compareIdentityMatrix(
     return {
       kind: 'stale',
       confidence: 'medium',
-      detail: `${label} 키 set 변경: ${maskIdentifier(sKeys)} → ${maskIdentifier(lKeys)}`
+      ...freshnessDetail('gooseKeySetChanged', label, maskIdentifier(sKeys), maskIdentifier(lKeys))
     };
   }
   if (staleOnValueChangeRe) {
@@ -244,7 +245,7 @@ function compareIdentityMatrix(
       return {
         kind: 'stale',
         confidence: 'medium',
-        detail: `${label} identity 키 '${identityChange}' 값 변경 — 다른 provider/계정 swap 추정`
+        ...freshnessDetail('gooseIdentityKeyChanged', label, identityChange)
       };
     }
   }
@@ -254,14 +255,14 @@ function compareIdentityMatrix(
       kind: 'rotated',
       subtype: 'value-only',
       confidence: 'medium',
-      detail: `${label} 키 set 동일, 값 변경 (rotation 추정)`
+      ...freshnessDetail('gooseValuesChanged', label)
     };
   }
   return {
     kind: 'rotated',
     subtype: 'meta-only',
     confidence: 'medium',
-    detail: `${label} 키 동일, 외 필드만 변경`
+    ...freshnessDetail('gooseOtherFields', label)
   };
 }
 
@@ -298,12 +299,11 @@ function compareGooseYaml(saveAs: string, stored: string, live: string): Compare
  * 의 fallback 패턴과 대칭.
  */
 function emptyMatrixVerdict(parseFailed: boolean, label: string): CompareResult {
-  const hint = parseFailed ? ' + YAML parse 실패' : '';
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'low',
-    detail: `Goose YAML: ${label} 키 미감지${hint} — byte 비교만`
+    ...freshnessDetail('gooseYamlNoKeys', label, parseFailed)
   };
 }
 
@@ -313,11 +313,13 @@ function emptyMatrixVerdict(parseFailed: boolean, label: string): CompareResult 
  * 추출이 부분적이거나 stale 한 데이터일 수 있어 신뢰도 낮춤.
  */
 function downgradeForParseError(verdict: CompareResult): CompareResult {
-  const hint = ' (YAML parse 실패 — 손상된 YAML 또는 spec 위반)';
+  const hint = freshnessDetail('gooseYamlParseHint');
   return {
     ...verdict,
     confidence: 'low',
-    detail: `${verdict.detail ?? ''}${hint}`
+    // detail 이 없던 verdict 에도 hint 는 붙인다 (예전 `${verdict.detail ?? ''}${hint}` 와 같음).
+    detail: `${verdict.detail ?? ''}${hint.detail}`,
+    localizedDetail: `${verdict.localizedDetail ?? verdict.detail ?? ''}${hint.localizedDetail}`
   };
 }
 
@@ -340,7 +342,7 @@ function compareGooseKeyring(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'Goose keyring KeychainStored wrapper parse 실패'
+      ...freshnessDetail('gooseWrapperParseFailed')
     };
   }
   if (typeof sOuter.value !== 'string' || typeof lOuter.value !== 'string') {
@@ -348,7 +350,7 @@ function compareGooseKeyring(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'Goose keyring inner value 부재 또는 비-문자열'
+      ...freshnessDetail('gooseInnerMissing')
     };
   }
   const accountVerdict = compareKeyringAccount(sOuter.account, lOuter.account);
@@ -378,7 +380,7 @@ function compareKeyringAccount(s: unknown, l: unknown): CompareResult | null {
       return {
         kind: 'stale',
         confidence: 'high',
-        detail: `Keychain account 변경: ${maskIdentifier(s as string)} → ${maskIdentifier(l as string)}`
+        ...freshnessDetail('keychainAccountChanged', maskIdentifier(s as string), maskIdentifier(l as string))
       };
     }
     return null;
@@ -387,7 +389,7 @@ function compareKeyringAccount(s: unknown, l: unknown): CompareResult | null {
     return {
       kind: 'stale',
       confidence: 'low',
-      detail: 'KeychainStored.account 비대칭 — keyring 손상 추정'
+      ...freshnessDetail('gooseAccountAsymmetric')
     };
   }
   // 양쪽 모두 비-string — Goose keyring wrapper 가 account 를 항상 string 으로
@@ -397,7 +399,7 @@ function compareKeyringAccount(s: unknown, l: unknown): CompareResult | null {
     return {
       kind: 'stale',
       confidence: 'low',
-      detail: 'KeychainStored.account 양쪽 모두 비-string — keyring 손상 추정'
+      ...freshnessDetail('gooseAccountBothNonString')
     };
   }
   return null;
@@ -417,13 +419,13 @@ export const gooseAdapter: SourceAdapter = {
       // user attention rather than an account-change assertion.
       return stored === live
         ? { kind: 'fresh', confidence: 'high' }
-        : { kind: 'rotated', subtype: 'both', confidence: 'low', detail: 'Goose provider cache changed (opaque v1.43 admission)' };
+        : { kind: 'rotated', subtype: 'both', confidence: 'low', ...freshnessDetail('gooseProviderCacheChanged') };
     }
     return {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: `Goose adapter: 미지원 source ${saveAs}`
+      ...freshnessDetail('unsupportedSource', 'Goose', saveAs)
     };
   }
 };

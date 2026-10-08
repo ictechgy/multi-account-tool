@@ -33,6 +33,7 @@ import {
   isWindowsCredentialRuntimeUnsupported,
   windowsCredentialSourceMetadata
 } from './windows-credential-source.js';
+import { appendFreshnessDetail, freshnessDetail } from './freshness-detail.js';
 
 /** 라이브 vs 저장본 비교 결과의 4-state 분류. */
 export type CompareKind = 'fresh' | 'rotated' | 'stale' | 'inflight' | 'unsupported';
@@ -53,8 +54,13 @@ export interface CompareResult {
   kind: CompareKind;
   subtype?: RotatedSubtype;
   confidence: Confidence;
-  /** UI 에 surface 할 사람-친화 설명. 로그/표 출력에 사용. */
+  /**
+   * 사람-친화 설명 (영어). `mat freshness --json` 에 나가는 안정된 값이라 언어 설정과 무관하다.
+   * adapter 는 `freshnessDetail()` 로 만든다 (freshness-detail.ts).
+   */
   detail?: string;
+  /** 같은 설명의 현재 언어 문구. 표·TUI 표시용이며 `--json` 에서는 빠진다. */
+  localizedDetail?: string;
 }
 
 /** (saveAs, 비교 결과) 쌍. CLI 의 source 별 1건. */
@@ -279,7 +285,7 @@ export function fallbackCompare(stored: string, live: string): CompareResult {
         kind: 'rotated',
         subtype: 'both',
         confidence: 'low',
-        detail: 'fallback: 화이트리스트 회전 필드 부재 — adapter 추가 권장'
+        ...freshnessDetail('fallbackNoRotationFields')
       };
     }
     if (normalizedStored === normalizedLive) {
@@ -289,21 +295,21 @@ export function fallbackCompare(stored: string, live: string): CompareResult {
       return {
         kind: 'fresh',
         confidence: 'medium',
-        detail: '회전 후보 필드 동일 — 캐시 필드만 변경 (정상 사용)'
+        ...freshnessDetail('fallbackCacheOnly')
       };
     }
     return {
       kind: 'rotated',
       subtype: 'value-only',
       confidence: 'low',
-      detail: 'fallback byte-diff: identity 확정 불가 — adapter 미등록 CLI'
+      ...freshnessDetail('fallbackByteDiff')
     };
   }
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'low',
-    detail: 'non-JSON content — byte 비교만'
+    ...freshnessDetail('nonJson')
   };
 }
 
@@ -338,7 +344,7 @@ export async function inspectLiveFreshness(
         result: {
           kind: 'unsupported',
           confidence: 'high',
-          detail: `${meta.reason}: ${meta.envName}/${meta.backendKind}`
+          ...freshnessDetail('backendMeta', meta.reason, `${meta.envName}/${meta.backendKind}`)
         }
       });
       continue;
@@ -350,7 +356,7 @@ export async function inspectLiveFreshness(
         result: {
           kind: 'unsupported',
           confidence: 'high',
-          detail: `${meta.reason}: win32/${meta.credentialType}`
+          ...freshnessDetail('backendMeta', meta.reason, `win32/${meta.credentialType}`)
         }
       });
       continue;
@@ -403,7 +409,7 @@ function aggregateInflight(sources: SourceFreshness[]): SourceFreshness[] {
         result: {
           kind: 'inflight' as const,
           confidence: 'medium' as const,
-          detail: `cross-source race (옛 분류: ${s.result.kind}) — 재시도 권장`
+          ...freshnessDetail('crossSourceRace', s.result.kind)
         }
       };
     }
@@ -422,20 +428,20 @@ function compareOne(
   live: string | null
 ): CompareResult {
   if (stored == null && live == null) {
-    return { kind: 'fresh', confidence: 'high', detail: '양쪽 부재 — swap 무관' };
+    return { kind: 'fresh', confidence: 'high', ...freshnessDetail('bothMissing') };
   }
   if (stored == null) {
     return {
       kind: 'stale',
       confidence: 'high',
-      detail: '프로필 저장본 부재 — 라이브 캡처 권장'
+      ...freshnessDetail('storedMissing')
     };
   }
   if (live == null) {
     return {
       kind: 'stale',
       confidence: 'high',
-      detail: '라이브 부재 — CLI 로그아웃 추정'
+      ...freshnessDetail('liveMissing')
     };
   }
   if (!adapter) {
@@ -458,7 +464,7 @@ function compareOne(
     const adapterMsg = redactSecretLikeMessage((err as Error).message);
     return {
       ...result,
-      detail: `${result.detail ? `${result.detail}; ` : ''}adapter 예외: ${adapterMsg}`
+      ...appendFreshnessDetail(result, freshnessDetail('adapterException', adapterMsg), '; ')
     };
   }
 }

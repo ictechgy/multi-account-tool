@@ -21,6 +21,7 @@
 import { maskIdentifier } from '../errors.js';
 import type { CompareResult, SourceAdapter } from '../freshness.js';
 import { parseJsonObject } from './_shared.js';
+import { freshnessDetail } from '../freshness-detail.js';
 
 interface OAuthCreds {
   access_token?: string;
@@ -43,7 +44,7 @@ function compareOauthCreds(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'oauth_creds.json JSON parse 실패'
+      ...freshnessDetail('geminiOauthParseFailed')
     };
   }
   const tokenChanged =
@@ -55,14 +56,14 @@ function compareOauthCreds(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'value-only',
       confidence: 'high',
-      detail: 'OAuth 토큰 변경 — google_accounts.active 와 함께 검토 필요'
+      ...freshnessDetail('geminiTokenChanged')
     };
   }
   return {
     kind: 'rotated',
     subtype: 'meta-only',
     confidence: 'high',
-    detail: '토큰 동일, expiry_date/scope 등만 변경'
+    ...freshnessDetail('geminiMetaOnly')
   };
 }
 
@@ -75,7 +76,7 @@ function compareGoogleAccounts(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'google_accounts.json JSON parse 실패'
+      ...freshnessDetail('geminiAccountsParseFailed')
     };
   }
   if (s.active && l.active) {
@@ -84,21 +85,21 @@ function compareGoogleAccounts(stored: string, live: string): CompareResult {
         kind: 'stale',
         confidence: 'high',
         // raw email 노출 회피 — maskIdentifier 로 stable fingerprint 만 표시.
-        detail: `active 계정 변경: ${maskIdentifier(s.active)} → ${maskIdentifier(l.active)}`
+        ...freshnessDetail('geminiActiveChanged', maskIdentifier(s.active), maskIdentifier(l.active))
       };
     }
     return {
       kind: 'rotated',
       subtype: 'meta-only',
       confidence: 'high',
-      detail: 'active 동일, old 목록만 변경'
+      ...freshnessDetail('geminiOldOnly')
     };
   }
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'medium',
-    detail: 'active 필드 부재 — identity 확정 불가'
+    ...freshnessDetail('geminiActiveMissing')
   };
 }
 
@@ -110,7 +111,7 @@ export const geminiAdapter: SourceAdapter = {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: `Gemini adapter: 미지원 source ${saveAs}`
+      ...freshnessDetail('unsupportedSource', 'Gemini', saveAs)
     };
   }
 };

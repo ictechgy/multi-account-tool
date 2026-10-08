@@ -60,7 +60,7 @@ describe('fallbackCompare — empty normalize bypass 차단 (quad-review HIGH fi
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('both');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/adapter 추가 권장/);
+    expect(r.localizedDetail).toMatch(/adapter 추가 권장/);
   });
 });
 
@@ -88,7 +88,7 @@ describe('fallbackCompare — adapter 미정의 CLI 용 byte-diff', () => {
     const r = fallbackCompare(stored, live);
     expect(r.kind).toBe('fresh');
     expect(r.confidence).toBe('medium');
-    expect(r.detail).toMatch(/회전 후보 필드 동일/);
+    expect(r.localizedDetail).toMatch(/회전 후보 필드 동일/);
   });
 
   it('JSON 아님 → rotated both (low, byte 비교만)', () => {
@@ -170,7 +170,7 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     const report = await inspectLiveFreshness('codex', 'personal');
     expect(report.sources).toHaveLength(1);
     expect(report.sources[0].result.kind).toBe('fresh');
-    expect(report.sources[0].result.detail).toMatch(/양쪽 부재/);
+    expect(report.sources[0].result.localizedDetail).toMatch(/양쪽 부재/);
   });
 
   it('라이브 부재 (저장본 존재) → stale', async () => {
@@ -180,7 +180,7 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     // 라이브는 ~/.codex/auth.json — 부재
     const report = await inspectLiveFreshness('codex', 'personal');
     expect(report.sources[0].result.kind).toBe('stale');
-    expect(report.sources[0].result.detail).toMatch(/라이브 부재/);
+    expect(report.sources[0].result.localizedDetail).toMatch(/라이브 부재/);
   });
 
   it('저장본 부재 (라이브 존재) → stale', async () => {
@@ -192,7 +192,7 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
     await fs.writeFile(join(tmp.home, '.codex/auth.json'), '{"tokens":{}}');
     const report = await inspectLiveFreshness('codex', 'personal');
     expect(report.sources[0].result.kind).toBe('stale');
-    expect(report.sources[0].result.detail).toMatch(/저장본 부재/);
+    expect(report.sources[0].result.localizedDetail).toMatch(/저장본 부재/);
   });
 
   it('알 수 없는 cliId → UnknownCliError throw (UsageError 상속, exit 2 자동 매핑)', async () => {
@@ -318,7 +318,7 @@ describe('inspectLiveFreshness — fs 통합 (claude 외 file source 기반)', (
 
     const report = await inspectLiveFreshness('codex', 'p');
     expect(report.sources[0].result.kind).toBe('fresh');  // fallback 정상 분류
-    expect(report.sources[0].result.detail).toMatch(/adapter 예외: adapter boom/);
+    expect(report.sources[0].result.localizedDetail).toMatch(/adapter 예외: adapter boom/);
   });
 
   it('adapter 예외 msg 의 secret-like 시퀀스는 detail 에 redact (PR-L M4 fix)', async () => {
@@ -598,7 +598,7 @@ describe('inspectLiveFreshness — crush adapter (G003)', () => {
     expect(report.sources).toHaveLength(2);
     for (const source of report.sources) {
       expect(source.result.kind).toBe('stale');
-      expect(source.result.detail).toMatch(/라이브 부재/);
+      expect(source.result.localizedDetail).toMatch(/라이브 부재/);
     }
   });
 });

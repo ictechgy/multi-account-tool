@@ -10,6 +10,7 @@ import SelectInput from 'ink-select-input';
 import type { CompareResult, FreshnessReport } from '../core/freshness.js';
 import type { CliDef, Profile } from '../core/types.js';
 import { msg } from '../i18n/index.js';
+import { displayDetail } from '../core/freshness-detail.js';
 
 /**
  * HomeScreen 의 한 줄 항목. 한 CLI 의 상태 요약.
@@ -425,7 +426,8 @@ function statusColor(result: CompareResult): string | undefined {
 function formatDialogStatus(result: CompareResult): string {
   const subtype = result.kind === 'rotated' && result.subtype ? `(${result.subtype})` : '';
   const conf = result.confidence === 'low' ? ' [low conf]' : '';
-  const detail = result.detail ? ` — ${sanitizeDialogDetail(result.detail)}` : '';
+  const shown = displayDetail(result);
+  const detail = shown ? ` — ${sanitizeDialogDetail(shown)}` : '';
   return `${result.kind}${subtype}${conf}${detail}`;
 }
 

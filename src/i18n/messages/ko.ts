@@ -6,6 +6,7 @@ import { screens } from './ko/screens.js';
 import { formatters } from './ko/formatters.js';
 import { validators } from './ko/validators.js';
 import { widgets } from './ko/widgets.js';
+import { freshnessDetails } from './ko/freshnessDetails.js';
 
 /** 한국어 메시지 카탈로그. 키 구조는 en.ts 의 `Messages` 를 따른다. */
 export const ko: Messages = {
@@ -37,5 +38,6 @@ export const ko: Messages = {
   screens,
   formatters,
   validators,
-  widgets
+  widgets,
+  freshnessDetails
 };

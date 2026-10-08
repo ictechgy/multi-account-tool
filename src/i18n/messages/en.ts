@@ -12,6 +12,7 @@ import { screens } from './en/screens.js';
 import { formatters } from './en/formatters.js';
 import { validators } from './en/validators.js';
 import { widgets } from './en/widgets.js';
+import { freshnessDetails } from './en/freshnessDetails.js';
 
 export const en = {
   lang: {
@@ -42,7 +43,8 @@ export const en = {
   screens,
   formatters,
   validators,
-  widgets
+  widgets,
+  freshnessDetails
 };
 
 export type Messages = typeof en;

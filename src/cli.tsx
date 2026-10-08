@@ -49,6 +49,7 @@ import {
   type LocaleSource
 } from './i18n/index.js';
 import { LanguagePrompt } from './ui/language-prompt.js';
+import { displayDetail, freshnessJsonReplacer } from './core/freshness-detail.js';
 
 /** 전체 도움말. locale 이 정해진 뒤에 읽어야 하므로 상수가 아닌 함수다. */
 function usage(): string {
@@ -620,7 +621,8 @@ async function handleFreshness(rest: string[]): Promise<void> {
     }
   }
   if (parsed.asJson) {
-    process.stdout.write(`${JSON.stringify(reports, null, 2)}\n`);
+    // detail 은 언어 설정과 무관한 영어 그대로, 현재 언어 문구(localizedDetail)는 뺀다.
+    process.stdout.write(`${JSON.stringify(reports, freshnessJsonReplacer, 2)}\n`);
   } else {
     process.stdout.write(formatFreshnessTable(reports));
   }
@@ -729,7 +731,7 @@ function formatFreshnessTable(reports: FreshnessReport[]): string {
         report.profileName,
         src.saveAs,
         formatStatus(src.result),
-        src.result.detail ?? ''
+        displayDetail(src.result) ?? ''
       ]);
     }
   }

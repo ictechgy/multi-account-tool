@@ -608,6 +608,7 @@ mat freshness --check-only
 </code></pre>
 <p>Each source is classified into one of four states — <code>fresh</code> (byte-identical), <code>rotated</code> (token rotated), <code>stale</code> (identity changed — a different account; <strong>swap will revoke</strong>), <code>inflight</code> (multi-source CLI partially updated — retry shortly). <code>rotated</code> is safe only when an adapter can preserve identity with high/medium confidence. Fallback byte-diff results and parser failures can only say &quot;bytes changed&quot;; those low-confidence <code>rotated</code> results are treated as unsafe for exit-code purposes and return <code>1</code> unless <code>--check-only</code> is used.</p>
 <p><code>--check-only</code> is read-only monitoring mode: it still prints <code>stale</code> / low-confidence <code>rotated</code> / <code>inflight</code> results, but exits <code>0</code> so prompts, statuslines, and dashboards can display the warning without breaking the shell. Usage errors and source-read failures are not masked.</p>
+<p>In <code>--json</code> output, <code>kind</code>, <code>subtype</code> and <code>confidence</code> are the fields to script against. The human-readable <code>detail</code> is always in English, whatever the display language, so the JSON doesn&#39;t change with <code>--lang</code> / <code>MAT_LANG</code>. The table output and the TUI show the detail in the selected language.</p>
 <p>Exit codes:</p>
 <div class="table-wrap"><table>
 <thead>

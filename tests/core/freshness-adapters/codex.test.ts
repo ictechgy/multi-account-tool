@@ -50,7 +50,7 @@ describe('codexAdapter — identity-aware 비교', () => {
     const r = codexAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('high');
-    expect(r.detail).toMatch(/account_id 변경/);
+    expect(r.localizedDetail).toMatch(/account_id 변경/);
   });
 
   it('API key 모드 — 동일 키 → fresh, 다른 키 → stale', () => {
@@ -66,7 +66,7 @@ describe('codexAdapter — identity-aware 비교', () => {
     const r = codexAdapter.compare(SAVE_AS, 'not json', '{"tokens":{}}');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/parse 실패/);
+    expect(r.localizedDetail).toMatch(/parse 실패/);
   });
 
   it('JSON array (object 아님) → rotated both (low) — parseJsonObject 의 array reject 회귀 가드', () => {
@@ -75,12 +75,12 @@ describe('codexAdapter — identity-aware 비교', () => {
     const r = codexAdapter.compare(SAVE_AS, '[]', '{"tokens":{}}');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/parse 실패/);
+    expect(r.localizedDetail).toMatch(/parse 실패/);
   });
 
   it('미지원 saveAs → low confidence fallback (다른 source 보호)', () => {
     const r = codexAdapter.compare('unknown.json', '{}', '{}');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/미지원 source/);
+    expect(r.localizedDetail).toMatch(/미지원 source/);
   });
 });

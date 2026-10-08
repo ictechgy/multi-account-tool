@@ -39,6 +39,7 @@
 import { maskIdentifier } from '../errors.js';
 import type { CompareResult, SourceAdapter } from '../freshness.js';
 import { parseJsonObject } from './_shared.js';
+import { freshnessDetail } from '../freshness-detail.js';
 
 interface KeychainOuter {
   value?: unknown;
@@ -99,7 +100,7 @@ function compareClaude(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'Claude credentials JSON parse 실패 — 손상 가능성'
+      ...freshnessDetail('claudeParseFailed')
     };
   }
   const accountVerdict = checkAccountIdentity(s, l);
@@ -126,7 +127,7 @@ function checkAccountIdentity(s: Unwrapped, l: Unwrapped): CompareResult | null 
     return {
       kind: 'stale',
       confidence: 'low',
-      detail: 'KeychainStored wrapper 비대칭 — credentials 손상 추정'
+      ...freshnessDetail('claudeWrapperAsymmetric')
     };
   }
   const sIsString = typeof s.account === 'string';
@@ -136,7 +137,7 @@ function checkAccountIdentity(s: Unwrapped, l: Unwrapped): CompareResult | null 
       return {
         kind: 'stale',
         confidence: 'high',
-        detail: `Keychain account 변경: ${maskIdentifier(s.account!)} → ${maskIdentifier(l.account!)}`
+        ...freshnessDetail('keychainAccountChanged', maskIdentifier(s.account!), maskIdentifier(l.account!))
       };
     }
     return null;
@@ -145,7 +146,7 @@ function checkAccountIdentity(s: Unwrapped, l: Unwrapped): CompareResult | null 
     return {
       kind: 'stale',
       confidence: 'low',
-      detail: 'KeychainStored.account 비대칭 — credentials 손상 추정'
+      ...freshnessDetail('claudeAccountAsymmetric')
     };
   }
   return null;
@@ -159,7 +160,7 @@ function compareClaudeCredentials(s: ClaudeCredentials, l: ClaudeCredentials): C
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'claudeAiOauth 필드 부재 — API key 모드 또는 손상'
+      ...freshnessDetail('claudeOauthMissing')
     };
   }
   const subscriptionVerdict = checkSubscriptionType(sOauth.subscriptionType, lOauth.subscriptionType);
@@ -186,13 +187,13 @@ function checkSubscriptionType(
     return {
       kind: 'stale',
       confidence: 'medium',
-      detail: `subscriptionType 변경 — 다른 plan/계정 추정`
+      ...freshnessDetail('claudeSubscriptionChanged')
     };
   }
   return {
     kind: 'stale',
     confidence: 'low',
-    detail: 'subscriptionType 비대칭 — identity 확정 불가'
+    ...freshnessDetail('claudeSubscriptionAsymmetric')
   };
 }
 
@@ -217,7 +218,7 @@ function compareOauthTokens(
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'OAuth token 양쪽 모두 부재 — credentials 손상 추정'
+      ...freshnessDetail('claudeTokensMissing')
     };
   }
   const tokenChanged =
@@ -228,7 +229,7 @@ function compareOauthTokens(
       kind: 'rotated',
       subtype: 'value-only',
       confidence: 'high',
-      detail: 'subscriptionType 동일, OAuth token rotation'
+      ...freshnessDetail('claudeTokenRotation')
     };
   }
   if (s.expiresAt !== l.expiresAt) {
@@ -236,14 +237,14 @@ function compareOauthTokens(
       kind: 'rotated',
       subtype: 'meta-only',
       confidence: 'high',
-      detail: 'token 동일, expiresAt 만 변경'
+      ...freshnessDetail('claudeExpiresOnly')
     };
   }
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'medium',
-    detail: '기타 OAuth 필드 변경 (scopes 등)'
+    ...freshnessDetail('claudeOtherFields')
   };
 }
 
@@ -254,7 +255,7 @@ export const claudeAdapter: SourceAdapter = {
         kind: 'rotated',
         subtype: 'both',
         confidence: 'low',
-        detail: `Claude adapter: 미지원 source ${saveAs}`
+        ...freshnessDetail('unsupportedSource', 'Claude', saveAs)
       };
     }
     return compareClaude(stored, live);
