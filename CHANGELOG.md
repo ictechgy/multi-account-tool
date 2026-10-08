@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-09
+
 ### Changed
 
 - **core 오류·경고 메시지 번역 (i18n 3단계 4단계, #167).** plugin 로드·검증 진단(`cli-defs-plugin.ts`,
