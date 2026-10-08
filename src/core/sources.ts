@@ -30,6 +30,7 @@ import { writeFileAtomic } from './io-atomic.js';
 import { directorySourceExists, readDirectorySource, removeDirectorySource, writeDirectorySource } from './directory-source.js';
 import { readOsKeyringSerialized, writeOsKeyringSerialized, osKeyringExists } from './os-keyring.js';
 import { runCommand, type CmdResult } from './run-command.js';
+import { msg } from '../i18n/index.js';
 import {
   readWindowsCredentialSourceSerialized,
   windowsCredentialSourceExists,
@@ -98,7 +99,7 @@ const KEYCHAIN_RESTRICT_ACL_ENV = 'MAT_KEYCHAIN_RESTRICT_ACL';
  */
 function assertNever(x: never): never {
   const type = (x as { type?: unknown }).type;
-  throw new Error('처리되지 않은 source type: ' + String(type));
+  throw new Error(msg().credentials.unhandledSourceType(String(type)));
 }
 
 function keychainErr(stage: string, r: CmdResult): KeychainCommandError {
@@ -129,9 +130,7 @@ function hasAccount(account?: string): account is string {
  */
 function assertValidKeychainSource(src: KeychainSource): void {
   if (src.account !== undefined && !hasAccount(src.account)) {
-    throw new Error(
-      `KeychainSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${formatServiceForDisplay(src.service)}`
-    );
+    throw new Error(msg().credentials.keychainInvalidAccount(formatServiceForDisplay(src.service)));
   }
 }
 
@@ -179,7 +178,7 @@ async function keychainGetValue(service: string, account?: string): Promise<stri
   const r = await runCommand(SECURITY_BIN, args);
   if (r.code === 0) return r.stdout.replace(/\n$/, '');
   if (r.code === KEYCHAIN_NOT_FOUND_CODE || KEYCHAIN_NOT_FOUND_RE.test(r.stderr)) return null;
-  throw keychainErr('읽기', r);
+  throw keychainErr(msg().credentials.keychainStages.read, r);
 }
 
 /**
@@ -243,7 +242,7 @@ async function deleteKeychainEntry(service: string, account: string): Promise<vo
     'delete-generic-password', '-s', service, '-a', account
   ]);
   if (delRes.code !== 0) {
-    throw keychainErr('백업 항목 삭제', delRes);
+    throw keychainErr(msg().credentials.keychainStages.deleteBackupEntry, delRes);
   }
 }
 
@@ -275,10 +274,10 @@ async function addKeychainEntryOrRollback(
   if (backup) {
     const rb = await runCommand(SECURITY_BIN, keychainAddArgs(service, backup.account, backup.value, srcAllowsAnyApp));
     if (rb.code !== 0) {
-      rollbackNote = ` / 백업 복구도 실패 (code=${rb.code}): ${redactMessage(rb.stderr)}`;
+      rollbackNote = msg().credentials.keychainRollbackFailed(rb.code, redactMessage(rb.stderr));
     }
   }
-  throw new KeychainCommandError('쓰기', addRes.code, addRes.stderr || addRes.stdout, rollbackNote);
+  throw new KeychainCommandError(msg().credentials.keychainStages.write, addRes.code, addRes.stderr || addRes.stdout, rollbackNote);
 }
 
 /** Keychain 항목 존재 여부. account 지정 시 해당 acct 항목만 검사. */
@@ -292,7 +291,7 @@ async function keychainExists(service: string, account?: string): Promise<boolea
 /** Keychain source 를 직렬화된 JSON 문자열로 캡처 (저장용). */
 async function readKeychainSerialized(src: KeychainSource): Promise<string | null> {
   if (process.platform !== 'darwin') {
-    throw new Error('keychain source 는 macOS 에서만 지원됩니다.');
+    throw new Error(msg().credentials.keychainMacOnly);
   }
   assertValidKeychainSource(src);
   const value = await keychainGetValue(src.service, src.account);
@@ -315,14 +314,14 @@ async function readKeychainSerialized(src: KeychainSource): Promise<string | nul
  */
 async function writeKeychainSerialized(src: KeychainSource, serialized: string): Promise<void> {
   if (process.platform !== 'darwin') {
-    throw new Error('keychain source 는 macOS 에서만 지원됩니다.');
+    throw new Error(msg().credentials.keychainMacOnly);
   }
   assertValidKeychainSource(src);
   const stored = JSON.parse(serialized) as KeychainStored;
   // corrupt / legacy backup 방어: value 가 문자열이 아니면 add-generic-password 의 -w
   // argv 가 'undefined' 또는 'null' 리터럴로 build 되는 사고를 차단.
   if (typeof stored.value !== 'string') {
-    throw new Error('keychain backup 이 손상되었습니다: value 필드가 문자열이 아닙니다.');
+    throw new Error(msg().credentials.keychainBackupCorrupted);
   }
   // 우선순위: src.account (정의 명시) > stored.account (캡처 시 기록) > $USER > 'default'.
   // hasAccount 로 빈 문자열 fallthrough 방지 — internal 호출에 빈 문자열이 들어와도

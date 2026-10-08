@@ -44,6 +44,7 @@
 import { comparablePath } from './paths.js';
 import { resolvePathIdentitySync } from './path-identity.js';
 import type { CliDef, Source } from './types.js';
+import { msg } from '../i18n/index.js';
 
 /** keychain / os-keyring 은 같은 논리적 자원(OS keyring 의 service+account)의 플랫폼별 표현이다. */
 export type LiveResourceKind = 'file' | 'os-keyring-family' | 'win-credential';
@@ -307,7 +308,7 @@ export function findSourceCollision(src: Source, index: LiveResourceIndex): Omit
   const r = resolvedLiveResourceKeyOf(src);
   if (r === null) return undefined;
   // 해석 실패는 **거부**다. 통과로 접으면 공격자는 해석을 실패시키기만 하면 된다.
-  if (r === 'unresolvable') return { kind: 'file', ownerCliId: UNRESOLVABLE_OWNER, declared: declaredOf(src) };
+  if (r === 'unresolvable') return { kind: 'file', ownerCliId: unresolvableOwner(), declared: declaredOf(src) };
   const k = r.key;
   let owner = index.lookup(k);
   // 경로 해석으로 접히지 않는 축: hardlink. `nlink === 1` 이면 그 inode 를 가리키는 디렉토리
@@ -320,4 +321,6 @@ export function findSourceCollision(src: Source, index: LiveResourceIndex): Omit
 }
 
 /** 해석 실패 거부의 소유자 자리표시자. 실제 cliId 가 아니다. */
-export const UNRESOLVABLE_OWNER = '(해석 불가)';
+export function unresolvableOwner(): string {
+  return msg().pluginDefs.unresolvableOwner;
+}

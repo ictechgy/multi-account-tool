@@ -7,6 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { redactSecretLikeText } from './redaction.js';
+import { msg } from '../i18n/index.js';
 
 /** maskIdentifier 의 fingerprint 길이 (hex 자리수). 정책 변경 시 단일 source. */
 const MASK_FINGERPRINT_LENGTH = 12;
@@ -61,7 +62,7 @@ export class UsageError extends Error {
 export class UnknownCliError extends UsageError {
   readonly cliId: string;
   constructor(cliId: string) {
-    super(`알 수 없는 CLI: ${cliId}`);
+    super(msg().credentials.unknownCli(cliId));
     this.name = 'UnknownCliError';
     this.cliId = cliId;
   }
@@ -105,11 +106,7 @@ export class KeychainAccountMissingError extends Error {
   readonly service: string;
   constructor(service: string) {
     const displayService = formatServiceForDisplay(service);
-    super(redactMessage(
-      `keychain service '${displayService}' 의 기존 항목 account 를 파악할 수 없어 안전 swap 을 거부합니다. ` +
-      `service-only 삭제는 동일 service 의 타 항목까지 영향을 줄 수 있어 data loss 위험이 있습니다. ` +
-      `Keychain Access.app 에서 해당 service 의 항목을 수동 정리 후 다시 시도하세요.`
-    ));
+    super(redactMessage(msg().credentials.keychainAccountMissing(displayService)));
     this.name = 'KeychainAccountMissingError';
     this.service = service;
   }
@@ -130,7 +127,7 @@ export class KeychainCommandError extends Error {
   readonly exitCode: number;
   /** `suffix` 는 이미 redact 된 부가 문구(예: 롤백 실패 note)로, 그대로 뒤에 붙는다. */
   constructor(stage: string, exitCode: number, detail: string, suffix = '') {
-    super(`keychain ${stage} 실패 (code=${exitCode}): ${redactMessage(detail)}${suffix}`);
+    super(msg().credentials.keychainCommandFailed(stage, exitCode, redactMessage(detail), suffix));
     this.name = 'KeychainCommandError';
     this.stage = stage;
     this.exitCode = exitCode;
@@ -162,16 +159,8 @@ export class OsKeyringAccountMissingError extends Error {
    *   2 이상이면 collision (deletes-all 로 sibling 파괴 위험). 둘 다 안전 swap 거부.
    */
   constructor(service: string, matchCount: number) {
-    const reason = matchCount > 1
-      ? `${matchCount} 개의 항목이 매칭되어(collision)`
-      : `기존 항목의 account 를 식별할 수 없어`;
     const displayService = formatServiceForDisplay(service);
-    super(redactMessage(
-      `os-keyring service '${displayService}' 에서 ${reason} 안전 swap 을 거부합니다. ` +
-      `secret-tool clear 는 매칭 항목을 전부 삭제하므로, account 를 확정하지 못한 채 진행하면 ` +
-      `무관한 자격증명까지 손실될 수 있습니다. ` +
-      `secret-tool 또는 keyring 관리 도구에서 해당 service 의 항목을 정리 후 다시 시도하세요.`
-    ));
+    super(redactMessage(msg().credentials.osKeyringAccountMissing(displayService, matchCount)));
     this.name = 'OsKeyringAccountMissingError';
     this.service = service;
   }
@@ -285,9 +274,9 @@ export function errorMessage(err: unknown): string {
  * 단일 라인 컨텍스트 (예: first import 의 per-cli failure summary) 에는 errorMessage 유지.
  */
 export function describeError(err: unknown): string {
-  const msg = errorMessage(err);
+  const message = errorMessage(err);
   if (err instanceof KeychainAccountMissingError || err instanceof OsKeyringAccountMissingError) {
-    return `${msg}\n→ Service: ${formatServiceForDisplay(err.service)}`;
+    return `${message}\n→ Service: ${formatServiceForDisplay(err.service)}`;
   }
-  return msg;
+  return message;
 }

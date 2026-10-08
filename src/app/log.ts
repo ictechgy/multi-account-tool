@@ -14,6 +14,7 @@ import { dirname } from 'node:path';
 
 import { errorMessage } from '../core/errors.js';
 import { appLogPath } from '../core/paths.js';
+import { msg } from '../i18n/index.js';
 
 export async function appendAppLogBestEffort(message: string): Promise<void> {
   const line = `${new Date().toISOString()} ${message}\n`;
@@ -30,11 +31,11 @@ export async function appendAppLogBestEffort(message: string): Promise<void> {
         return;
       } catch (retryErr) {
         process.stderr.write(
-          `[mat] appLog 쓰기 실패 (mkdir retry): ${errorMessage(retryErr)}\n`
+          `${msg().coreValidation.appLogWriteFailedRetry(errorMessage(retryErr))}\n`
         );
         return;
       }
     }
-    process.stderr.write(`[mat] appLog 쓰기 실패: ${errorMessage(err)}\n`);
+    process.stderr.write(`${msg().coreValidation.appLogWriteFailed(errorMessage(err))}\n`);
   }
 }

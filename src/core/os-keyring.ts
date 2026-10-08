@@ -38,6 +38,7 @@ import {
   type OsKeyringFailureKind
 } from './errors.js';
 import type { KeychainStored, OsKeyringSource } from './types.js';
+import { msg } from '../i18n/index.js';
 
 /** Linux `secret-tool` 절대경로. PATH shim 공격을 방지 (SECURITY_BIN 미러). */
 const SECRET_TOOL_BIN = '/usr/bin/secret-tool';
@@ -76,9 +77,7 @@ function hasAccount(account?: string): account is string {
  */
 function assertValidOsKeyringSource(src: OsKeyringSource): void {
   if (src.account !== undefined && !hasAccount(src.account)) {
-    throw new Error(
-      `OsKeyringSource.account 가 유효하지 않습니다 (빈 문자열 / NUL 포함 등): service=${formatServiceForDisplay(src.service)}`
-    );
+    throw new Error(msg().credentials.osKeyringInvalidAccount(formatServiceForDisplay(src.service)));
   }
 }
 
@@ -118,8 +117,8 @@ function osKeyringErr(stage: string, r: CmdResult): Error {
   // 미설치(ENOENT) 메시지에는 file-backend 탈출구를 함께 안내한다 — keyring 을 안 쓰는
   // 사용자가 불필요한 패키지 설치 대신 file backend 전환을 택할 수 있도록 (#59 quad-review LOW).
   // CLI-중립 문구로 둔다 (primitive 라 특정 env 명을 결합하지 않음 — CLI 별 env 는 README).
-  const msg = osKeyringErrMessage(stage, r);
-  return new OsKeyringCommandError(osKeyringFailureKind(r), redactMessage(msg));
+  const message = osKeyringErrMessage(stage, r);
+  return new OsKeyringCommandError(osKeyringFailureKind(r), redactMessage(message));
 }
 
 function osKeyringFailureKind(r: CmdResult): OsKeyringFailureKind {
@@ -132,19 +131,16 @@ function osKeyringFailureKind(r: CmdResult): OsKeyringFailureKind {
  * 와 daemon-down(code>0)을 구분해 정확한 원인·해결 방향을 안내한다 (#73).
  */
 function osKeyringErrMessage(stage: string, r: CmdResult): string {
+  const m = msg().credentials;
   if (r.code !== -1) {
-    return `os-keyring ${stage} 실패 (code=${r.code}): Secret Service keyring daemon 미응답 또는 접근 거부. ` +
-      `gnome-keyring 등 keyring daemon 활성화를 확인하세요.`;
+    return m.osKeyringDaemonUnavailable(stage, r.code);
   }
   if (r.spawnErrno === 'ENOENT') {
-    return `os-keyring ${stage} 실패: secret-tool 이 미설치입니다 ` +
-      `(${SECRET_TOOL_BIN} 부재, ENOENT). libsecret-tools 패키지를 설치하거나, ` +
-      `해당 CLI 가 file backend(평문 파일) 모드를 지원하면 그 모드로 전환하세요 (README 참고).`;
+    return m.osKeyringNotInstalled(stage, SECRET_TOOL_BIN);
   }
   // EACCES(실행 권한 없음)·ENOTDIR·실행포맷 오류 등 ENOENT 아닌 spawn 실패.
   // 미설치가 아니므로 패키지 설치 안내 대신 실행 권한/바이너리 점검을 안내한다 (#73).
-  return `os-keyring ${stage} 실패: secret-tool 을 실행할 수 없습니다 ` +
-    `(${SECRET_TOOL_BIN}, errno=${r.spawnErrno ?? '미상'}). 실행 권한 또는 바이너리 상태를 확인하세요.`;
+  return m.osKeyringSpawnFailed(stage, SECRET_TOOL_BIN, r.spawnErrno);
 }
 
 /** block-header `[/N]` 라인 정규식 (단독 라인). */
@@ -230,9 +226,9 @@ async function osKeyringBackup(
   // tool/daemon unavailable 은 모두 fail-closed. ENOENT 를 yaml fallback 으로 넘기면
   // keyring 사용자에게 stale file credential 이 적용될 수 있어 wrong-account 위험이 크다.
   if (isSecretToolMissing(r)) {
-    throw osKeyringErr('조회', r);
+    throw osKeyringErr(msg().credentials.osKeyringStages.lookup, r);
   }
-  if (r.code !== 0) throw osKeyringErr('조회', r);
+  if (r.code !== 0) throw osKeyringErr(msg().credentials.osKeyringStages.lookup, r);
   const count = blockCount(r.stdout);
   if (count === 0) return null;
   if (count > 1) throw new OsKeyringAccountMissingError(service, count);
@@ -240,7 +236,7 @@ async function osKeyringBackup(
   if (value == null) {
     // raw output(secret co-located on stdout)은 절대 포함하지 않는다 (plan F4).
     // 구조적 메시지지만 redact 로도 감싼다 (심층 방어).
-    throw new Error(redactMessage('os-keyring search 결과 파싱 실패: 1 블록인데 secret 을 추출하지 못했습니다.'));
+    throw new Error(redactMessage(msg().credentials.osKeyringParseFailed));
   }
   return { value, account: parseSingleAccount(r.stderr) };
 }
@@ -260,7 +256,7 @@ async function osKeyringStore(service: string, account: string, value: string): 
 /** 2-attribute(service+account) 매칭 항목 삭제 (deleteKeychainEntry 미러). */
 async function osKeyringClear(service: string, account: string): Promise<void> {
   const r = await runCommand(SECRET_TOOL_BIN, ['clear', 'service', service, 'account', account]);
-  if (r.code !== 0) throw osKeyringErr('항목 삭제', r);
+  if (r.code !== 0) throw osKeyringErr(msg().credentials.osKeyringStages.deleteEntry, r);
 }
 
 /**
@@ -286,11 +282,11 @@ async function osKeyringStoreOrRollback(
   if (backup && backup.account != null) {
     const rb = await osKeyringStore(service, backup.account, backup.value);
     if (rb.code !== 0) {
-      rollbackNote = ` / 백업 복구도 실패 (code=${rb.code})`;
+      rollbackNote = msg().credentials.osKeyringRollbackFailed(rb.code);
       kind = 'write-and-rollback-failed';
     }
   }
-  throw new OsKeyringCommandError(kind, redactMessage(`os-keyring 쓰기 실패 (code=${res.code})${rollbackNote}`));
+  throw new OsKeyringCommandError(kind, redactMessage(msg().credentials.osKeyringWriteFailed(res.code, rollbackNote)));
 }
 
 /** os-keyring source 를 직렬화된 JSON 문자열로 캡처 (readKeychainSerialized 미러). */
@@ -335,7 +331,7 @@ async function writeOsKeyringWithPolicy(
   // corrupt / legacy backup 방어: value 가 문자열이 아니면 store 의 stdin 에
   // 'undefined'/'null' 리터럴이 들어가는 사고를 차단 (writeKeychainSerialized 미러).
   if (typeof stored.value !== 'string') {
-    throw new Error('os-keyring backup 이 손상되었습니다: value 필드가 문자열이 아닙니다.');
+    throw new Error(msg().credentials.osKeyringBackupCorrupted);
   }
   const account = hasAccount(src.account)
     ? src.account
@@ -388,7 +384,7 @@ export async function writeOsKeyringSerializedStrict(src: OsKeyringSource, seria
 export async function osKeyringExists(src: OsKeyringSource): Promise<boolean> {
   assertValidOsKeyringSource(src);
   const r = await rawSearch(src.service, src.account);
-  if (r.code !== 0) throw osKeyringErr('조회', r);
+  if (r.code !== 0) throw osKeyringErr(msg().credentials.osKeyringStages.lookup, r);
   const count = blockCount(r.stdout);
   if (count > 1) throw new OsKeyringAccountMissingError(src.service, count);
   return count >= 1;
@@ -403,7 +399,7 @@ export async function osKeyringExists(src: OsKeyringSource): Promise<boolean> {
 export async function osKeyringExistsStrict(src: OsKeyringSource): Promise<boolean> {
   assertStrictOsKeyringSource(src);
   const r = await rawSearch(src.service, src.account);
-  if (r.code !== 0) throw osKeyringErr('조회', r);
+  if (r.code !== 0) throw osKeyringErr(msg().credentials.osKeyringStages.lookup, r);
   const count = blockCount(r.stdout);
   if (count > 1) throw new OsKeyringAccountMissingError(src.service, count);
   return count >= 1;

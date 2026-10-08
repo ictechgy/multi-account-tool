@@ -13,6 +13,9 @@ import { formatters } from './en/formatters.js';
 import { validators } from './en/validators.js';
 import { widgets } from './en/widgets.js';
 import { freshnessDetails } from './en/freshnessDetails.js';
+import { pluginDefs } from './en/pluginDefs.js';
+import { coreValidation } from './en/coreValidation.js';
+import { credentials } from './en/credentials.js';
 
 export const en = {
   lang: {
@@ -44,7 +47,10 @@ export const en = {
   formatters,
   validators,
   widgets,
-  freshnessDetails
+  freshnessDetails,
+  pluginDefs,
+  coreValidation,
+  credentials
 };
 
 export type Messages = typeof en;

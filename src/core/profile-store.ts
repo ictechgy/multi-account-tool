@@ -19,6 +19,7 @@ import { randomBytes } from 'node:crypto';
 import { constants, promises as realFs } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
+import { msg } from '../i18n/index.js';
 import { writeFileAtomic } from './io-atomic.js';
 import {
   cliProfilesDir,
@@ -87,7 +88,7 @@ export async function createProfile(
   validateCliId(cliId);
   const name = validateProfileName(rawName);
   if (await profileExists(cliId, name)) {
-    throw new Error(`이미 존재하는 프로필입니다: ${name}`);
+    throw new Error(msg().coreValidation.profileAlreadyExists(name));
   }
   await fs.mkdir(profileDir(cliId, name), { recursive: true, mode: 0o700 });
   const now = new Date().toISOString();
@@ -167,7 +168,7 @@ export async function renameProfile(
   const safeNew = validateProfileName(rawNewName);
   if (safeOld === safeNew) return;
   if (await profileExists(cliId, safeNew)) {
-    throw new Error(`이미 존재하는 프로필 이름입니다: ${safeNew}`);
+    throw new Error(msg().coreValidation.profileNameAlreadyExists(safeNew));
   }
   await fs.rename(profileDir(cliId, safeOld), profileDir(cliId, safeNew));
   try {
@@ -279,11 +280,11 @@ export async function commitStagedFile(
   const stagingBase = basename(stagingPath);
   const suffix = stagingBase.startsWith(finalBase) ? stagingBase.slice(finalBase.length) : null;
   if (dirname(stagingPath) !== dirname(finalPath) || suffix === null || !STAGING_SUFFIX_RE.test(suffix)) {
-    throw new Error('staging 경로가 예상 패턴(<file>.recap-<hex>)이 아닙니다 (commit 거부).');
+    throw new Error(msg().coreValidation.stagingPathUnexpected);
   }
   const lst = await fs.lstat(stagingPath);
   if (lst.isSymbolicLink() || !lst.isFile()) {
-    throw new Error('staging 이 일반 파일이 아닙니다 (symlink/디렉토리 등 — commit 거부).');
+    throw new Error(msg().coreValidation.stagingNotRegularFile);
   }
   await fs.rename(stagingPath, finalPath);
 }

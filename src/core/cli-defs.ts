@@ -22,6 +22,7 @@ import type { LiveResourceKey, LiveResourceOwner, ReservedLiveResource } from '.
 import { gooseConfigSources, gooseProviderCacheSources } from './goose-provider-cache.js';
 import type { CliDef, Source } from './types.js';
 import { assertValidSourceList } from './validators.js';
+import { msg } from '../i18n/index.js';
 
 /**
  * Claude Code 의 자격증명 source.
@@ -443,7 +444,7 @@ export function getAllCliDefs(): CliDef[] {
   const liveResources = buildLiveResourceIndex(BUILTIN_CLI_DEFS, reservedLiveResources());
   for (const def of userDefs) {
     if (builtinIds.has(def.id)) {
-      collectedWarnings.push(`${def.id}: builtin 과 id 충돌 — plugin 무시됨`);
+      collectedWarnings.push(msg().pluginDefs.loadBuiltinIdCollision(def.id));
       continue;
     }
     // plugin 이 builtin(또는 이미 수락된 다른 plugin)의 라이브 자격증명을 주장하면 def 전체를
@@ -453,10 +454,14 @@ export function getAllCliDefs(): CliDef[] {
     if (collision) {
       const where = provenance.get(def.id) ?? def.id;
       collectedWarnings.push(
-        `${where}: plugin '${def.id}' 의 sources[${collision.sourceIndex}] 가 ` +
-        `builtin '${collision.ownerCliId}' 소유의 라이브 자격증명(${collision.kind}: ${collision.declared})을 ` +
-        `주장하여 plugin 전체를 로드하지 않았습니다. ` +
-        `저장된 프로필은 ~/.multi-account-tool/profiles/${def.id}/ 에 그대로 있으며 삭제되지 않았습니다.`
+        msg().pluginDefs.loadBuiltinLiveResourceCollision(
+          where,
+          def.id,
+          collision.sourceIndex,
+          collision.ownerCliId,
+          collision.kind,
+          collision.declared
+        )
       );
       continue;
     }
