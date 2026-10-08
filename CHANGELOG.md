@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **freshness detail 번역 — `--json` 의 `detail` 은 항상 영어 (i18n 3단계, #167).** freshness 어댑터
+  (claude, codex, gemini, opencode, goose, crush)와 공통 분기의 detail 문구를 카탈로그
+  (`src/i18n/messages/{en,ko}/freshnessDetails.ts`)로 옮겼다. `CompareResult` 는 이제 두 문구를 갖는다:
+  `detail`(영어, `mat freshness --json` 에 나가는 안정된 값)과 `localizedDetail`(현재 언어, 표 출력과
+  TUI 표시용, JSON 에서는 빠짐). **`mat freshness --json` 의 `detail` 이 한국어에서 영어로 바뀐다** —
+  detail 문구를 매칭하던 스크립트는 `kind` / `subtype` / `confidence` 로 옮기는 것을 권장한다. 한국어
+  화면의 문구는 그대로다 (Crush 의 미지원 source 문구만 다른 어댑터처럼 `미지원 source` 로 통일).
+
 - **하드닝 sentinel 판정을 메시지 접두어에서 오류 타입으로 바꿨다 (i18n 3단계 준비, #167).** 롤백
   집계(`switcher.ts` 의 `errorText`), Goose provider 캐시의 `providerPublicError`, directory-source 의
   `publicError` 가 `unsafe directory source:` / `unsafe Goose provider cache …` / `profile capture …` 같은

@@ -20,6 +20,7 @@
 import { maskIdentifier } from '../errors.js';
 import type { CompareKind, CompareResult, RotatedSubtype, SourceAdapter } from '../freshness.js';
 import { parseJsonObject } from './_shared.js';
+import { freshnessDetail } from '../freshness-detail.js';
 
 interface ProviderAuth {
   type?: 'oauth' | 'api';
@@ -40,25 +41,25 @@ function compareProvider(stored: ProviderAuth, live: ProviderAuth): CompareResul
       return {
         kind: 'stale',
         confidence: 'high',
-        detail: `accountId 변경: ${maskIdentifier(stored.accountId)} → ${maskIdentifier(live.accountId)}`
+        ...freshnessDetail('opencodeAccountChanged', maskIdentifier(stored.accountId), maskIdentifier(live.accountId))
       };
     }
     const tokenChanged = stored.access !== live.access || stored.refresh !== live.refresh;
     if (tokenChanged) {
-      return { kind: 'rotated', subtype: 'value-only', confidence: 'high', detail: 'OAuth 토큰 rotation' };
+      return { kind: 'rotated', subtype: 'value-only', confidence: 'high', ...freshnessDetail('opencodeTokenRotation') };
     }
-    return { kind: 'rotated', subtype: 'meta-only', confidence: 'high', detail: 'expires 등 캐시 필드만 변경' };
+    return { kind: 'rotated', subtype: 'meta-only', confidence: 'high', ...freshnessDetail('opencodeCacheOnly') };
   }
   if (stored.type === 'api' && live.type === 'api') {
     return stored.key === live.key
-      ? { kind: 'fresh', confidence: 'high', detail: 'API key 동일' }
-      : { kind: 'stale', confidence: 'high', detail: 'API key 변경' };
+      ? { kind: 'fresh', confidence: 'high', ...freshnessDetail('opencodeApiKeySame') }
+      : { kind: 'stale', confidence: 'high', ...freshnessDetail('opencodeApiKeyChanged') };
   }
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'medium',
-    detail: `provider type 불일치: stored=${stored.type ?? 'unknown'} live=${live.type ?? 'unknown'}`
+    ...freshnessDetail('opencodeTypeMismatch', stored.type ?? 'unknown', live.type ?? 'unknown')
   };
 }
 
@@ -93,7 +94,7 @@ function compareOpencode(stored: string, live: string): CompareResult {
       kind: 'rotated',
       subtype: 'both',
       confidence: 'low',
-      detail: 'OpenCode auth.json JSON parse 실패'
+      ...freshnessDetail('opencodeParseFailed')
     };
   }
   const allProviders = new Set([...Object.keys(s), ...Object.keys(l)]);
@@ -108,7 +109,7 @@ function compareOpencode(stored: string, live: string): CompareResult {
       result = {
         kind: 'stale',
         confidence: 'high',
-        detail: `provider ${provider} 가 한쪽에만 존재`
+        ...freshnessDetail('opencodeProviderOneSide', provider)
       };
     }
     worst = pickWorse(worst, result);
@@ -123,7 +124,7 @@ export const opencodeAdapter: SourceAdapter = {
         kind: 'rotated',
         subtype: 'both',
         confidence: 'low',
-        detail: `OpenCode adapter: 미지원 source ${saveAs}`
+        ...freshnessDetail('unsupportedSource', 'OpenCode', saveAs)
       };
     }
     return compareOpencode(stored, live);

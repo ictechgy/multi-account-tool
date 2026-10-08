@@ -386,6 +386,8 @@ Each source is classified into one of four states — `fresh` (byte-identical), 
 
 `--check-only` is read-only monitoring mode: it still prints `stale` / low-confidence `rotated` / `inflight` results, but exits `0` so prompts, statuslines, and dashboards can display the warning without breaking the shell. Usage errors and source-read failures are not masked.
 
+In `--json` output, `kind`, `subtype` and `confidence` are the fields to script against. The human-readable `detail` is always in English, whatever the display language, so the JSON doesn't change with `--lang` / `MAT_LANG`. The table output and the TUI show the detail in the selected language.
+
 Exit codes:
 
 | Code | Meaning |

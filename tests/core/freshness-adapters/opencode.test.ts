@@ -37,7 +37,7 @@ describe('opencodeAdapter — OAuth provider', () => {
     });
     const r = opencodeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
-    expect(r.detail).toMatch(/accountId 변경/);
+    expect(r.localizedDetail).toMatch(/accountId 변경/);
     expect(r.detail).not.toContain('alice-uuid-12345');
     expect(r.detail).not.toContain('bob-uuid-67890');
     expect(r.detail).toMatch(/<hash:[0-9a-f]{12}>/);
@@ -64,7 +64,7 @@ describe('opencodeAdapter — API key provider', () => {
     const live = JSON.stringify({ anthropic: { type: 'api', key: 'sk-new' } });
     const r = opencodeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
-    expect(r.detail).toMatch(/API key 변경/);
+    expect(r.localizedDetail).toMatch(/API key 변경/);
   });
 });
 
@@ -77,7 +77,7 @@ describe('opencodeAdapter — multi-provider pickWorse', () => {
     });
     const r = opencodeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
-    expect(r.detail).toMatch(/provider anthropic .* 한쪽/);
+    expect(r.localizedDetail).toMatch(/provider anthropic .* 한쪽/);
   });
 
   it('OpenAI rotated + Anthropic fresh → 통합 결과 rotated', () => {
@@ -112,7 +112,7 @@ describe('opencodeAdapter — 미지원 saveAs / parse 실패', () => {
   it('미지원 saveAs → low confidence', () => {
     const r = opencodeAdapter.compare('unknown.json', '{}', '{}');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/미지원 source/);
+    expect(r.localizedDetail).toMatch(/미지원 source/);
   });
 
   it('parse 실패 → rotated both (low)', () => {
@@ -125,6 +125,6 @@ describe('opencodeAdapter — 미지원 saveAs / parse 실패', () => {
     const r = opencodeAdapter.compare(SAVE_AS, '[]', '{}');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/parse 실패/);
+    expect(r.localizedDetail).toMatch(/parse 실패/);
   });
 });

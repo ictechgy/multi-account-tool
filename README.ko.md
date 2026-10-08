@@ -388,6 +388,8 @@ mat freshness --check-only
 
 `--check-only`는 read-only 모니터링 모드다. `stale` / low-confidence `rotated` / `inflight` 결과를 그대로 출력하지만 exit code는 `0`으로 유지해 프롬프트, statusline, dashboard가 경고를 표시하면서도 shell 흐름을 끊지 않게 한다. 사용 오류나 source 읽기 실패는 숨기지 않는다.
 
+`--json` 출력에서 스크립트가 기준으로 삼을 필드는 `kind`, `subtype`, `confidence`다. 사람이 읽는 `detail`은 표시 언어와 상관없이 항상 영어라서, `--lang` / `MAT_LANG`에 따라 JSON이 바뀌지 않는다. 표 출력과 TUI는 선택한 언어로 detail을 보여 준다.
+
 종료 코드:
 
 | 코드 | 의미 |

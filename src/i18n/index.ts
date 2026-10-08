@@ -39,3 +39,8 @@ export function getLocale(): Locale {
 export function msg(): Messages {
   return CATALOGS[getLocale()];
 }
+
+/** 특정 locale 의 카탈로그 — 언어 설정과 무관한 안정 출력(예: `--json` 의 영어 detail)에 쓴다. */
+export function messagesFor(locale: Locale): Messages {
+  return CATALOGS[locale];
+}

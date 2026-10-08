@@ -53,7 +53,7 @@ describe('gooseAdapter — secrets.yaml provider 매트릭스', () => {
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('value-only');
     expect(r.confidence).toBe('medium');
-    expect(r.detail).toMatch(/값 변경/);
+    expect(r.localizedDetail).toMatch(/값 변경/);
   });
 
   it('provider 키 set 변경 (provider 추가) → stale (medium) — 다른 계정 추정', () => {
@@ -62,7 +62,7 @@ describe('gooseAdapter — secrets.yaml provider 매트릭스', () => {
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('medium');
-    expect(r.detail).toMatch(/provider 키 set 변경/);
+    expect(r.localizedDetail).toMatch(/provider 키 set 변경/);
   });
 
   it('multi-provider — 양쪽 모두 ANTHROPIC + OPENAI, 한 키만 rotation → rotated value-only', () => {
@@ -124,7 +124,7 @@ describe('gooseAdapter — config.yaml routing 매트릭스 (M1 fix)', () => {
     const r = gooseAdapter.compare(YAML_CONFIG, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('medium');
-    expect(r.detail).toMatch(/identity 키 'GOOSE_PROVIDER__TYPE' 값 변경/);
+    expect(r.localizedDetail).toMatch(/identity 키 'GOOSE_PROVIDER__TYPE' 값 변경/);
   });
 
   it('iter 2 Codex-3 #2 fix: GOOSE_PROVIDER 도 stale-on-change 매트릭스', () => {
@@ -132,7 +132,7 @@ describe('gooseAdapter — config.yaml routing 매트릭스 (M1 fix)', () => {
     const live = makeYaml({ GOOSE_PROVIDER: 'b', GOOSE_MODEL: 'm' });
     const r = gooseAdapter.compare(YAML_CONFIG, stored, live);
     expect(r.kind).toBe('stale');
-    expect(r.detail).toMatch(/identity 키 'GOOSE_PROVIDER' 값 변경/);
+    expect(r.localizedDetail).toMatch(/identity 키 'GOOSE_PROVIDER' 값 변경/);
   });
 
 
@@ -156,7 +156,7 @@ describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', ()
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('both');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/provider 키 미감지/);
+    expect(r.localizedDetail).toMatch(/provider 키 미감지/);
   });
 
   it('PR-M: block scalar `|` 가 정식 parse → resolved 값 비교 → rotated value-only (medium)', () => {
@@ -221,7 +221,7 @@ describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', ()
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('both');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/YAML parse 실패/);
+    expect(r.localizedDetail).toMatch(/YAML parse 실패/);
   });
 
   it('PR-M: 한쪽만 invalid YAML + 매트릭스 매칭 → downgrade 로 confidence low', () => {
@@ -231,7 +231,7 @@ describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', ()
     const live = 'ANTHROPIC_API_KEY: sk-VALID\n';
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/YAML parse 실패/);
+    expect(r.localizedDetail).toMatch(/YAML parse 실패/);
   });
 
   it('PR-M quad-review HIGH fix: 동일 본문 + chomping 차이 (`|` clip vs `|-` strip) → false-positive value-only 회귀 차단', () => {
@@ -292,7 +292,7 @@ describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', ()
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/provider 키 미감지/);
+    expect(r.localizedDetail).toMatch(/provider 키 미감지/);
   });
 
   it('PR-M Codex iter 2 LOW fix: multi-document YAML (---) → throw → parse 실패 hint', () => {
@@ -302,7 +302,7 @@ describe('gooseAdapter — H1 empty-matrix + PR-M block scalar 정식 parse', ()
     const live = 'ANTHROPIC_API_KEY: sk-A\n';
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/YAML parse 실패/);
+    expect(r.localizedDetail).toMatch(/YAML parse 실패/);
   });
 });
 
@@ -315,7 +315,7 @@ describe('gooseAdapter — M2 _TOKEN$ regex 제거 (non-provider 흡수 차단)'
     const r = gooseAdapter.compare(YAML_SECRETS, stored, live);
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/provider 키 미감지/);
+    expect(r.localizedDetail).toMatch(/provider 키 미감지/);
   });
 
   it('DATABRICKS_TOKEN 은 명시 매트릭스 유지 — 값 변경 시 rotated value-only', () => {
@@ -360,7 +360,7 @@ describe('gooseAdapter — keyring wrapper', () => {
     const r = gooseAdapter.compare(KEYRING, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('high');
-    expect(r.detail).toMatch(/Keychain account 변경/);
+    expect(r.localizedDetail).toMatch(/Keychain account 변경/);
   });
 
   it('H4: keyring wrapper account XOR (한쪽만 string) → stale low — identity 우회 차단', () => {
@@ -371,7 +371,7 @@ describe('gooseAdapter — keyring wrapper', () => {
     const r = gooseAdapter.compare(KEYRING, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/account 비대칭/);
+    expect(r.localizedDetail).toMatch(/account 비대칭/);
   });
 
   it('iter 2 Codex-3 #3 fix: empty-string account `""` 는 유효 string 으로 취급 (typeof 정밀화)', () => {
@@ -392,7 +392,7 @@ describe('gooseAdapter — keyring wrapper', () => {
     const r = gooseAdapter.compare(KEYRING, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/account 비대칭/);
+    expect(r.localizedDetail).toMatch(/account 비대칭/);
   });
 
   it('iter 2 Codex-3 #3 fix: 양쪽 모두 비-string (number) → keyring 손상 surface', () => {
@@ -403,7 +403,7 @@ describe('gooseAdapter — keyring wrapper', () => {
     const r = gooseAdapter.compare(KEYRING, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/양쪽 모두 비-string/);
+    expect(r.localizedDetail).toMatch(/양쪽 모두 비-string/);
   });
 
   it('keyring wrapper 동일 account + inner YAML rotation → rotated value-only', () => {
@@ -419,7 +419,7 @@ describe('gooseAdapter — keyring wrapper', () => {
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('both');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/parse 실패/);
+    expect(r.localizedDetail).toMatch(/parse 실패/);
   });
 
   it('keyring wrapper value 부재 → rotated both (low)', () => {
@@ -428,7 +428,7 @@ describe('gooseAdapter — keyring wrapper', () => {
     const r = gooseAdapter.compare(KEYRING, stored, live);
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/inner value 부재 또는 비-문자열/);
+    expect(r.localizedDetail).toMatch(/inner value 부재 또는 비-문자열/);
   });
 
   it('byte-identical keyring → fresh (high)', () => {
@@ -457,6 +457,6 @@ describe('gooseAdapter — 미지원 saveAs', () => {
     const r = gooseAdapter.compare('unknown.txt', 'x', 'y');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/미지원 source/);
+    expect(r.localizedDetail).toMatch(/미지원 source/);
   });
 });

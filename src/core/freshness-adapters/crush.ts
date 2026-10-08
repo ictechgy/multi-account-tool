@@ -46,6 +46,7 @@
 
 import type { CompareResult, SourceAdapter } from '../freshness.js';
 import { DANGEROUS_KEYS, parseJsonObject } from './_shared.js';
+import { freshnessDetail, type FreshnessDetail } from '../freshness-detail.js';
 
 /** Crush profile saveAs names from cli-defs (unchanged source locations). */
 const CRUSH_SAVE_AS = new Set(['crush-config.json', 'crush-data.json']);
@@ -73,9 +74,6 @@ const OAUTH_REQUIRED_FIELDS = [
  */
 export const CRUSH_IDENTITY_FIELDS: readonly string[] = [];
 
-/** Conservative detail for every changed Crush source (identity unavailable). */
-const BYTE_DIFF_DETAIL =
-  'Crush OAuth: identity unknown; conservative byte-diff (no confirmed rotation)';
 
 /**
  * Finite integer check for OAuth expires_in / expires_at.
@@ -125,12 +123,12 @@ export function canConfirmOauthRotation(): boolean {
 /**
  * Low-confidence unsafe byte-diff transport shared by every changed path.
  */
-function unsafeByteDiff(detail: string = BYTE_DIFF_DETAIL): CompareResult {
+function unsafeByteDiff(detail: FreshnessDetail = freshnessDetail('crushByteDiff')): CompareResult {
   return {
     kind: 'rotated',
     subtype: 'both',
     confidence: 'low',
-    detail
+    ...detail
   };
 }
 
@@ -172,13 +170,13 @@ function compareCrush(stored: string, live: string): CompareResult {
     return { kind: 'fresh', confidence: 'high' };
   }
 
-  return unsafeByteDiff(BYTE_DIFF_DETAIL);
+  return unsafeByteDiff();
 }
 
 export const crushAdapter: SourceAdapter = {
   compare(saveAs, stored, live) {
     if (!CRUSH_SAVE_AS.has(saveAs)) {
-      return unsafeByteDiff(`Crush adapter: unsupported source ${saveAs}`);
+      return unsafeByteDiff(freshnessDetail('unsupportedSource', 'Crush', saveAs));
     }
     return compareCrush(stored, live);
   }

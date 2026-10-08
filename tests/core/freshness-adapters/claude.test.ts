@@ -77,7 +77,7 @@ describe('claudeAdapter — identity-aware 비교', () => {
     const r = claudeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('high');
-    expect(r.detail).toMatch(/Keychain account 변경/);
+    expect(r.localizedDetail).toMatch(/Keychain account 변경/);
   });
 
   it('KeychainStored wrapper + 동일 account + token rotation → rotated value-only', () => {
@@ -98,7 +98,7 @@ describe('claudeAdapter — identity-aware 비교', () => {
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('both');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/claudeAiOauth 필드 부재/);
+    expect(r.localizedDetail).toMatch(/claudeAiOauth 필드 부재/);
   });
 
   it('JSON parse 실패 → rotated both (low) — 손상 detail', () => {
@@ -106,14 +106,14 @@ describe('claudeAdapter — identity-aware 비교', () => {
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('both');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/parse 실패/);
+    expect(r.localizedDetail).toMatch(/parse 실패/);
   });
 
   it('미지원 saveAs → low confidence fallback', () => {
     const r = claudeAdapter.compare('other.json', '{}', '{}');
     expect(r.kind).toBe('rotated');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/미지원 source/);
+    expect(r.localizedDetail).toMatch(/미지원 source/);
   });
 
   it('기타 OAuth 필드만 변경 (scopes 추가) → rotated both (medium)', () => {
@@ -135,7 +135,7 @@ describe('claudeAdapter — quad-review iter 1 HIGH fix (H3/H4/H5)', () => {
     const r = claudeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/subscriptionType 비대칭/);
+    expect(r.localizedDetail).toMatch(/subscriptionType 비대칭/);
   });
 
   it('H4: KeychainStored account XOR (한쪽만 account) → stale (low) — wrapper 손상 추정', () => {
@@ -146,7 +146,7 @@ describe('claudeAdapter — quad-review iter 1 HIGH fix (H3/H4/H5)', () => {
     const r = claudeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/account 비대칭/);
+    expect(r.localizedDetail).toMatch(/account 비대칭/);
   });
 
   it('H4: wrapper 형태 자체가 비대칭 (한쪽만 wrapper) → stale (low)', () => {
@@ -157,7 +157,7 @@ describe('claudeAdapter — quad-review iter 1 HIGH fix (H3/H4/H5)', () => {
     const r = claudeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/wrapper 비대칭/);
+    expect(r.localizedDetail).toMatch(/wrapper 비대칭/);
   });
 
   it('H5: OAuth token 양쪽 모두 부재 → rotated both (low) — 손상 추정', () => {
@@ -169,7 +169,7 @@ describe('claudeAdapter — quad-review iter 1 HIGH fix (H3/H4/H5)', () => {
     expect(r.kind).toBe('rotated');
     expect(r.subtype).toBe('both');
     expect(r.confidence).toBe('low');
-    expect(r.detail).toMatch(/OAuth token 양쪽 모두 부재/);
+    expect(r.localizedDetail).toMatch(/OAuth token 양쪽 모두 부재/);
   });
 
   it('H5: stored 에 token 있음 + live 에 token 부재 → rotated value-only (high) — 정상 분류 유지', () => {
@@ -201,6 +201,6 @@ describe('claudeAdapter — quad-review iter 1 HIGH fix (H3/H4/H5)', () => {
     const r = claudeAdapter.compare(SAVE_AS, stored, live);
     expect(r.kind).toBe('stale');
     expect(r.confidence).toBe('high');
-    expect(r.detail).toMatch(/Keychain account 변경/);
+    expect(r.localizedDetail).toMatch(/Keychain account 변경/);
   });
 });

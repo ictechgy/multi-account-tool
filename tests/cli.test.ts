@@ -747,3 +747,39 @@ describe('영어 출력 (MAT_LANG=en)', () => {
   });
 });
 
+describe('mat freshness — detail 언어 (JSON 은 항상 영어)', () => {
+  let tmp: TmpHome;
+  const HANGUL = /[\uAC00-\uD7A3]/;
+
+  beforeEach(async () => {
+    tmp = await setupTmpHome();
+    // 저장본만 있고 라이브 부재 → stale (liveMissing)
+    const profileDir = join(tmp.home, '.multi-account-tool/profiles/codex/p');
+    await fs.mkdir(profileDir, { recursive: true });
+    await fs.writeFile(join(profileDir, 'auth.json'), '{"v":1}');
+  });
+
+  afterEach(async () => {
+    await tmp.cleanup();
+  });
+
+  it('--json 의 detail 은 언어 설정과 무관하게 영어이고 localizedDetail 은 없다', () => {
+    for (const lang of ['ko', 'en']) {
+      const result = runMat(['freshness', 'codex', '--profile', 'p', '--json'], tmp.home, { MAT_LANG: lang });
+      expect(result.code).toBe(1);
+      expect(result.stdout).not.toMatch(HANGUL);
+      expect(result.stdout).not.toContain('localizedDetail');
+      const reports = JSON.parse(result.stdout) as Array<{ sources: Array<{ result: { detail?: string } }> }>;
+      expect(reports[0].sources[0].result.detail).toBe('live missing — CLI likely logged out');
+    }
+  });
+
+  it('표 출력은 선택한 언어로 detail 을 보인다', () => {
+    const ko = runMat(['freshness', 'codex', '--profile', 'p'], tmp.home, { MAT_LANG: 'ko' });
+    expect(ko.stdout).toContain('라이브 부재 — CLI 로그아웃 추정');
+    const en = runMat(['freshness', 'codex', '--profile', 'p'], tmp.home, { MAT_LANG: 'en' });
+    expect(en.stdout).toContain('live missing — CLI likely logged out');
+    expect(en.stdout).not.toMatch(HANGUL);
+  });
+});
+
