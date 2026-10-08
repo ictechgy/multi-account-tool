@@ -18,6 +18,7 @@ import { getActiveProfile, setActiveProfile } from './config.js';
 import { assertNoEnvSecretSources } from './env-secret-source.js';
 import { KeychainAccountMissingError, KeychainCommandError, SafetyCheckError, UnknownCliError } from './errors.js';
 import { LiveResourceGuardError } from './live-resource-guard.js';
+import { msg } from '../i18n/index.js';
 import { inspectLiveFreshness, type FreshnessReport } from './freshness.js';
 import { buildProfileIdentity, type IdentitySourceInput } from './profile-identity.js';
 import {
@@ -94,7 +95,7 @@ async function snapshotLiveToProfileUnlocked(
     // 4개 진입점에서 **이 catch 보다 먼저** 끝나고 이후 재적용되지 않기 때문이다. 따라서
     // 나중에 이 메시지를 다시 `providerPublicError` 로 통과시키는 경로를 추가하면 안 된다.
     const value = await readSource(src).catch((err: unknown) => {
-      if (err instanceof Error) err.message = `${err.message} (${src.saveAs}; 'mat doctor' 로 확인)`;
+      if (err instanceof Error) err.message = `${err.message}${msg().credentials.doctorHint(src.saveAs)}`;
       throw err;
     });
     values.push({ src, value });
@@ -231,7 +232,7 @@ async function restoreProfileToLiveUnlocked(
   assertValidSourceList(def.sources);
   assertNoEnvSecretSources(def.sources, 'restore');
   if (!(await profileExists(cliId, profileName))) {
-    throw new Error(`프로필을 찾을 수 없습니다: ${cliId}/${profileName}`);
+    throw new Error(msg().credentials.profileNotFound(cliId, profileName));
   }
   const restored: string[] = [];
   const missing: string[] = [];
@@ -477,10 +478,7 @@ export class UnsavedLiveCredentialsError extends Error {
   readonly cliId: string;
   readonly liveSources: string[];
   constructor(cliId: string, liveSources: string[]) {
-    super(
-      `현재 ${cliId} 로그인이 어떤 프로필에도 저장돼 있지 않아 로그아웃 상태로 전환할 수 없습니다 ` +
-        `(라이브: ${liveSources.join(', ')}). 먼저 '현재 로그인 복사' 로 프로필을 만들어 저장하세요.`
-    );
+    super(msg().credentials.unsavedLiveCredentials(cliId, liveSources.join(', ')));
     this.name = 'UnsavedLiveCredentialsError';
     this.cliId = cliId;
     this.liveSources = liveSources;
@@ -544,10 +542,8 @@ async function safeInspectFreshness(
   try {
     return await inspectLiveFreshness(cliId, profileName);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `[mat] freshness 검사 실패 (swap 진행됨): cli=${cliId} profile=${profileName}: ${msg}\n`
-    );
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`${msg().credentials.freshnessCheckFailed(cliId, profileName, detail)}\n`);
     return undefined;
   }
 }

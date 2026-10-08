@@ -12,6 +12,7 @@
 
 import { isAbsolute } from 'node:path';
 
+import { msg } from '../i18n/index.js';
 import { ValidationError } from './errors.js';
 
 /** filesystem 의 path segment 로 안전한 cli id 형식. 첫 글자는 영문, 이후 영문/숫자/`_`/`-` 만, 1~32자. */
@@ -44,10 +45,10 @@ const SHARE_REL_SEGMENT_RE = /^[a-zA-Z0-9._-]+$/;
  */
 export function validateCliId(cliId: string): string {
   if (typeof cliId !== 'string') {
-    throw new ValidationError('cliId 는 문자열이어야 합니다.', 'cliId');
+    throw new ValidationError(msg().coreValidation.cliIdNotString, 'cliId');
   }
   if (!SAFE_CLI_ID_RE.test(cliId)) {
-    throw new ValidationError(`cliId 가 path segment 로 사용 불가한 형식입니다: ${cliId}`, 'cliId');
+    throw new ValidationError(msg().coreValidation.cliIdInvalidFormat(cliId), 'cliId');
   }
   return cliId;
 }
@@ -64,20 +65,17 @@ export function validateCliId(cliId: string): string {
  */
 export function validateProfileName(rawName: string): string {
   if (typeof rawName !== 'string') {
-    throw new ValidationError('프로필 이름은 문자열이어야 합니다.', 'profileName');
+    throw new ValidationError(msg().coreValidation.profileNameNotString, 'profileName');
   }
   const name = rawName.normalize('NFC');
   if (PROFILE_NAME_RESERVED.has(name)) {
-    throw new ValidationError('"." 또는 ".." 는 프로필 이름으로 사용할 수 없습니다.', 'profileName');
+    throw new ValidationError(msg().coreValidation.profileNameReserved, 'profileName');
   }
   if (/[/\\\x00]/.test(name)) {
-    throw new ValidationError('프로필 이름에 / \\ NUL 은 포함될 수 없습니다.', 'profileName');
+    throw new ValidationError(msg().coreValidation.profileNameForbiddenChars, 'profileName');
   }
   if (!PROFILE_NAME_RE.test(name)) {
-    throw new ValidationError(
-      '프로필 이름은 한글/영문/숫자/_-. 만 사용 가능하며 1~40자 이내여야 합니다.',
-      'profileName'
-    );
+    throw new ValidationError(msg().coreValidation.profileNameInvalidFormat, 'profileName');
   }
   return name;
 }
@@ -97,20 +95,17 @@ export function validateProfileName(rawName: string): string {
  */
 export function validateProfileFileName(rawFileName: string): string {
   if (typeof rawFileName !== 'string') {
-    throw new ValidationError('프로필 파일명은 문자열이어야 합니다.', 'profileFileName');
+    throw new ValidationError(msg().coreValidation.profileFileNameNotString, 'profileFileName');
   }
   const fileName = rawFileName.normalize('NFC');
   if (PROFILE_FILE_NAME_RESERVED.has(fileName)) {
-    throw new ValidationError('"." 또는 ".." 는 프로필 파일명으로 사용할 수 없습니다.', 'profileFileName');
+    throw new ValidationError(msg().coreValidation.profileFileNameReserved, 'profileFileName');
   }
   if (/[/\\\x00]/.test(fileName)) {
-    throw new ValidationError('프로필 파일명에 / \\ NUL 은 포함될 수 없습니다.', 'profileFileName');
+    throw new ValidationError(msg().coreValidation.profileFileNameForbiddenChars, 'profileFileName');
   }
   if (!PROFILE_FILE_NAME_RE.test(fileName)) {
-    throw new ValidationError(
-      '프로필 파일명은 영문/숫자/._- 만 사용 가능하며 1~64자 이내여야 합니다.',
-      'profileFileName'
-    );
+    throw new ValidationError(msg().coreValidation.profileFileNameInvalidFormat, 'profileFileName');
   }
   return fileName;
 }
@@ -125,16 +120,13 @@ export function validateProfileFileName(rawFileName: string): string {
  */
 export function validateSessionId(rawId: string): string {
   if (typeof rawId !== 'string') {
-    throw new ValidationError('세션 id 는 문자열이어야 합니다.', 'sessionId');
+    throw new ValidationError(msg().coreValidation.sessionIdNotString, 'sessionId');
   }
   if (/[/\\\x00]/.test(rawId)) {
-    throw new ValidationError('세션 id 에 / \\ NUL 은 포함될 수 없습니다.', 'sessionId');
+    throw new ValidationError(msg().coreValidation.sessionIdForbiddenChars, 'sessionId');
   }
   if (!SESSION_ID_RE.test(rawId)) {
-    throw new ValidationError(
-      '세션 id 는 영문/숫자/_- 만 사용 가능하며 1~64자 이내여야 합니다.',
-      'sessionId'
-    );
+    throw new ValidationError(msg().coreValidation.sessionIdInvalidFormat, 'sessionId');
   }
   return rawId;
 }
@@ -153,32 +145,26 @@ export function validateSessionId(rawId: string): string {
  */
 export function validateShareRel(rawRel: string): string {
   if (typeof rawRel !== 'string') {
-    throw new ValidationError('share 항목은 문자열이어야 합니다.', 'shareRel');
+    throw new ValidationError(msg().coreValidation.shareRelNotString, 'shareRel');
   }
   if (rawRel === '') {
-    throw new ValidationError('share 항목은 빈 문자열일 수 없습니다.', 'shareRel');
+    throw new ValidationError(msg().coreValidation.shareRelEmpty, 'shareRel');
   }
   if (/\x00/.test(rawRel)) {
-    throw new ValidationError('share 항목에 NUL 은 포함될 수 없습니다.', 'shareRel');
+    throw new ValidationError(msg().coreValidation.shareRelNul, 'shareRel');
   }
   if (isAbsolute(rawRel)) {
-    throw new ValidationError(`share 항목은 절대경로일 수 없습니다: ${rawRel}`, 'shareRel');
+    throw new ValidationError(msg().coreValidation.shareRelAbsolute(rawRel), 'shareRel');
   }
   // 백슬래시도 구분자로 취급 — Windows 경로 우회 차단 (Antigravity LOW).
   const normalized = rawRel.replace(/\\/g, '/');
   const segments = normalized.split('/');
   for (const seg of segments) {
     if (seg === '' || seg === '.' || seg === '..') {
-      throw new ValidationError(
-        `share 항목에 빈/'.'/'..' 세그먼트는 허용되지 않습니다: ${rawRel}`,
-        'shareRel'
-      );
+      throw new ValidationError(msg().coreValidation.shareRelBadSegment(rawRel), 'shareRel');
     }
     if (!SHARE_REL_SEGMENT_RE.test(seg)) {
-      throw new ValidationError(
-        `share 항목 세그먼트는 영문/숫자/._- 만 사용 가능합니다: ${rawRel}`,
-        'shareRel'
-      );
+      throw new ValidationError(msg().coreValidation.shareRelSegmentChars(rawRel), 'shareRel');
     }
   }
   return normalized;

@@ -26,6 +26,7 @@ import { dataDir, isNormalizedPathSpelling, validateCliId, validateProfileFileNa
 import { redactSecretLikeText } from './redaction.js';
 import { validateWindowsCredentialBinding } from './windows-credential-manager.js';
 import { assertValidSourceList } from './validators.js';
+import { msg } from '../i18n/index.js';
 import type { CliDef, FileSource, KeychainSource, OsKeyringSource, Source, WindowsCredentialSource } from './types.js';
 
 /** plugin 파일이 모이는 디렉토리: `~/.multi-account-tool/cli-defs/`. */
@@ -80,7 +81,7 @@ interface SourceParseResult {
 
 /** 단일 source 객체 검증 + 정규화. 실패 시 error 메시지 반환. */
 function parseSource(raw: unknown, idx: number): SourceParseResult {
-  if (!isPlainObject(raw)) return { error: `sources[${idx}] 는 객체여야 합니다.` };
+  if (!isPlainObject(raw)) return { error: msg().pluginDefs.sourceNotObject(idx) };
   if (
     raw.type !== 'file' &&
     raw.type !== 'keychain' &&
@@ -88,9 +89,9 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     raw.type !== 'env-secret' &&
     raw.type !== 'win-credential'
   ) {
-    return { error: `sources[${idx}].type 는 'file', 'keychain', 'os-keyring', 'env-secret' 또는 'win-credential' 이어야 합니다. directory 는 builtin 전용입니다.` };
+    return { error: msg().pluginDefs.sourceTypeInvalid(idx) };
   }
-  if (typeof raw.saveAs !== 'string') return { error: `sources[${idx}].saveAs 는 문자열이어야 합니다.` };
+  if (typeof raw.saveAs !== 'string') return { error: msg().pluginDefs.saveAsNotString(idx) };
   let safeSaveAs: string;
   try {
     safeSaveAs = validateProfileFileName(raw.saveAs);
@@ -109,22 +110,22 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   }
   if (raw.type === 'file') {
     if (typeof raw.path !== 'string' || raw.path.length === 0) {
-      return { error: `sources[${idx}].path 는 비어있지 않은 문자열이어야 합니다.` };
+      return { error: msg().pluginDefs.pathEmpty(idx) };
     }
     if (hasUnsafeDisplayChar(raw.path)) {
-      return { error: `sources[${idx}].path 에 제어/서식 문자가 포함될 수 없습니다.` };
+      return { error: msg().pluginDefs.pathUnsafeChar(idx) };
     }
     // 상대경로는 mat 을 **어느 디렉토리에서 실행했는지**에 따라 다른 파일을 가리키므로
     // 안정적인 자격증명 위치가 될 수 없다. 0.8.0 까지는 통과했으나 의미 있게 동작한 적이 없다.
     // `~` 단독은 expandTilde 가 home 으로 확장하는 정당한 표기다 — 지나치게 넓은 경로라는
     // 문제는 기존 `broad_file_path` **경고**가 담당하므로 여기서 에러로 승격시키지 않는다.
     if (raw.path !== '~' && !raw.path.startsWith('~/') && !isAbsolute(raw.path)) {
-      return { error: `sources[${idx}].path 는 '~/' 로 시작하거나 절대경로여야 합니다. 상대경로는 실행 디렉토리에 따라 다른 파일을 가리킵니다.` };
+      return { error: msg().pluginDefs.pathNotAbsolute(idx) };
     }
     // 비정규 표기(`..`/`.`/중복 슬래시)는 안전성 판정과 실제 I/O 대상을 어긋나게 만든다 —
     // 자세한 근거는 isNormalizedPathSpelling 의 JSDoc 참고.
     if (!isNormalizedPathSpelling(raw.path)) {
-      return { error: `sources[${idx}].path 는 정규화된 경로여야 합니다 ('.', '..', 중복 슬래시 없이). 예: '~/.config/app/auth.json'` };
+      return { error: msg().pluginDefs.pathNotNormalized(idx) };
     }
     // builtin 이 소유한 Goose 자격증명 구역에는 라이브 provider OAuth 토큰이 있다. 인정된 고정
     // 경로가 아닌 구역 내부 경로를 조용히 일반 쓰기 경로로 흘려보내면, 하드닝(부모 identity
@@ -132,32 +133,32 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
     // identity 판정을 쓴다 — 어휘 판정은 별칭 표기와 해석된 정경 표기 양쪽으로 뚫린다
     // (`classifyGoosePathByIdentity` JSDoc 의 실측 두 경로 참고).
     if (classifyGoosePathByIdentity(raw.path) === 'reserved-nonadmitted') {
-      return { error: `sources[${idx}].path 가 mat builtin 이 관리하는 Goose 자격증명 구역(~/.config/goose) 안에 있지만 인정된 고정 경로가 아닙니다. builtin goose 지원을 쓰거나 구역 밖 경로를 지정하세요.` };
+      return { error: msg().pluginDefs.pathInGooseZone(idx) };
     }
     const src: FileSource = { type: 'file', path: raw.path, saveAs: safeSaveAs };
     return { source: src };
   }
   if (typeof raw.service !== 'string' || raw.service.length === 0) {
-    return { error: `sources[${idx}].service 는 비어있지 않은 문자열이어야 합니다.` };
+    return { error: msg().pluginDefs.serviceEmpty(idx) };
   }
   if (raw.service.trim() !== raw.service) {
-    return { error: `sources[${idx}].service 는 앞뒤 공백 없이 입력해야 합니다.` };
+    return { error: msg().pluginDefs.serviceWhitespace(idx) };
   }
   if (raw.service.length > MAX_PLUGIN_SERVICE_LENGTH) {
-    return { error: `sources[${idx}].service 는 ${MAX_PLUGIN_SERVICE_LENGTH}자 이하여야 합니다.` };
+    return { error: msg().pluginDefs.serviceTooLong(idx, MAX_PLUGIN_SERVICE_LENGTH) };
   }
   if (hasUnsafeDisplayChar(raw.service)) {
-    return { error: `sources[${idx}].service 에 제어/서식 문자가 포함될 수 없습니다.` };
+    return { error: msg().pluginDefs.serviceUnsafeChar(idx) };
   }
   // account 는 선택. 명시되면 typeof string + non-empty + NUL 차단 (방어선).
   // 화이트리스트는 두지 않음 — 사용자가 email/UUID/임의 식별자를 자유롭게 사용 가능.
   let account: string | undefined;
   if (raw.account !== undefined) {
     if (typeof raw.account !== 'string' || raw.account.length === 0) {
-      return { error: `sources[${idx}].account 는 비어있지 않은 문자열이어야 합니다.` };
+      return { error: msg().pluginDefs.accountEmpty(idx) };
     }
     if (hasUnsafeDisplayChar(raw.account)) {
-      return { error: `sources[${idx}].account 에 제어/서식 문자가 포함될 수 없습니다.` };
+      return { error: msg().pluginDefs.accountUnsafeChar(idx) };
     }
     account = raw.account;
   }
@@ -173,7 +174,7 @@ function parseSource(raw: unknown, idx: number): SourceParseResult {
   let backend: 'auto' | 'secret-service' | undefined;
   if (raw.backend !== undefined) {
     if (raw.backend !== 'auto' && raw.backend !== 'secret-service') {
-      return { error: `sources[${idx}].backend 는 'auto' 또는 'secret-service' 여야 합니다.` };
+      return { error: msg().pluginDefs.backendInvalid(idx) };
     }
     backend = raw.backend;
   }
@@ -195,16 +196,16 @@ function parseWindowsCredentialSource(
     }
   }
   if (typeof raw.targetName !== 'string' || raw.targetName.length === 0) {
-    return { error: `sources[${idx}].targetName 는 비어있지 않은 문자열이어야 합니다.` };
+    return { error: msg().pluginDefs.targetNameEmpty(idx) };
   }
   if (raw.credentialType !== 'generic') {
-    return { error: `sources[${idx}].credentialType 은 'generic' 이어야 합니다.` };
+    return { error: msg().pluginDefs.credentialTypeInvalid(idx) };
   }
   if (typeof raw.account !== 'string' || raw.account.length === 0) {
-    return { error: `sources[${idx}].account 는 비어있지 않은 문자열이어야 합니다.` };
+    return { error: msg().pluginDefs.accountEmpty(idx) };
   }
   if (raw.persist !== 'session' && raw.persist !== 'local-machine' && raw.persist !== 'enterprise') {
-    return { error: `sources[${idx}].persist 는 'session', 'local-machine' 또는 'enterprise' 이어야 합니다.` };
+    return { error: msg().pluginDefs.persistInvalid(idx) };
   }
   const src: WindowsCredentialSource = {
     type: 'win-credential',
@@ -232,8 +233,8 @@ export interface ValidateCliDefResult {
  * 외부 호출자도 사용할 수 있도록 export (예: 향후 `mat add-cli` 같은 명령).
  */
 export function validateCliDefRaw(raw: unknown): ValidateCliDefResult {
-  if (!isPlainObject(raw)) return { error: '최상위는 JSON 객체여야 합니다.' };
-  if (typeof raw.id !== 'string') return { error: 'id 는 문자열이어야 합니다.' };
+  if (!isPlainObject(raw)) return { error: msg().pluginDefs.topLevelNotObject };
+  if (typeof raw.id !== 'string') return { error: msg().pluginDefs.idNotString };
   let safeId: string;
   try {
     safeId = validateCliId(raw.id);
@@ -241,19 +242,19 @@ export function validateCliDefRaw(raw: unknown): ValidateCliDefResult {
     return { error: `id: ${(err as Error).message}` };
   }
   if (typeof raw.name !== 'string' || raw.name.length === 0) {
-    return { error: 'name 은 비어있지 않은 문자열이어야 합니다.' };
+    return { error: msg().pluginDefs.nameEmpty };
   }
   if (raw.name.trim() !== raw.name) {
-    return { error: 'name 은 앞뒤 공백 없이 입력해야 합니다.' };
+    return { error: msg().pluginDefs.nameWhitespace };
   }
   if (raw.name.length > MAX_PLUGIN_NAME_LENGTH) {
-    return { error: `name 은 ${MAX_PLUGIN_NAME_LENGTH}자 이하여야 합니다.` };
+    return { error: msg().pluginDefs.nameTooLong(MAX_PLUGIN_NAME_LENGTH) };
   }
   if (hasUnsafeDisplayChar(raw.name)) {
-    return { error: 'name 에 제어/서식 문자가 포함될 수 없습니다.' };
+    return { error: msg().pluginDefs.nameUnsafeChar };
   }
   if (!Array.isArray(raw.sources) || raw.sources.length === 0) {
-    return { error: 'sources 는 비어있지 않은 배열이어야 합니다.' };
+    return { error: msg().pluginDefs.sourcesEmpty };
   }
   const sources: Source[] = [];
   for (let i = 0; i < raw.sources.length; i++) {
@@ -385,7 +386,7 @@ function lintPluginDefinition(raw: unknown, def: CliDef, context: PluginValidati
     diagnostics.push(diagnostic({
       severity: 'error',
       code: 'builtin_id_collision',
-      message: `plugin id '${def.id}' 는 builtin CLI 와 충돌하여 로드 시 무시됩니다.`,
+      message: msg().pluginDefs.builtinIdCollision(def.id),
       file: context.file,
       pluginId: def.id
     }));
@@ -397,7 +398,7 @@ function lintPluginDefinition(raw: unknown, def: CliDef, context: PluginValidati
         diagnostics.push(diagnostic({
           severity: 'warning',
           code: 'ignored_trust_boundary_field',
-          message: `plugin 필드 '${field}' 는 무시됩니다. plugins cannot define session isolation, env policy, or ambient override controls.`,
+          message: msg().pluginDefs.ignoredTrustBoundaryField(field),
           file: context.file,
           pluginId: def.id
         }));
@@ -434,7 +435,7 @@ function lintPluginDefinition(raw: unknown, def: CliDef, context: PluginValidati
       diagnostics.push(diagnostic({
         severity: 'warning',
         code: 'generic_service_without_account',
-        message: `sources[${i}].service '${source.service}' 는 generic/multi-account credential service 처럼 보입니다. wrong-account swap 방지를 위해 account 를 명시하세요.`,
+        message: msg().pluginDefs.genericServiceWithoutAccount(i, source.service),
         file: context.file,
         pluginId: def.id,
         sourceIndex: i
@@ -465,14 +466,14 @@ function filePathWarning(path: string): { code: string; message: string } | unde
   ) {
     return {
       code: 'broad_file_path',
-      message: `sources[].path '${path}' 는 credential file 로 보기에는 너무 넓은 경로입니다. 구체적인 파일 경로를 지정하세요.`
+      message: msg().pluginDefs.broadFilePath(path)
     };
   }
   const base = basename(withoutTrailingSlash);
   if (base.length === 0 || base === '.' || base === '..' || !base.includes('.')) {
     return {
       code: 'suspicious_file_path',
-      message: `sources[].path '${path}' 는 파일명/확장자가 없는 디렉토리형 경로처럼 보입니다. credential 파일을 가리키는지 확인하세요.`
+      message: msg().pluginDefs.suspiciousFilePath(path)
     };
   }
   return undefined;
@@ -514,7 +515,7 @@ function validatePluginFile(path: string, options: PluginValidationBatchOptions)
     const diagnostics = [diagnostic({
       severity: 'error',
       code: 'file_read_error',
-      message: `plugin 파일 읽기 실패 — ${(err as Error).message}`,
+      message: msg().pluginDefs.fileReadError((err as Error).message),
       file: path
     })];
     return { file: formatPluginWarning(path), valid: false, diagnostics };
@@ -527,7 +528,7 @@ function validatePluginFile(path: string, options: PluginValidationBatchOptions)
     const diagnostics = [diagnostic({
       severity: 'error',
       code: 'json_parse_error',
-      message: `JSON 파싱 실패 — ${(err as Error).message}`,
+      message: msg().pluginDefs.jsonParseError((err as Error).message),
       file: path
     })];
     return { file: formatPluginWarning(path), valid: false, diagnostics };
@@ -590,7 +591,7 @@ export function validatePluginDirectory(
     const diagnostics = [diagnostic({
       severity: 'error',
       code: 'directory_read_error',
-      message: `cli-defs 디렉토리 읽기 실패 — ${(err as Error).message}`,
+      message: msg().pluginDefs.directoryReadError((err as Error).message),
       file: dir
     })];
     return summarizePluginValidation({ kind: 'directory', path: formatPluginWarning(dir) }, [], diagnostics);
@@ -608,7 +609,7 @@ export function validatePluginDirectory(
       file.diagnostics.push(diagnostic({
         severity: 'error',
         code: 'duplicate_plugin_id',
-        message: `plugin id '${pluginId}' 가 다른 plugin 과 충돌하여 후속 항목은 로드 시 무시됩니다.`,
+        message: msg().pluginDefs.duplicatePluginId(pluginId),
         file: file.file,
         pluginId
       }));
@@ -630,7 +631,7 @@ export function validatePluginDirectory(
         file.diagnostics.push(diagnostic({
           severity: 'error',
           code: 'builtin_live_resource_collision',
-          message: `sources[${collision.sourceIndex}] 가 builtin '${collision.ownerCliId}' 소유의 라이브 자격증명(${collision.kind}: ${collision.declared})을 주장합니다 — 로드 시 이 plugin 전체가 무시됩니다. 저장된 프로필은 삭제되지 않습니다.`,
+          message: msg().pluginDefs.builtinLiveResourceCollision(collision.sourceIndex, collision.ownerCliId, collision.kind, collision.declared),
           file: file.file,
           pluginId: file.parsed.id
         }));
@@ -681,7 +682,7 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
     entries = readdirSync(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { defs: [], warnings: [], provenance: new Map() };
-    return { defs: [], warnings: [formatPluginWarning(`cli-defs 디렉토리 읽기 실패: ${(err as Error).message}`)], provenance: new Map() };
+    return { defs: [], warnings: [formatPluginWarning(msg().pluginDefs.loadDirectoryReadError((err as Error).message))], provenance: new Map() };
   }
   const defs: CliDef[] = [];
   const provenance = new Map<string, string>();
@@ -694,7 +695,7 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
     try {
       raw = JSON.parse(readFileSync(path, 'utf8'));
     } catch (err) {
-      warnings.push(formatPluginWarning(`${displayName}: JSON 파싱 실패 — ${(err as Error).message}`));
+      warnings.push(formatPluginWarning(msg().pluginDefs.loadJsonParseError(displayName, (err as Error).message)));
       continue;
     }
     const { def, error } = validateCliDefRaw(raw);
@@ -703,7 +704,7 @@ export function loadUserCliDefs(): LoadUserCliDefsResult {
       continue;
     }
     if (seenIds.has(def.id)) {
-      warnings.push(formatPluginWarning(`${displayName}: id '${def.id}' 가 다른 plugin 과 충돌 — skip`));
+      warnings.push(formatPluginWarning(msg().pluginDefs.loadDuplicateId(displayName, def.id)));
       continue;
     }
     seenIds.add(def.id);

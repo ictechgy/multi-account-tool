@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **core 오류·경고 메시지 번역 (i18n 3단계 4단계, #167).** plugin 로드·검증 진단(`cli-defs-plugin.ts`,
+  `cli-defs.ts`, `builtin-live-resources.ts`), 이름·경로 검증(`validators.ts`), 프로필 저장·마이그레이션
+  (`profile-store.ts`, `migrate.ts`, `app/log.ts`), keychain / os-keyring / 전환 오류(`os-keyring.ts`,
+  `errors.ts`, `sources.ts`, `switcher.ts`)의 문구를 카탈로그(`pluginDefs`, `coreValidation`,
+  `credentials`)로 옮기고 영어 번역을 추가했다. 한국어 문구는 그대로다. `mat plugin validate --json` 의
+  진단은 `code` 가 안정 필드이고 `message` 는 선택한 언어로 나온다. keychain 단계 라벨(`읽기`/`쓰기`/
+  `백업 항목 삭제`)도 번역된다. os-keyring 의 typed 가 아닌 오류 문구에는 `classifyLssError` 가 쓰는
+  영문 토큰을 넣지 않으며, 테스트로 고정했다. 남은 것: `session.ts`·`exec.ts`·`lockfile.ts`(2단계).
+
 - **freshness detail 번역 — `--json` 의 `detail` 은 항상 영어 (i18n 3단계, #167).** freshness 어댑터
   (claude, codex, gemini, opencode, goose, crush)와 공통 분기의 detail 문구를 카탈로그
   (`src/i18n/messages/{en,ko}/freshnessDetails.ts`)로 옮겼다. `CompareResult` 는 이제 두 문구를 갖는다:
